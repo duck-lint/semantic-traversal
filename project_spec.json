@@ -1,0 +1,66 @@
+{
+ "metadata": {
+  "id": "project_spec.json",
+  "authority": "global",
+  "last_update": "2026-06-18"
+ },
+ "system_description": "Latent state space transformation and inference synthesis.",
+ "system_design": {
+  "data": [
+    {
+      "primary_corpus": [
+        "Obsidian vault in full: scanned novels and personal notes, all in Markdown.",
+        "File structure/topology is structured semantically.",
+        "Each note also contains semantic frontmatter."
+      ]
+    },
+    {
+      "corpus_nodes": [
+        "Semantic chunks broken down by Markdown structure section ordinals.",
+        "Semantic chunks embedded with metadata reference to whole note frontmatter, note section ordinal, and note file structure topology.",
+        "Vectors to be indexed and stored for vector search surface.",
+        "Semantic chunks to be indexed and stored for lexical search surface.",
+        "Lexical and vector search surfaces combined for hybrid search."
+      ]
+    },
+    {
+      "synthetic_nodes": [
+        "Synthesized nodes produced through state_perturbation."
+      ]
+    }
+  ]
+  },
+  "user_interface": [
+    "user_input",
+    "state_kernel",
+    "first_state_perturbation",
+    "state_perturbation"
+  ],
+  "state_boundaries": {
+    "latent_space": [
+      "= primary_corpus + corpus_nodes + synthetic_nodes"
+    ],
+    "user_input": [
+      "Text passed through the user_interface carrying semantic weight."
+    ],
+    "state_kernel": [
+      "= user_input + first_state_perturbation"
+    ],
+    "state_perturbation": [
+      "= state_kernel + user_input + latent_space_traversal + latent_space_transformation + loop_if_required + synthesis",
+      "not all perturbations will result in all operations simultaneously, ie. some may only result in a transformation, others may just be traversal and synthesis."
+    ],
+    "latent_space_traversal": [
+      "= "
+    ],
+    "latent_space_transformation": [
+      ""
+    ],
+    "recurrent_state": [
+      "= state_kernel + user_input + state_perturbation"
+    ]
+  },
+ "runtime_expectations": {
+  "input": ""
+ }
+}
