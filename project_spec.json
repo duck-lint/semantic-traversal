@@ -4,63 +4,72 @@
   "authority": "global",
   "last_update": "2026-06-18"
  },
- "system_description": "Latent state space transformation and inference synthesis.",
+ "system_description": "latent state space transformation and inference synthesis",
  "system_design": {
   "data": [
     {
       "primary_corpus": [
-        "Obsidian vault in full: scanned novels and personal notes, all in Markdown.",
-        "File structure/topology is structured semantically.",
-        "Each note also contains semantic frontmatter."
+        "obsidian vault in full: scanned novels and personal notes, all in Markdown",
+        "file structure/topology is structured semantically",
+        "each note also contains semantic frontmatter"
       ]
     },
     {
       "corpus_nodes": [
-        "Semantic chunks broken down by Markdown structure section ordinals.",
-        "Semantic chunks embedded with metadata reference to whole note frontmatter, note section ordinal, and note file structure topology.",
-        "Vectors to be indexed and stored for vector search surface.",
-        "Semantic chunks to be indexed and stored for lexical search surface.",
-        "Lexical and vector search surfaces combined for hybrid search."
+        "semantic chunks broken down by Markdown structure section ordinals",
+        "semantic chunks embedded with metadata reference to whole note frontmatter, note section ordinal, and note file structure topology",
+        "vectors to be indexed and stored for vector search surface",
+        "semantic chunks to be indexed and stored for lexical search surface",
+        "lexical and vector search surfaces combined for hybrid search"
       ]
     },
     {
       "synthetic_nodes": [
-        "Synthesized nodes produced through state_perturbation."
+        "synthesized nodes produced through state_perturbation."
+      ]
+    },
+    {
+      "graph_layer": [
+        "unsure exactly what the ontology of this would look like but likely a good surface to incorporate"
       ]
     }
-  ]
-  },
+  ],
+  "flow": [
+    "state_kernel or recurrent_state + user_input → state_perturbation (state_kernel or recurrent_state + user_input hydration = latent_space_traversal + latent_space_transformation) = recurrent_state"
+  ],
   "user_interface": [
-    "user_input",
-    "state_kernel",
-    "first_state_perturbation",
-    "state_perturbation"
+    "= state_kernel + first_state_perturbation",
+    "= user_input + state_perturbation"
   ],
   "state_boundaries": {
     "latent_space": [
-      "= primary_corpus + corpus_nodes + synthetic_nodes"
+      "= primary_corpus + corpus_nodes + synthetic_nodes + graph_layer"
     ],
-    "user_input": [
-      "Text passed through the user_interface carrying semantic weight."
-    ],
+    "user_input": {
+      "semantic_context_extraction": "surface and extract semantics and context for perturbation process",
+      "coverage_benchmark": "semantic_context_extraction gets light hydration with recurrent_state to produce a benchmark metric (the state_perturbation should/could aim to achieve?)"
+    },
     "state_kernel": [
-      "= user_input + first_state_perturbation"
+      "= user_input + first_state_perturbation",
+      "kernel_context_packet to jump start the conversation frame"
     ],
     "state_perturbation": [
-      "= state_kernel + user_input + latent_space_traversal + latent_space_transformation + loop_if_required + synthesis",
-      "not all perturbations will result in all operations simultaneously, ie. some may only result in a transformation, others may just be traversal and synthesis."
+      "= state_kernel or recurrent_state + user_input hydration = latent_space_traversal +/or latent_space_transformation"
     ],
-    "latent_space_traversal": [
-      "= "
-    ],
-    "latent_space_transformation": [
-      ""
-    ],
+    "latent_space_traversal": {
+      "semantic_node_activation": "in all data formats: primary_corpus, corpus_nodes, synthetic_nodes, graph_layer",
+      "degrees_of_freedom": "user_input, semantic_context_extraction and recurrent_state project degrees of freedom from semantic_node_activation for state_perturbation",
+      "neighbor_identification": "possible data candidates within contextual semantics",
+      "coverage_benchmark": "determine how much retrieval is required from semantic_node_activation and neighbor_identification within degrees_of_freedom to satisfy coverage_benchmark - possibly avoid looping behavior with this",
+      "semantic_traversal_manifest": "produce manifest of latent_space_traversal candidates based on semantic_node_activation, neighbor_identification, degrees_of_freedom once coverage_benchmark satisfied"
+    },
+    "latent_space_transformation": {
+      "retrieval": "hybrid data retrieval with semantic_traversal_manifest",
+      "llm_synthesis": "structured output API response call to synthesize retrieval"
+    },
     "recurrent_state": [
       "= state_kernel + user_input + state_perturbation"
     ]
-  },
- "runtime_expectations": {
-  "input": ""
- }
+    }
+  }
 }
