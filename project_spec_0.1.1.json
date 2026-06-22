@@ -4,85 +4,99 @@
     "authority": "global",
     "last_update": "2026-06-18"
   },
-  "system_description": "Conversational latent semantic space state-activation, traversal, retrieval, and inference synthesis over an Obsidian-based corpus.",
+  "system_description": "Conversational inputs trigger state_perturbations that activate data_representations and perform projection, traversal, retrieval, and inference synthesis operations.",
   "system_design": {
-    "data_surfaces": {
-      "latent_space": {
-        "description": "The total consumable semantic substrate available to the system.",
-        "boundary": "latent_space includes raw source content, derived representations, index surfaces, graph relations, and persisted synthetic nodes. These are different data types within one consumable substrate, not separate systems.",
-        "includes": {
-          "primary_corpus": {
-            "description": "The durable copy of the full Obsidian vault content available to the system.",
-            "content": [
-              "personal notes in Markdown",
-              "scanned novels or source texts converted into Markdown",
-              "raw note files preserved in their original Markdown form"
-            ],
-            "semantic_structure": [
-              "file structure and path topology are treated as semantically meaningful",
-              "note frontmatter is treated as semantic metadata",
-              "wiki links are treated as graph edges"
-            ]
-          },
-          "corpus_nodes": {
-            "description": "Derived semantic chunks produced from the primary_corpus.",
-            "derivation": [
-              "chunks are broken down by Markdown structure",
-              "chunks preserve section ordinals",
-              "chunks retain references to note frontmatter",
-              "chunks retain references to note path topology",
-              "chunks retain references to source note identity"
-            ]
-          },
-          "vector_index_surface": {
-            "description": "Embedding-backed representation of corpus_nodes and promoted synthetic_nodes.",
-            "purpose": [
-              "support semantic similarity search",
-              "support contextual neighbor identification",
-              "support activation of candidate semantic regions"
-            ]
-          },
-          "lexical_index_surface": {
-            "description": "Lexical search representation of corpus_nodes and promoted synthetic_nodes.",
-            "purpose": [
-              "support keyword search",
-              "support exact phrase matching",
-              "support hybrid retrieval alongside vector search"
-            ]
-          },
-          "graph_layer": {
-            "description": "Relation surface initially derived from Obsidian-native structure.",
-            "initial_sources": [
-              "wiki links between notes",
-              "file path topology",
-              "selected frontmatter fields",
-              "note-to-chunk containment",
-              "synthetic-node provenance"
-            ],
-            "initial_relation_types": [
-              "note_links_to_note",
-              "note_contains_chunk",
-              "chunk_derived_from_note",
-              "node_has_frontmatter_value",
-              "synthetic_node_derived_from_sources"
-            ],
-            "boundary": "The graph_layer starts as extracted Obsidian structure rather than a fully authored ontology."
-          },
-          "synthetic_nodes": {
-            "description": "Persisted synthesis artifacts created from conversational perturbations and promoted back into the data substrate.",
-            "storage_forms": [
-              "conversation snippet preserving local context",
-              "selected message or synthesis chunk",
-              "indexed lexical chunk",
-              "stored vector embedding",
-              "provenance links to source retrieval and originating conversation state"
-            ],
-            "boundary": "Synthetic nodes are part of latent_space only after they are intentionally saved or promoted into the data layer."
-          }
+    "latent_space": {
+      "description": "Present, potential, inactive data_representations available for state_activation.",
+      "data_representations": {
+        "primary_corpus": {
+          "description": "A durable copy of the full Obsidian vault content available to the system.",
+          "content": [
+            "personal notes",
+            "scanned novels and source texts",
+            "any other content I wish to be in the latent_space"
+          ],
+          "structure": [
+            ".md notes in an Obsidian vault",
+            "file structure and path topology are treated as semantically meaningful",
+            "note frontmatter is treated as semantic metadata",
+            "wiki links are treated as graph edges while notes are nodes"
+          ]
+        },
+        "corpus_nodes": {
+          "description": "Derived semantic chunks produced from the primary_corpus.",
+          "content": [
+            "primary_corpus"
+          ],
+          "structure": [
+            "chunks are broken down by Markdown structure",
+            "chunks preserve section ordinals",
+            "chunks retain references to note frontmatter",
+            "chunks retain references to note path topology",
+            "chunks retain references to source note identity",
+            "chunk_id = stable identifier derived from note identity + section ordinal + optional content hash"
+          ]
+        },
+        "vector_index_surface": {
+          "description": "Embedding-backed representation of corpus_nodes and promoted synthetic_nodes.",
+          "content": [
+            "primary_corpus"
+          ],
+          "structure": [
+            "support semantic similarity search",
+            "support contextual neighbor identification",
+            "support activation of candidate semantic regions",
+            "each vector record must retain linkage to the source chunk_id and source note identity (SQLite FTS, Tantivy, Whoosh, ripgrep, BM25, etc.)"
+          ]
+        },
+        "lexical_index_surface": {
+          "description": "Lexical search representation of corpus_nodes and promoted synthetic_nodes.",
+          "content": [
+            "primary_corpus"
+          ],
+          "structure": [
+            "support keyword search",
+            "support exact phrase matching",
+            "support hybrid retrieval alongside vector search",
+            "type of lexical index must support exact and keyword retrieval over chunk text and selected metadata"
+          ]
+        },
+        "graph_layer": {
+          "description": "Relation surface initially derived from Obsidian-native structure - should be possible to extract from Obsidian with script.",
+          "nodes": [
+            "primary_corpus_notes",
+            "synthetic_nodes"
+          ],
+          "edges": [
+            "wikilinks"
+          ]
+        },
+        "synthetic_nodes": {
+          "description": "Persisted synthesis artifacts created from conversational perturbations and promoted back into the data substrate.",
+          "content": [
+            "conversation snippet preserving local context",
+            "selected message or synthesis chunk"
+          ],
+          "structure": [
+            "written .md note in primary corpus with frontmatter_tag identification",
+            "indexed chunk",
+            "lexical record",
+            "stored vector embedding"
+          ],
+          "provenance": [
+            "originating_thread_id",
+            "originating_message_id or turn_id",
+            "source_user_input",
+            "source_synthesis_output",
+            "source_retrieval_packet",
+            "source_traversal_manifest",
+            "created_at",
+            "promotion_reason or promotion_mode"
+          ]
         }
       }
     },
-    "runtime_states": {
+    "state_boundaries": {
       "persistent_memory": {
         "description": "The durable data substrate available across sessions.",
         "includes": [
@@ -170,7 +184,7 @@
           "optional synthetic_nodes"
         ]
       },
-      "semantic_context_extraction": {
+      "user_input": {
         "description": "Extracts the semantic pressure of user_input for the current perturbation.",
         "extracts": [
           "topic",
@@ -281,6 +295,15 @@
           "synthetic_node_graph_edges"
         ],
         "boundary": "Not every synthesis_output becomes a synthetic_node. Promotion is an intentional write-back operation."
+      },
+      "chunking": {
+
+      },
+      "embed_index": {
+
+      },
+      "": {
+
       }
     },
     "artifacts": {
