@@ -4,13 +4,13 @@
     "authority": "global",
     "last_update": "2026-06-18"
   },
-  "system_description": "Conversational inputs trigger state_perturbations that activate data_representations and perform projection, traversal, retrieval, and inference synthesis operations.",
+  "system_description": "Conversational inputs trigger state_perturbations that activate data_representations and perform projection, traversal, retrieval, and inference synthesis operations",
   "system_design": {
     "latent_space": {
-      "description": "Present, potential, inactive data_representations available for state_activation.",
+      "description": "Present, potential, inactive data_representations available to be made active_state",
       "data_representations": {
         "primary_corpus": {
-          "description": "A durable copy of the full Obsidian vault content available to the system.",
+          "description": "A durable copy of the full Obsidian vault content available to the system",
           "content": [
             "personal notes",
             "scanned novels and source texts",
@@ -24,7 +24,7 @@
           ]
         },
         "corpus_nodes": {
-          "description": "Derived semantic chunks produced from the primary_corpus.",
+          "description": "Derived semantic chunks produced from the primary_corpus",
           "content": [
             "primary_corpus"
           ],
@@ -38,7 +38,7 @@
           ]
         },
         "vector_index_surface": {
-          "description": "Embedding-backed representation of corpus_nodes and promoted synthetic_nodes.",
+          "description": "Embedding-backed representation of corpus_nodes and promoted synthetic_nodes",
           "content": [
             "primary_corpus"
           ],
@@ -50,7 +50,7 @@
           ]
         },
         "lexical_index_surface": {
-          "description": "Lexical search representation of corpus_nodes and promoted synthetic_nodes.",
+          "description": "Lexical search representation of corpus_nodes and promoted synthetic_nodes",
           "content": [
             "primary_corpus"
           ],
@@ -62,7 +62,7 @@
           ]
         },
         "graph_layer": {
-          "description": "Relation surface initially derived from Obsidian-native structure - should be possible to extract from Obsidian with script.",
+          "description": "Relation surface initially derived from Obsidian-native structure - should be possible to extract from Obsidian with script",
           "nodes": [
             "primary_corpus_notes",
             "synthetic_nodes"
@@ -78,7 +78,7 @@
             "selected message or synthesis chunk"
           ],
           "structure": [
-            "written .md note in primary corpus with frontmatter_tag identification",
+            "written md note in primary corpus with frontmatter_tag identification",
             "indexed chunk",
             "lexical record",
             "stored vector embedding"
@@ -96,80 +96,340 @@
         }
       }
     },
-    "state_boundaries": {
-      "persistent_memory": {
-        "description": "The durable data substrate available across sessions.",
-        "includes": [
-          "latent_space",
+    "runtime_flow": [
+      {
+        "id": 1,
+        "process": "receive_user_input",
+        "description": "User enters a message into a conversation_thread.",
+        "operational_boundaries": [
+          "UI",
+          "conversation_thread"
+        ],
+        "input": [
+          "user_input",
+          "thread_id"
+        ],
+        "output": [
+          "pending_state_perturbation"
+        ]
+      },
+      {
+        "id": 2,
+        "process": "load_thread_state",
+        "description": "Runtime loads the current materialized thread_state from the conversation_thread.",
+        "operational_boundaries": [
+          "conversation_thread",
+          "thread_ledger",
+          "thread_state"
+        ],
+        "input": [
+          "thread_id",
+          "latest_thread_state_hash"
+        ],
+        "output": [
+          "prior_thread_state",
+          "parent_perturbation_hash"
+        ]
+      },
+      {
+        "id": 3,
+        "process": "semantic_context_extraction",
+        "description": "User input is parsed in isolation, then salted with prior_thread_state to project the semantic target for this perturbation.",
+        "operational_boundaries": [
+          "conversation_thread",
+          "state_perturbation"
+        ],
+        "input": [
+          "user_input",
+          "prior_thread_state"
+        ],
+        "suboperations": [
+          "extract_user_input_semantic_units",
+          "extract_contextual_salt_from_prior_thread_state",
+          "form_edges_between_user_input_and_contextual_salt",
+          "project_semantic_coverage_target"
+        ],
+        "output": [
+          "perturbation_semantic_graph",
+          "semantic_coverage_target"
+        ]
+      },
+      {
+        "id": 4,
+        "process": "latent_space_activation",
+        "description": "Semantic targets activate candidate regions of latent_space across available data representations.",
+        "operational_boundaries": [
+          "state_perturbation",
+          "latent_space"
+        ],
+        "input": [
+          "perturbation_semantic_graph",
+          "semantic_coverage_target",
+          "latent_space"
+        ],
+        "suboperations": [
+          "activate_vector_regions",
+          "activate_lexical_matches",
+          "activate_graph_neighborhoods",
+          "activate_primary_corpus_candidates",
+          "activate_synthetic_node_candidates"
+        ],
+        "output": [
+          "activated_semantic_regions"
+        ]
+      },
+      {
+        "id": 5,
+        "process": "semantic_traversal",
+        "description": "Activated regions are expanded into candidate neighborhoods and organized into a traversal manifest.",
+        "operational_boundaries": [
+          "state_perturbation",
+          "latent_space"
+        ],
+        "input": [
+          "activated_semantic_regions",
+          "semantic_coverage_target"
+        ],
+        "suboperations": [
+          "neighbor_identification",
+          "graph_edge_expansion",
+          "metadata_projection",
+          "candidate_ranking",
+          "coverage_guided_expansion"
+        ],
+        "output": [
+          "semantic_traversal_manifest"
+        ]
+      },
+      {
+        "id": 6,
+        "process": "retrieval_packet_assembly",
+        "description": "Concrete content is retrieved from latent_space using the semantic_traversal_manifest.",
+        "operational_boundaries": [
+          "state_perturbation",
+          "latent_space"
+        ],
+        "input": [
+          "semantic_traversal_manifest"
+        ],
+        "suboperations": [
+          "retrieve_chunk_text",
+          "retrieve_note_metadata",
+          "retrieve_graph_context",
+          "retrieve_source_paths",
+          "retrieve_synthetic_node_context"
+        ],
+        "output": [
+          "retrieval_packet"
+        ]
+      },
+      {
+        "id": 7,
+        "process": "retrieval_coverage_evaluation",
+        "description": "Retrieved material is checked against the semantic_coverage_target before synthesis.",
+        "operational_boundaries": [
+          "state_perturbation"
+        ],
+        "input": [
+          "semantic_coverage_target",
+          "semantic_traversal_manifest",
+          "retrieval_packet"
+        ],
+        "suboperations": [
+          "evaluate_retrieval_sufficiency",
+          "identify_missing_regions",
+          "loop_to_traversal_if_required_and_budget_available",
+          "record_coverage_limits"
+        ],
+        "output": [
+          "coverage_report",
+          "approved_retrieval_packet"
+        ]
+      },
+      {
+        "id": 8,
+        "process": "synthesis_context_assembly",
+        "description": "Runtime assembles the fresh LLM call context from user_input, prior_thread_state, traversal, retrieval, and coverage artifacts.",
+        "operational_boundaries": [
+          "state_perturbation",
+          "LLM_call_boundary"
+        ],
+        "input": [
+          "user_input",
+          "prior_thread_state",
+          "perturbation_semantic_graph",
+          "semantic_coverage_target",
+          "semantic_traversal_manifest",
+          "approved_retrieval_packet",
+          "coverage_report"
+        ],
+        "output": [
+          "synthesis_context_packet"
+        ]
+      },
+      {
+        "id": 9,
+        "process": "llm_synthesis",
+        "description": "A fresh LLM call produces the user-facing response from the synthesis_context_packet.",
+        "operational_boundaries": [
+          "LLM_call_boundary"
+        ],
+        "input": [
+          "synthesis_context_packet"
+        ],
+        "suboperations": [
+          "generate_user_facing_response",
+          "identify_optional_synthetic_node_candidate",
+          "preserve_retrieval_basis"
+        ],
+        "output": [
+          "assistant_response",
+          "optional_synthetic_node_candidate"
+        ]
+      },
+      {
+        "id": 10,
+        "process": "thread_state_update",
+        "description": "Runtime materializes the next thread_state from the prior state, user input, perturbation artifacts, and assistant response.",
+        "operational_boundaries": [
+          "conversation_thread",
+          "thread_state",
+          "thread_ledger"
+        ],
+        "input": [
+          "prior_thread_state",
+          "user_input",
+          "perturbation_semantic_graph",
+          "semantic_traversal_manifest",
+          "retrieval_packet",
+          "coverage_report",
+          "assistant_response"
+        ],
+        "output": [
+          "next_thread_state",
+          "state_delta"
+        ]
+      },
+      {
+        "id": 11,
+        "process": "append_thread_ledger_record",
+        "description": "Runtime appends a hash-chained perturbation record to the thread_ledger.",
+        "operational_boundaries": [
+          "thread_ledger"
+        ],
+        "input": [
+          "parent_perturbation_hash",
+          "prior_thread_state_hash",
+          "user_input_hash",
+          "perturbation_artifact_hashes",
+          "assistant_response_hash",
+          "state_delta_hash",
+          "next_thread_state_hash"
+        ],
+        "output": [
+          "state_perturbation_record",
+          "state_perturbation_hash"
+        ]
+      },
+      {
+        "id": 12,
+        "process": "optional_synthetic_node_promotion",
+        "description": "Selected synthesis output may be intentionally promoted back into latent_space.",
+        "operational_boundaries": [
+          "conversation_thread",
+          "latent_space"
+        ],
+        "input": [
+          "optional_synthetic_node_candidate",
+          "assistant_response",
+          "retrieval_packet",
+          "semantic_traversal_manifest",
+          "state_perturbation_hash"
+        ],
+        "suboperations": [
+          "write_markdown_note_if_promoted",
+          "chunk_promoted_node",
+          "index_lexically",
+          "embed_vector",
+          "write_graph_provenance_edges"
+        ],
+        "output": [
+          "optional_promoted_synthetic_node",
+          "latent_space_update_record"
+        ]
+      }
+    ],
+    "operational_boundaries": {
+      "latent_space": {
+        "description": "Present, potential, inactive data_representations available to be made active_state",
+        "components": [
           "primary_corpus",
           "corpus_nodes",
-          "indexes",
+          "vector_index_surface",
           "graph_layer",
-          "promoted synthetic_nodes"
+          "synthetic_nodes"
         ],
-        "boundary": "persistent_memory refers to durable system-accessible data, not human psychological memory."
+        "input": "chunk_embed_store outputs",
+        "output": "active_state inputs"
+      },
+      "chunk_embed_store": {
+        "description": "",
+        "components": [
+          "semantic chunking script",
+          "embedding script",
+          "proper indexing and plumbing/routing to latent_space for outputs of this state"
+        ],
+        "input": "user content, Markdown for now, will incorporate multimodal after initial system working",
+        "output": "latent_space inputs"
       },
       "user_input": {
-        "description": "The user message or request that triggers a conversational perturbation.",
-        "role": "Provides the immediate semantic pressure that initiates traversal, retrieval, and synthesis."
-      },
-      "state_kernel": {
-        "description": "The initial context frame for a new conversational thread before a recurrent_state exists.",
-        "inputs": [
-          "first user_input",
-          "project defaults",
-          "system design constraints",
-          "optional explicit user-provided context"
+        "description": "The user message or request that provides immediate, contextually semantic pressure triggering a state_perturbation (traversal, retrieval, and synthesis)",
+        "components": [
+          "UI surface for text entry",
+          "semantic_context_extraction",
+          "semantic_context_benchmark"
         ],
-        "output": "kernel_context_packet",
-        "boundary": "state_kernel bootstraps the first state_perturbation. It is not produced by the first perturbation."
+        "input": "user text",
+        "output": "conversationally contextualized semantic node(s) with target benchmark for coverage"
       },
       "active_state": {
-        "description": "The currently hydrated conversational state used during an active_process.",
-        "inputs": [
-          "state_kernel or recurrent_state",
-          "current user_input",
-          "semantic_context_extraction"
-        ],
-        "role": "Provides the local operating frame for the current perturbation."
-      },
-      "recurrent_state": {
-        "description": "The carried-forward conversational state after a perturbation completes.",
-        "scope": "Individual chat threads maintain their own recurrent_state.",
-        "inputs": [
-          "previous active_state",
-          "current user_input",
+        "description": "The currently focused state in the active_conversation",
+        "components": [
+          "current conversational thread",
           "state_perturbation",
-          "synthesis_output",
-          "selected artifacts"
+          "synthetic_nodes",
+          "active_semantic_neighborhood"
         ],
-        "role": "Hydrates the next perturbation when the user sends another input.",
-        "boundary": "recurrent_state is active_state after it becomes available to the next turn."
+        "input": "user_input and context_salt",
+        "output": "next active_state"
       },
-      "active_semantic_region": {
-        "description": "The currently activated region of latent_space during a perturbation.",
-        "inputs": [
-          "semantic_context_extraction",
-          "active_state",
-          "graph_layer",
-          "vector_index_surface",
-          "lexical_index_surface"
+      "conversation_thread": {
+        "description": "a single session identifier linking together previous active states from a specific initial user message to an active_state",
+        "components": [
+          "serialized compression of previous active states - blockchain type shi? - emitting a contextual_salt"
         ],
-        "boundary": "active_semantic_region is temporary. It is not the full latent_space."
-      }
-    },
-    "operations": {
+        "input": "user_input and context_salt into a specific conversation_thread active_state",
+        "output": "conversation thread/session identifier and contextual_salt"
+      },
+      "context_salt": {
+        "description": "semantic compression of previous active_state(s) in a conversation_thread feeding perturbations",
+        "components": [
+          "current conversational thread"
+        ],
+        "input": "previous active_state(s)",
+        "output": "recurrent_state is active_state after it becomes available to the next turn"
+      },
       "state_perturbation": {
-        "description": "The complete state transition process triggered by user_input against state_kernel or recurrent_state.",
+        "description": "The complete state transition process triggered by user_input against session_state_kernel or recurrent_state",
         "trigger": "user_input",
         "inputs": [
           "user_input",
-          "state_kernel or recurrent_state",
+          "session_state_kernel or recurrent_state",
           "latent_space"
         ],
         "suboperations": [
           "semantic_context_extraction",
-          "state_hydration",
+          "state_salt",
           "latent_space_traversal",
           "retrieval",
           "llm_synthesis",
@@ -184,33 +444,9 @@
           "optional synthetic_nodes"
         ]
       },
-      "user_input": {
-        "description": "Extracts the semantic pressure of user_input for the current perturbation.",
-        "extracts": [
-          "topic",
-          "intent",
-          "constraints",
-          "named entities",
-          "conceptual regions",
-          "requested synthesis type",
-          "relevant prior conversational frame"
-        ],
-        "hydrated_by": [
-          "state_kernel",
-          "recurrent_state"
-        ],
-        "output": "semantic_context_packet"
-      },
-      "state_hydration": {
-        "description": "Combines semantic_context_packet with state_kernel or recurrent_state to produce active_state.",
-        "inputs": [
-          "semantic_context_packet",
-          "state_kernel or recurrent_state"
-        ],
-        "output": "active_state"
-      },
-      "coverage_benchmark": {
-        "description": "A provisional benchmark for determining whether the semantic region activated by user_input and active_state has enough coverage to proceed.",
+      "semantic_coverage_target": {
+        "description": "A provisional benchmark for determining whether the semantic region activated by user_input and active_state has enough coverage to proceed",
+        "derivation": "contextual_salt from active_conversation projects semantic_extraction into a coverage matrix",
         "current_scope": [
           "semantic_context_extraction coverage",
           "active_semantic_region coverage",
@@ -220,11 +456,16 @@
           "directly constraining the final synthesis style",
           "forcing synthesis into a narrow deterministic score"
         ],
-        "working_hypothesis": "Coverage may eventually estimate whether activated nodes, overlapping semantic regions, contained regions, and bridging edges cover enough of the relevant convex semantic region to proceed.",
-        "boundary": "coverage_benchmark is intentionally provisional and should not block early implementation."
+        "working_hypothesis": "Coverage may eventually estimate whether activated nodes, overlapping semantic regions, contained regions, and bridging edges cover enough of the relevant convex semantic region to proceed",
+        "boundary": "coverage_benchmark is intentionally provisional and should not block early implementation"
+      },
+      "semantic_extraction": {
+      },
+      "active_semantic_neighborhood": {
+
       },
       "latent_space_traversal": {
-        "description": "Activates candidate semantic surfaces within latent_space based on active_state.",
+        "description": "Activates candidate semantic surfaces within latent_space based on active_state",
         "operations": [
           "semantic_node_activation",
           "neighbor_identification",
@@ -239,10 +480,10 @@
           "coverage_benchmark"
         ],
         "output": "semantic_traversal_manifest",
-        "boundary": "Traversal identifies and organizes candidates. It does not itself synthesize the answer."
+        "boundary": "Traversal identifies and organizes candidates It does not itself synthesize the answer"
       },
       "retrieval": {
-        "description": "Retrieves concrete content from latent_space using semantic_traversal_manifest.",
+        "description": "Retrieves concrete content from latent_space using semantic_traversal_manifest",
         "inputs": [
           "semantic_traversal_manifest",
           "primary_corpus",
@@ -253,10 +494,10 @@
           "synthetic_nodes"
         ],
         "output": "retrieval_packet",
-        "boundary": "Retrieval selects and packages source material. It does not itself create the synthesis."
+        "boundary": "Retrieval selects and packages source material It does not itself create the synthesis"
       },
       "llm_synthesis": {
-        "description": "Synthesizes retrieved content against active_state to produce a conversational output or structured artifact.",
+        "description": "Synthesizes retrieved content against active_state to produce a conversational output or structured artifact",
         "inputs": [
           "active_state",
           "retrieval_packet",
@@ -266,10 +507,10 @@
           "synthesis_output",
           "optional synthetic_node_candidate"
         ],
-        "boundary": "The synthesis is the target output of the constrained process. It should preserve provenance and retrieval basis without being over-constrained by a direct synthesis metric."
+        "boundary": "The synthesis is the target output of the constrained process It should preserve provenance and retrieval basis without being over-constrained by a direct synthesis metric"
       },
       "state_update": {
-        "description": "Updates the conversational thread state after synthesis.",
+        "description": "Updates the conversational thread state after synthesis",
         "inputs": [
           "active_state",
           "user_input",
@@ -281,7 +522,7 @@
         "output": "updated_recurrent_state"
       },
       "synthetic_node_promotion": {
-        "description": "Optionally persists selected synthesis output back into the data substrate.",
+        "description": "Optionally persists selected synthesis output back into the data substrate",
         "inputs": [
           "synthesis_output",
           "conversation_context",
@@ -294,38 +535,35 @@
           "synthetic_node_embedding",
           "synthetic_node_graph_edges"
         ],
-        "boundary": "Not every synthesis_output becomes a synthetic_node. Promotion is an intentional write-back operation."
+        "boundary": "Not every synthesis_output becomes a synthetic_node Promotion is an intentional write-back operation"
       },
       "chunking": {
 
       },
       "embed_index": {
 
-      },
-      "": {
-
       }
     },
     "artifacts": {
       "kernel_context_packet": {
-        "description": "Initial context packet for bootstrapping a new conversational thread.",
-        "created_by": "state_kernel",
+        "description": "Initial context packet for bootstrapping a new conversational thread",
+        "created_by": "session_state_kernel",
         "consumed_by": [
-          "state_hydration",
+          "state_salt",
           "first state_perturbation"
         ]
       },
       "semantic_context_packet": {
-        "description": "Structured extraction of user_input semantics and relevant recurrent_state context.",
+        "description": "Structured extraction of user_input semantics and relevant recurrent_state context",
         "created_by": "semantic_context_extraction",
         "consumed_by": [
-          "state_hydration",
+          "state_salt",
           "coverage_benchmark",
           "latent_space_traversal"
         ]
       },
       "semantic_traversal_manifest": {
-        "description": "Manifest of activated nodes, candidate neighbors, graph expansions, and retrieval targets.",
+        "description": "Manifest of activated nodes, candidate neighbors, graph expansions, and retrieval targets",
         "created_by": "latent_space_traversal",
         "consumed_by": [
           "retrieval",
@@ -334,7 +572,7 @@
         ]
       },
       "retrieval_packet": {
-        "description": "Concrete retrieved material selected from latent_space for the current perturbation.",
+        "description": "Concrete retrieved material selected from latent_space for the current perturbation",
         "created_by": "retrieval",
         "consumed_by": [
           "llm_synthesis",
@@ -343,7 +581,7 @@
         ]
       },
       "synthesis_output": {
-        "description": "The conversational or structured output produced from active_state and retrieval_packet.",
+        "description": "The conversational or structured output produced from active_state and retrieval_packet",
         "created_by": "llm_synthesis",
         "consumed_by": [
           "state_update",
@@ -351,14 +589,14 @@
         ]
       },
       "updated_recurrent_state": {
-        "description": "The thread-local state carried forward after the perturbation completes.",
+        "description": "The thread-local state carried forward after the perturbation completes",
         "created_by": "state_update",
         "consumed_by": [
           "next state_perturbation"
         ]
       },
       "synthetic_node": {
-        "description": "A promoted synthesis artifact written back into latent_space.",
+        "description": "A promoted synthesis artifact written back into latent_space",
         "created_by": "synthetic_node_promotion",
         "consumed_by": [
           "future traversal",
@@ -367,99 +605,10 @@
         ]
       }
     },
-    "runtime_flow": [
-      {
-        "step": 1,
-        "name": "receive_user_input",
-        "input": "user_input",
-        "output": "state_perturbation_trigger"
-      },
-      {
-        "step": 2,
-        "name": "extract_semantic_context",
-        "operation": "semantic_context_extraction",
-        "input": [
-          "user_input",
-          "state_kernel or recurrent_state"
-        ],
-        "output": "semantic_context_packet"
-      },
-      {
-        "step": 3,
-        "name": "hydrate_active_state",
-        "operation": "state_hydration",
-        "input": [
-          "semantic_context_packet",
-          "state_kernel or recurrent_state"
-        ],
-        "output": "active_state"
-      },
-      {
-        "step": 4,
-        "name": "traverse_latent_space",
-        "operation": "latent_space_traversal",
-        "input": [
-          "active_state",
-          "latent_space",
-          "coverage_benchmark"
-        ],
-        "output": "semantic_traversal_manifest"
-      },
-      {
-        "step": 5,
-        "name": "retrieve_content",
-        "operation": "retrieval",
-        "input": [
-          "semantic_traversal_manifest",
-          "latent_space"
-        ],
-        "output": "retrieval_packet"
-      },
-      {
-        "step": 6,
-        "name": "synthesize_response",
-        "operation": "llm_synthesis",
-        "input": [
-          "active_state",
-          "semantic_traversal_manifest",
-          "retrieval_packet"
-        ],
-        "output": [
-          "synthesis_output",
-          "optional synthetic_node_candidate"
-        ]
-      },
-      {
-        "step": 7,
-        "name": "update_recurrent_state",
-        "operation": "state_update",
-        "input": [
-          "active_state",
-          "user_input",
-          "semantic_context_packet",
-          "semantic_traversal_manifest",
-          "retrieval_packet",
-          "synthesis_output"
-        ],
-        "output": "updated_recurrent_state"
-      },
-      {
-        "step": 8,
-        "name": "optionally_promote_synthetic_node",
-        "operation": "synthetic_node_promotion",
-        "input": [
-          "synthesis_output",
-          "conversation_context",
-          "retrieval_packet",
-          "semantic_traversal_manifest"
-        ],
-        "output": "optional synthetic_node"
-      }
-    ],
     "implementation_boundary": {
-      "first_build_target": "A conversational state space over Obsidian notes where each chat thread maintains its own recurrent_state and each user message triggers a bounded state_perturbation.",
-      "initial_graph_strategy": "Extract Obsidian wiki links, note nodes, chunk containment edges, path topology, and selected frontmatter values before attempting a richer ontology.",
-      "initial_write_back_strategy": "Only promoted synthesis snippets become synthetic_nodes in latent_space.",
+      "first_build_target": "A conversational state space over Obsidian notes where each chat thread maintains its own recurrent_state and each user message triggers a bounded state_perturbation",
+      "initial_graph_strategy": "Extract Obsidian wiki links, note nodes, chunk containment edges, path topology, and selected frontmatter values before attempting a richer ontology",
+      "initial_write_back_strategy": "Only promoted synthesis snippets become synthetic_nodes in latent_space",
       "deferred_questions": [
         "exact coverage_benchmark math",
         "full graph ontology",
