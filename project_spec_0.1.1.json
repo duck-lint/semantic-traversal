@@ -162,7 +162,7 @@
         "description": "Runtime assembles the fresh LLM call context from user_input, prior_thread_state, traversal, retrieval, and coverage artifacts.",
         "operational_boundaries": [
           "state_perturbation",
-          "LLM_call_boundary"
+          "llm_call_boundary"
         ],
         "input": [
           "user_input",
@@ -179,10 +179,10 @@
       },
       {
         "id": 9,
-        "process": "llm_synthesis",
+        "process": "llm_call_boundary",
         "description": "A fresh LLM call produces the user-facing response from the synthesis_context_packet.",
         "operational_boundaries": [
-          "LLM_call_boundary"
+          "llm_call_boundary"
         ],
         "input": [
           "synthesis_context_packet"
@@ -217,7 +217,8 @@
         ],
         "output": [
           "next_thread_state",
-          "state_delta"
+          "state_delta",
+          "next_thread_state_hash"
         ]
       },
       {
@@ -238,12 +239,13 @@
         ],
         "output": [
           "state_perturbation_record",
-          "state_perturbation_hash"
+          "state_perturbation_hash",
+          "updated_thread_ledger"
         ]
       },
       {
         "id": 12,
-        "process": "optional_synthetic_node_promotion",
+        "process": "synthetic_node_promotion",
         "description": "Selected synthesis output may be intentionally promoted back into latent_space.",
         "operational_boundaries": [
           "conversation_thread",
@@ -517,10 +519,10 @@
           "retrieval_packet_assembly",
           "retrieval_coverage_evaluation",
           "synthesis_context_assembly",
-          "llm_synthesis",
+          "llm_call_boundary",
           "thread_state_delta_projection",
           "append_thread_ledger_record",
-          "optional_synthetic_node_promotion"
+          "synthetic_node_promotion"
         ],
         "input": [
           "user_input",
@@ -1113,7 +1115,7 @@
       "exact coverage_benchmark math",
       "full graph ontology",
       "promotion criteria for synthetic_nodes",
-      "long-term recurrent_state compression",
+      "long-term thread_state compression",
       "multi-thread state interaction"
     ]
   }
