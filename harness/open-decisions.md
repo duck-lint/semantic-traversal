@@ -12,6 +12,11 @@ When a current decision exists, use:
 
 | ID | Decision | Source | Status | Owner | Revisit Trigger |
 | --- | --- | --- | --- | --- | --- |
+| cd-01 | both | - | complete | user & codex | if repo/project structure changes |
+| cd-02 | tmp | - | complete | user & codex | after a useable version of the project is developed , we'll look to adjust the artifacts that are currently dumping in the tmp folder from implementation 01 and these can be lumped in with that, so can be placed in same tmp location for now |
+| cd-03 | live embeddings | - | approved | user & codex | if just a local sentence transformers embedding solution will not work (it should, I've done it before on this machine) so the embedding surface should be designed in such a way that if we wanted to change the embedding model on a whim to a different local model, or an API model, that would be super easy to adjust on a whim. Do not seek additional approval for this, consider this documentation approval for local sentence transformers embedding. |
+| cd-04 | none ever | - | complete | user & codex | if anything regarding frontmatter as nodes for graphs reappears, that was intended to be excised from the project spec but accidentally was not. all references to frontmatter as nodes should be removed now, this is not an intention at this time, only notes as nodes, and wikiklinks as edges. |
+| cd-05 | SQLite as default artifact storage where possible | whenever possible for the latent space data forms, sqlite is preferred with json manifests if possible to keep data orderly | complete | user & codex | if this is not possible or creates additional issues | 
 
 ## Pending Decisions
 

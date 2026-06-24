@@ -1,2 +1,4 @@
 .env.*
 *.pyc
+corpus/
+tests/fixtures/

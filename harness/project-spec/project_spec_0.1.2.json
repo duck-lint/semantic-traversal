@@ -338,7 +338,6 @@
               "primary_corpus_notes",
               "corpus_nodes",
               "synthetic_nodes",
-              "selected frontmatter values",
               "tags"
             ],
             "edges": [
@@ -346,14 +345,12 @@
               "note_contains_chunk",
               "chunk_derived_from_note",
               "note_has_tag",
-              "note_has_frontmatter_value",
               "synthetic_node_derived_from_thread",
               "synthetic_node_derived_from_sources"
             ],
             "structure": [
               "initial graph extraction should be scriptable from Obsidian vault structure",
               "wiki links provide first-pass note-to-note edges",
-              "selected frontmatter fields may be projected into graph nodes and edges",
               "synthetic_nodes add provenance edges when promoted"
             ]
           },
@@ -1109,7 +1106,7 @@
         "process": "append hash-chained thread_ledger record"
       }
     ],
-    "initial_graph_strategy": "Extract Obsidian wiki links, note nodes, chunk containment edges, path topology, and selected frontmatter values before attempting a richer ontology",
+    "initial_graph_strategy": "Extract Obsidian wiki links, note nodes, chunk containment edges, path topology before attempting a richer ontology",
     "initial_write_back_strategy": "Only promoted synthesis snippets become synthetic_nodes in latent_space",
     "deferred_questions": [
       "exact coverage_benchmark math",
