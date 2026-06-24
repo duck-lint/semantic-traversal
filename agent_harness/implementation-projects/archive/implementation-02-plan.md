@@ -215,7 +215,7 @@ Surfaces that must not move under this bundle:
 - [ ] Schema
 - [ ] API
 - [ ] Auth
-- [x] Storage
+- [ ] Storage
 - [ ] Deployment
 - [ ] Destructive operation
 - [ ] Broad architecture
@@ -340,3 +340,4 @@ Acceptance criteria achieved, or the implementer reports a blocker that would re
 ## Closeout Note
 
 - When this bundle completes, move it from `active/` to `archive/`.
+

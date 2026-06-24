@@ -2,9 +2,9 @@
 
 ## Status
 
-- State: seams-1-through-4 complete
-- Current work: active `implementation-02` now has a live-wired ingestion caller path through `python -m semantic_traversal ingest`, dual authorized corpus roots, tmp-root SQLite plus JSON manifest materialization, deterministic heading or inline-label section resolution, paragraph-first chunking, stable `chunk_id = note identity + section identity + paragraph ordinal`, separate content hashes, and deterministic reingest behavior for unchanged and localized paragraph edits
-- Next action: reviewer may inspect the ingestion diff and verification evidence, or the next bundle step can begin seam 5 local swappable embeddings without reopening seams 1 through 4
+- State: seams-1-through-4 complete; seam-5 deferred to `implementation-03`
+- Current work: active `implementation-02` had a live-wired ingestion caller path through `python -m semantic_traversal ingest`, dual authorized corpus roots, tmp-root SQLite plus JSON manifest materialization, deterministic heading or inline-label section resolution, paragraph-first chunking, stable `chunk_id = note identity + section identity + paragraph ordinal`, separate content hashes, and deterministic reingest behavior for unchanged and localized paragraph edits
+- Next action: reviewer may inspect the ingestion diff and verification evidence, or the next bundle step can begin seam 5 local swappable embeddings under `implementation-03`
 
 ## Work Log
 
@@ -24,7 +24,7 @@
 | Seam 2: paragraph-first chunk contract inside resolved section context | implementer | complete | `probe_fixture_journal_section_paragraph_chunking`, `probe_repo_corpus_journal_heading_section_resolution`, and `tests.test_ingest_runtime.IngestRuntimeTests.test_heading_sections_and_longform_paragraphs_survive_resolution` | headings and inline labels define resolved section labels, each paragraph under that section becomes its own ordinal chunk, `chunk_id` stays stable as note identity plus section identity plus paragraph ordinal, content hash stays separate, and chunk payload text stays local to the paragraph |
 | Seam 3: SQLite materialization plus JSON manifests | implementer | complete | `probe_sqlite_manifest_materialization` and `tests.test_ingest_runtime.IngestRuntimeTests.test_cli_ingest_uses_authorized_default_roots` | SQLite is the default artifact store under the tmp-root ingestion path and run manifests stay in scope for operator inspection |
 | Seam 4: deterministic reingest verification | implementer | complete | `tests.test_ingest_runtime.IngestRuntimeTests.test_reingest_unchanged_preserves_chunk_ids_and_hashes` and `tests.test_ingest_runtime.IngestRuntimeTests.test_localized_paragraph_edit_changes_only_the_edited_chunk` | unchanged whole-vault reprocessing preserves paragraph chunk IDs and hashes, and a localized paragraph text edit updates only the affected paragraph record in place at the same `chunk_id` |
-| Seam 5: local swappable embedding preparation | implementer | proposed | embedding seam may start only after seams 1 through 4 pass | backend must stay easily swappable; retrieval and traversal remain out of scope |
+| Seam 5: local swappable embedding preparation | implementer | deferred | seam may start only after seams 1 through 4 pass; it is now the first slice of `implementation-03` instead | backend must stay easily swappable; retrieval and traversal remain out of scope |
 | Graph work inside `implementation-02` | implementer | blocked | no graph probe is authorized until spec alignment exists | defer graph work because current decision authority conflicts with the spec; do not treat this as a frontmatter allowlist question |
 
 ## Blockers
@@ -35,4 +35,5 @@
 
 ## Closeout Note
 
-- When this bundle completes, move it from `active/` to `archive/`.
+- This bundle is archived as partial closeout: seams 1 through 4 were completed and verified, while seam 5 moved into `implementation-03`
+

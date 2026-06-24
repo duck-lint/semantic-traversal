@@ -73,6 +73,13 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         "conversation_thread_path": str(result.conversation_thread_path),
         "thread_state_path": str(result.thread_state_path),
         "thread_ledger_path": str(result.thread_ledger_path),
+        "turn_root": str(result.turn_root),
+        "semantic_context_packet_path": str(result.semantic_context_packet_path),
+        "semantic_traversal_manifest_path": str(result.semantic_traversal_manifest_path),
+        "retrieval_packet_path": str(result.retrieval_packet_path),
+        "coverage_report_path": str(result.coverage_report_path),
+        "synthesis_context_packet_path": str(result.synthesis_context_packet_path),
+        "coverage_status": result.coverage_report.get("status"),
         "latest_thread_state_hash": result.next_thread_state["latest_thread_state_hash"],
         "latest_perturbation_hash": result.ledger_record["state_perturbation_hash"],
     }

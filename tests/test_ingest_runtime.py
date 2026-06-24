@@ -9,7 +9,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from semantic_traversal.llm import StubLLMBackend
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
+from semantic_traversal.runtime import run_thread_turn
+from semantic_traversal.storage import read_ledger
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -57,6 +60,10 @@ def _chunks_for_note(manifest: dict[str, object], source_root_label: str, relati
         for chunk in manifest["chunks"]  # type: ignore[index]
         if chunk["source_root_label"] == source_root_label and chunk["relative_path"] == relative_path
     ]
+
+
+def _load_turn_artifact(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 class IngestRuntimeTests(unittest.TestCase):
@@ -248,6 +255,133 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(changed_chunk["paragraph_ordinal"], 2)
             self.assertEqual(second_result.updated_chunks, 1)
             self.assertEqual(second_result.deleted_chunks, 0)
+
+    def test_lexical_retrieval_fixture_hit_persists_artifacts_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            _copy_note(
+                CORPUS_JOURNAL_NOTE,
+                repo_root / "corpus",
+                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md",
+            )
+            _copy_note(
+                LONGFORM_NOTE,
+                repo_root / "corpus",
+                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/Propositions & Models.md",
+            )
+
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+
+            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            semantic_traversal_manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
+            retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+            synthesis_context_packet = _load_turn_artifact(result.synthesis_context_packet_path)
+            ledger = read_ledger(result.thread_ledger_path)
+
+            self.assertEqual(coverage_report["status"], "minimal_pass")
+            self.assertGreater(len(retrieval_packet["selected_chunks"]), 0)
+            self.assertTrue(synthesis_context_packet["approved_retrieval_packet"])
+            self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
+            self.assertEqual(
+                synthesis_context_packet["semantic_context_packet"]["extracted_lexical_query_terms"],
+                semantic_context_packet["extracted_lexical_query_terms"],
+            )
+            self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
+            self.assertIsNotNone(ledger[-1]["semantic_context_packet_hash"])
+            self.assertIsNotNone(ledger[-1]["semantic_traversal_manifest_hash"])
+            self.assertIsNotNone(ledger[-1]["retrieval_packet_hash"])
+            self.assertIsNotNone(ledger[-1]["coverage_report_hash"])
+            self.assertEqual(result.coverage_report["status"], "minimal_pass")
+
+    def test_lexical_retrieval_no_index_is_explicit_and_non_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Dream Recall without an index.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+            retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
+            ledger = read_ledger(result.thread_ledger_path)
+
+            self.assertEqual(coverage_report["status"], "no_index")
+            self.assertEqual(retrieval_packet["selected_chunks"], [])
+            self.assertIsNotNone(ledger[-1]["semantic_context_packet_hash"])
+            self.assertIsNotNone(ledger[-1]["semantic_traversal_manifest_hash"])
+            self.assertIsNotNone(ledger[-1]["retrieval_packet_hash"])
+            self.assertIsNotNone(ledger[-1]["coverage_report_hash"])
+
+    def test_lexical_retrieval_no_match_is_explicit_and_non_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="qzxyv qzxyv qzxyv",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+            retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
+            ledger = read_ledger(result.thread_ledger_path)
+
+            self.assertEqual(coverage_report["status"], "no_matches")
+            self.assertEqual(retrieval_packet["selected_chunks"], [])
+            self.assertIsNotNone(ledger[-1]["semantic_context_packet_hash"])
+            self.assertIsNotNone(ledger[-1]["semantic_traversal_manifest_hash"])
+            self.assertIsNotNone(ledger[-1]["retrieval_packet_hash"])
+            self.assertIsNotNone(ledger[-1]["coverage_report_hash"])
+
+    def test_same_thread_continuation_preserves_parent_hash_with_retrieval(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            _copy_note(
+                CORPUS_JOURNAL_NOTE,
+                repo_root / "corpus",
+                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md",
+            )
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            first_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+            before_records = read_ledger(first_turn.thread_ledger_path)
+            second_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please continue with Yesterday and Y-Day Review.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                thread_id=first_turn.thread_id,
+            )
+            after_records = read_ledger(second_turn.thread_ledger_path)
+
+            self.assertEqual(len(after_records), len(before_records) + 1)
+            self.assertEqual(after_records[-1]["parent_perturbation_hash"], before_records[-1]["state_perturbation_hash"])
+            self.assertEqual(second_turn.coverage_report["status"], "minimal_pass")
 
 
 if __name__ == "__main__":

@@ -149,6 +149,64 @@ def probe_sqlite_manifest_materialization(data_root: Path, repo_root: Path | Non
     }
 
 
+def probe_lexical_retrieval_fixture_hit(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    result = run_thread_turn(
+        repo_root=resolved_repo_root,
+        data_root=data_root,
+        user_input="Please retrieve the candy snack food before bed note.",
+        llm_backend=StubLLMBackend(prefix="Probe stub response"),
+    )
+    assert result.coverage_report["status"] == "minimal_pass", "expected retrieval to succeed"
+    assert result.retrieval_packet["selected_chunks"], "expected at least one retrieval hit"
+    assert result.synthesis_context_packet["approved_retrieval_packet"] is not None
+    return {
+        "probe": "probe_lexical_retrieval_fixture_hit",
+        "status": "pass",
+        "turn_id": result.turn_id,
+        "coverage_status": result.coverage_report["status"],
+        "selected_chunk_ids": [chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]],
+    }
+
+
+def probe_lexical_retrieval_no_index(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    result = run_thread_turn(
+        repo_root=resolved_repo_root,
+        data_root=data_root,
+        user_input="Dream Recall with no ingestion index present.",
+        llm_backend=StubLLMBackend(prefix="Probe stub response"),
+    )
+    assert result.coverage_report["status"] == "no_index", "expected no_index coverage status"
+    assert result.retrieval_packet["selected_chunks"] == [], "expected an empty retrieval packet"
+    return {
+        "probe": "probe_lexical_retrieval_no_index",
+        "status": "pass",
+        "turn_id": result.turn_id,
+        "coverage_status": result.coverage_report["status"],
+    }
+
+
+def probe_lexical_retrieval_no_match(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    result = run_thread_turn(
+        repo_root=resolved_repo_root,
+        data_root=data_root,
+        user_input="qzxyv qzxyv qzxyv",
+        llm_backend=StubLLMBackend(prefix="Probe stub response"),
+    )
+    assert result.coverage_report["status"] == "no_matches", "expected no_matches coverage status"
+    assert result.retrieval_packet["selected_chunks"] == [], "expected an empty retrieval packet"
+    return {
+        "probe": "probe_lexical_retrieval_no_match",
+        "status": "pass",
+        "turn_id": result.turn_id,
+        "coverage_status": result.coverage_report["status"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the named semantic-traversal first-target probes.")
     parser.add_argument(
@@ -159,6 +217,9 @@ def main() -> int:
             "probe_fixture_journal_section_paragraph_chunking",
             "probe_repo_corpus_journal_heading_section_resolution",
             "probe_sqlite_manifest_materialization",
+            "probe_lexical_retrieval_fixture_hit",
+            "probe_lexical_retrieval_no_index",
+            "probe_lexical_retrieval_no_match",
         ),
     )
     parser.add_argument("--data-root", default=str(_default_probe_root()))
@@ -190,8 +251,18 @@ def main() -> int:
             data_root=data_root,
             repo_root=Path(args.repo_root).resolve(),
         )
+    elif args.probe == "probe_lexical_retrieval_fixture_hit":
+        payload = probe_lexical_retrieval_fixture_hit(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_lexical_retrieval_no_index":
+        payload = probe_lexical_retrieval_no_index(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
     else:
-        payload = probe_sqlite_manifest_materialization(
+        payload = probe_lexical_retrieval_no_match(
             data_root=data_root,
             repo_root=Path(args.repo_root).resolve(),
         )
