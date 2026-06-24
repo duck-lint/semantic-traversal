@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol
-
-from openai import OpenAI
 
 
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
@@ -25,6 +24,24 @@ class LLMResponse:
 
 class LiveLLMNotConfigured(RuntimeError):
     pass
+
+
+def _build_openai_client(api_key: str) -> Any:
+    try:
+        openai_module = import_module("openai")
+    except ModuleNotFoundError as exc:
+        raise LiveLLMNotConfigured(
+            "OpenAI SDK is not installed. Run `python -m pip install openai` to use "
+            "`--llm-mode live`, or rerun with `--llm-mode stub`."
+        ) from exc
+
+    openai_client = getattr(openai_module, "OpenAI", None)
+    if openai_client is None:
+        raise LiveLLMNotConfigured(
+            "OpenAI SDK import succeeded but `openai.OpenAI` is unavailable. "
+            "Reinstall the `openai` package or rerun with `--llm-mode stub`."
+        )
+    return openai_client(api_key=api_key)
 
 
 class StubLLMBackend:
@@ -47,7 +64,7 @@ class StubLLMBackend:
 
 class OpenAIResponsesBackend:
     def __init__(self, api_key: str, model: str) -> None:
-        self._client = OpenAI(api_key=api_key)
+        self._client = _build_openai_client(api_key=api_key)
         self._model = model
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:

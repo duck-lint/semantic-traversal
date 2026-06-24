@@ -51,3 +51,22 @@
 ## Next End Goal
 
 - No next end goal was provided during this closeout.
+
+## Addendum: Lazy OpenAI Import And Operator Readme
+
+- Follow-up date: `2026-06-23`
+- Portability gap addressed: `semantic_traversal/llm.py` now resolves the OpenAI SDK only when constructing the live backend and raises an explicit operator-facing error if the SDK is unavailable. This addendum closes the residual portability risk noted above; the earlier archived risk entry remains as historical context for the original closeout state.
+- Files changed in this follow-up:
+  - `semantic_traversal/llm.py`
+  - `tests/test_llm_lazy_import.py`
+  - `harness/implementation-projects/archive/implementation-01-operator-readme.md`
+  - `harness/implementation-projects/archive/semantic-traversal-implementation-01-summary.md`
+- Validation run for this follow-up:
+  - `python -m unittest discover -s tests -v`
+  - `python -m semantic_traversal.probes probe_new_thread_minimal_turn --llm-mode stub`
+  - `python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub`
+  - `python -m semantic_traversal --message "Reply with exactly: live path ok" --llm-mode live`
+  - `python -m semantic_traversal.probes probe_new_thread_minimal_turn --llm-mode live`
+  - `python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode live`
+- Original implementation-01 claim: unchanged. This follow-up does not alter the original first-build-target `live-wired` claim, acceptance result, or archived decision closeout.
+- Decision posture: this is a non-architectural follow-up only. It does not reopen pending decisions and does not require changes to `harness/open-decisions.md`.
