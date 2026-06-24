@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 
 
 class LLMBackend(Protocol):

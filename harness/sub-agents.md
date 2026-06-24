@@ -1,6 +1,6 @@
 # Agent Role Contracts
 
-The same model may perform multiple agent roles, but each role has a separate job, authority boundary, and handoff output.
+The same model may perform multiple agent roles, but each role has a separate job, authority boundary, and handoff output. When a role is launched via Codex `spawn_agent`, that role is already an actual subagent for harness purposes. Spawned agents must perform their assigned work directly in their forked workspace and must not recursively launch `codex exec`, Ollama-backed agents, or additional subagents unless the orchestrator explicitly delegates that responsibility.
 
 ## Project Manager
 
