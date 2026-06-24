@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import tempfile
+import sys
 from pathlib import Path
+from typing import Sequence
 
+from .ingest import (
+    build_default_source_roots,
+    default_data_root,
+    parse_source_root_argument,
+    run_ingest,
+)
 from .llm import resolve_llm_backend
 from .runtime import run_thread_turn
 
 
-def default_data_root() -> Path:
-    return Path(tempfile.gettempdir()) / "semantic-traversal"
-
-
-def build_parser() -> argparse.ArgumentParser:
+def build_turn_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local CLI runner for the semantic-traversal first build target.")
     parser.add_argument("--message", required=True, help="The user input for the turn.")
     parser.add_argument("--thread-id", help="Existing thread id to continue. Omit to create a new thread.")
@@ -33,8 +36,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def build_ingest_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Ingest authorized Markdown corpus roots into SQLite plus JSON manifests.")
+    parser.add_argument(
+        "--data-root",
+        default=str(default_data_root()),
+        help="Directory for ingestion SQLite and manifest artifacts.",
+    )
+    parser.add_argument("--repo-root", default=".", help="Repo root used to resolve default corpus roots.")
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        default=[],
+        help="Override source roots with repeated label=path values.",
+    )
+    return parser
+
+
+def run_turn_cli(argv: Sequence[str] | None = None) -> int:
+    args = build_turn_parser().parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
     data_root = Path(args.data_root).resolve()
     llm_backend = resolve_llm_backend(repo_root=repo_root, llm_mode=args.llm_mode, model_override=args.model)
@@ -58,6 +78,43 @@ def main() -> int:
     }
     print(json.dumps(payload, indent=2, ensure_ascii=True))
     return 0
+
+
+def run_ingest_cli(argv: Sequence[str] | None = None) -> int:
+    args = build_ingest_parser().parse_args(argv)
+    repo_root = Path(args.repo_root).resolve()
+    data_root = Path(args.data_root).resolve()
+    source_roots = (
+        tuple(parse_source_root_argument(raw=raw_root, repo_root=repo_root) for raw_root in args.source_root)
+        if args.source_root
+        else build_default_source_roots(repo_root)
+    )
+    result = run_ingest(repo_root=repo_root, data_root=data_root, source_roots=source_roots)
+    payload = {
+        "status": "pass",
+        "run_id": result.run_id,
+        "generated_at": result.generated_at,
+        "data_root": str(result.data_root),
+        "database_path": str(result.database_path),
+        "manifest_path": str(result.manifest_path),
+        "source_roots": [{"label": root.label, "path": str(root.path)} for root in result.source_roots],
+        "note_count": result.note_count,
+        "chunk_count": result.chunk_count,
+        "inserted_chunks": result.inserted_chunks,
+        "updated_chunks": result.updated_chunks,
+        "unchanged_chunks": result.unchanged_chunks,
+        "deleted_chunks": result.deleted_chunks,
+        "deleted_notes": result.deleted_notes,
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=True))
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "ingest":
+        return run_ingest_cli(args[1:])
+    return run_turn_cli(args)
 
 
 if __name__ == "__main__":

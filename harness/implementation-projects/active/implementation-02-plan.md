@@ -2,227 +2,164 @@
 
 ## Intent
 
-Create the next active implementation bundle for deterministic latent-space ingestion only. The implementation this bundle authorizes must be limited to materializing `primary_corpus` Markdown notes into provenance-rich `corpus_nodes` plus the minimum ingest artifacts needed to prove deterministic chunking, reingest stability, and localized change behavior.
+Refresh `implementation-02` into a journal-first, provenance-rich ingestion bundle for latent-space preparation only. This bundle authorizes ingestion from both repo-root `corpus/` and snippet fixtures in `tests/fixtures/`, with tmp-root artifacts, deterministic section resolution from observable Markdown structure and label text, paragraph-first chunking inside resolved section context, stable paragraph chunk IDs derived from note identity plus resolved section identity plus paragraph ordinal, separate content hashes for drift detection, SQLite as the default materialization surface where possible, JSON manifests where possible, deterministic reingest verification, and a later local embedding seam that stays easily swappable.
 
-The smallest implementation seam authorized by this bundle is now explicit: one bounded ingestion caller that takes an explicit `corpus_root` and explicit `artifact_root`, scans Markdown notes only, decomposes them by Markdown structure, preserves section ordinals plus note provenance, and writes deterministic `corpus_nodes` materialization artifacts through the same path the named acceptance probes will exercise.
+Delivery posture for the eventual implementation under this bundle is conditional:
 
-This bundle intentionally stops before activation, traversal, retrieval-packet assembly, coverage evaluation, synthetic-node promotion, and live vector embeddings. Optional lexical indexing or initial graph projection may be attempted only after the core chunking and provenance seams succeed and only inside the gates named below.
+- report `live-wired` only if the named ingestion and reingest probes pass through the real caller path against the authorized corpus roots
+- report `scaffold-only` if the path stops at fixtures, dry runs, incomplete storage materialization, or an unexercised embedding seam
 
 ## Admissibility Report
 
 - Invariant constraints:
-  - `harness/project-spec/project_spec_0.1.2.json` is the only invariant authority.
-  - The next admissible transition after `implementation-01` is latent-space ingestion centered on `primary_corpus` to deterministic `corpus_nodes` materialization.
-  - Semantic chunking must follow the spec: Markdown-structure decomposition, preserved section ordinals, preserved frontmatter references, preserved path-topology references, preserved source-note identity, and stable `chunk_id` derived from note identity plus section ordinal, with any content-sensitive differentiation carried separately rather than by widening scope into embeddings.
-  - Any initial graph scope in this bundle, if attempted at all, must stay limited to Obsidian-native structure: wiki links, note nodes, chunk containment edges, path topology, and selected frontmatter values.
-  - Activation, traversal, retrieval-packet assembly, coverage evaluation, and synthetic-node promotion remain out of scope.
+  - `harness/project-spec/project_spec_0.1.2.json` remains the invariant authority.
+  - `implementation-02` must stay inside latent-space ingestion plus embedding preparation.
+  - Retrieval, traversal, retrieval coverage, and synthetic-node promotion remain out of scope.
+  - Do not silently normalize the graph conflict between current decision authority and the spec. Graph work must stay deferred or blocked until spec alignment is explicit.
 - Task constraints:
-  - Create `harness/implementation-projects/active/implementation-02-plan.md`.
-  - Create `harness/implementation-projects/active/implementation-02-tracker.md`.
-  - The plan must be specific enough that an implementer can start seam 1 without improvising the chunking contract.
-  - The plan must carry forward targeted bundle-local unknowns, future-default questions, and optional-seam gates where task authority is still intentionally absent.
-  - Optional lexical or initial graph follow-on may be described only after the core chunking and provenance seams, and live embedding work must remain explicitly blocked.
+  - Update only the active `implementation-02` plan and tracker.
+  - Reflect current decision authority: `corpus/` plus `tests/fixtures/`, tmp-root artifacts, SQLite default storage where possible, JSON manifests where possible, and approved local swappable embeddings.
+  - Replace whole-section chunking with paragraph-first chunking inside resolved section context.
+  - Make journal section resolution deterministic across Markdown headings and inline `Label:` sections without hardcoding any specific label list.
+  - Make the chunk identity formula explicit: stable `chunk_id = note identity + section identity + paragraph ordinal`.
+  - Keep content hash as a separate stored field for change detection; do not bake content-derived hashing into `chunk_id`.
+  - Keep retrieval and traversal out of scope.
 - Constraint conflicts:
-  - No conflict blocks seams 1 through 3 so long as the implementation requires caller-supplied `corpus_root` and `artifact_root`.
-  - Future operator defaults for corpus source and artifact placement remain bundle-local questions rather than present blockers for the core ingestion seams.
-  - Live embeddings remain out of scope for this bundle unless a later task explicitly authorizes that separate seam.
-  - Frontmatter allowlist work remains a gate for the optional graph seam only.
+  - The spec still describes graph-layer surfaces and frontmatter-related graph-adjacent structures more broadly than current live decision authority allows.
+  - The spec example `chunk_id = note identity + section ordinal + optional content hash` is too coarse for the authorized paragraph-addressable chunk unit and too permissive about mixing content hashing into identity.
 - Allowed transformation types:
-  - Create the active `implementation-02` plan and tracker bundle only.
-  - Define seam order, acceptance probes, verification duties, and approval gates for the next implementation transition.
-  - Do not edit `harness/open-decisions.md`, runtime code, tests, or the project spec in this turn.
+  - Create or revise `harness/implementation-projects/active/implementation-02-plan.md`.
+  - Revise `harness/implementation-projects/active/implementation-02-tracker.md`.
+  - Do not edit `harness/open-decisions.md`, the spec, runtime code, or tests.
 - Affected surfaces:
   - `harness/implementation-projects/active/implementation-02-plan.md`
   - `harness/implementation-projects/active/implementation-02-tracker.md`
 - Non-affected surfaces:
   - `harness/open-decisions.md`
-  - `semantic_traversal/runtime.py`
-  - `semantic_traversal/storage.py`
-  - `semantic_traversal/cli.py`
-  - `semantic_traversal/probes.py`
-  - `tests/test_first_build_target.py`
-  - all activation, traversal, retrieval, synthetic-node, vector, and graph-runtime implementation surfaces
+  - `harness/project-spec/project_spec_0.1.2.json`
+  - runtime code, tests, and archive files
 - Admissibility checks:
-  - Name the smallest truthful seam order for deterministic ingestion only.
-  - Keep the semantic chunking contract explicit enough that section decomposition and `chunk_id` rules are not left to implementer guesswork.
-  - Include named acceptance probes for ingestion determinism and provenance.
-  - Treat live embeddings as out of scope for the core seams unless explicit user authorization opens a later bundle.
-  - Treat frontmatter allowlist selection as a gate for optional graph work only, not as a blocker for seams 1 through 3.
-  - Make non-goals and conditional follow-on seams explicit.
+  - The plan must treat each paragraph as the core chunk unit, with one ordinal chunk per paragraph under a resolved section label.
+  - The plan must make `chunk_id` explicit as stable note identity plus stable section identity plus paragraph ordinal, with content hash stored separately.
+  - The plan must scope SQLite plus JSON manifests into the core seams.
+  - The plan must place local swappable embeddings later in the same bundle, not out of scope.
+  - The plan must explicitly defer graph work on spec alignment instead of a frontmatter allowlist.
+  - Acceptance probes must require resolved journal section identities that are more specific than the enclosing date heading when observable heading or label structure is present.
+  - The fixture journal probe must require the note's actual inline section labels to survive resolution as their own sections, not only the enclosing date title.
+  - The corpus journal probe must require the note's actual heading labels to survive resolution as their own sections.
+  - Acceptance probes must reflect journal-shaped section identity and paragraph-level chunk identity.
+  - The localized edit probe must prove the edited paragraph record keeps the same `chunk_id` and only updates content-derived fields.
 - Stop conditions:
-  - Stop if the plan cannot be grounded in the spec and current runtime state without silently choosing missing decisions.
-  - Stop if the plan would need to widen into activation, traversal, retrieval, synthetic-node, or live embedding work.
-  - Stop if seam 1 would require a default corpus source or default artifact location rather than caller-supplied paths.
+  - Stop if truthfully revising the bundle would require editing `harness/open-decisions.md` or the spec.
+  - Stop if the bundle would expand into retrieval or traversal.
 
 ## Observed Evidence
 
-- `harness/implementation-projects/active/` is empty except for `.gitkeep`, so `implementation-02` is the next live bundle slot.
-- `implementation-01` is archived complete and its summary records a finished first-build-target runtime only.
-- `harness/open-decisions.md` currently contains no live decisions and no pending decisions.
-- `semantic_traversal/runtime.py`, `semantic_traversal/storage.py`, `semantic_traversal/cli.py`, and `semantic_traversal/probes.py` currently implement only the first-build-target thread, state, ledger, CLI, and probe surfaces.
-- `harness/project-spec/project_spec_0.1.2.json` defines:
-  - `primary_corpus` as an Obsidian-vault-like Markdown substrate where path topology and frontmatter are semantically meaningful.
-  - `corpus_nodes` as Markdown-structure-derived chunks with preserved section ordinals, frontmatter references, path-topology references, source-note identity, and stable `chunk_id`.
-  - `chunk_embed_store` as the ingestion boundary that may later emit corpus nodes, lexical records, graph records, and vector records.
-  - `implementation_boundary.initial_graph_strategy` as Obsidian-native extraction only.
-- The user-supplied PM evidence already names the intended core probes:
-  - `probe_ingest_markdown_note_to_corpus_nodes`
-  - `probe_reingest_unchanged_corpus_preserves_chunk_ids`
-  - `probe_changed_section_only_changes_affected_chunks`
-  - optional lexical and graph probes after explicit gates
+- `harness/implementation-projects/active/` contained an `implementation-02` tracker in the real workspace, but no corresponding active plan file.
+- `harness/open-decisions.md` now records five material decisions for the current bundle: dual corpus roots, tmp artifact posture, approved local embeddings, no frontmatter-as-nodes intent, and SQLite-plus-JSON storage preference.
+- `tests/fixtures/JOURNAL/2025-09/01_Monday.md` already shows journal-shaped inline section labels.
+- `corpus/LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md` shows heading-style journal sections whose heading text becomes the section label.
+- Repo-root `corpus/` contains broader vault-style material, including longform notes whose file topology is semantically meaningful.
+- `harness/project-spec/project_spec_0.1.2.json` still names path topology, frontmatter metadata, `corpus_nodes`, `vector_index_surface`, and graph-layer surfaces, but its chunk example is section-level and its graph posture is broader than the current live decision authority.
+- `harness/donor_code/embed_sentence_transformers.py` takes `chunk_id`, `profile_ref`, and paragraph text as separate fields, then returns vectors keyed by the same `chunk_id`.
+- `harness/donor_code/bumblebee-source-pipeline/src/lib.rs` models `chunk_id` separately from `chunk_hash` and compares prior versus current entries by stable `chunk_id` plus changed `chunk_hash`, which matches the requested identity-versus-content split.
 
 ## Planned Work
 
-### Seam 1: Deterministic note discovery and chunk contract
-
-Implement one bounded ingestion caller or entrypoint that requires:
-
-- an explicit `corpus_root`
-- an explicit `artifact_root`
-
-No default live corpus source or default latent-space artifact location is authorized in this bundle. The caller may support probe-time temporary roots, but it must not silently choose a production-like default corpus or storage path.
-
-The chunking contract for this seam is:
-
-- Discover Markdown notes only from the supplied `corpus_root`.
-- Normalize each note to one deterministic `source_note_id` based on the note's corpus-relative normalized path. This is the smallest admissible identity function over current observables because the spec treats file structure and path topology as semantically meaningful.
-- Preserve the corpus-relative note path and path-topology components needed to reconstruct parent directory lineage later.
-- Extract note frontmatter once per note and preserve it as note-level provenance available to each derived chunk.
-- Decompose note content by Markdown structure in document order.
-- Emit one monotonic `section_ordinal` per chunk, using 1-based ordering within a note.
-- Treat a headingless preamble as its own chunk when present so the first heading section does not erase leading note content.
-- Preserve the chunk's local heading label and heading ancestry when those observables exist.
-- Materialize chunk text exactly as derived for that section, plus a separate `content_hash` field over normalized chunk text.
-- Generate `chunk_id` from `source_note_id` plus `section_ordinal` only. In this bundle, content sensitivity belongs in `content_hash`, not in `chunk_id`, so unchanged sections keep stable identifiers across reingest.
-
-Minimum required per-chunk semantics for seam 1:
-
-- `chunk_id`
-- `source_note_id`
-- corpus-relative source path
-- path-topology reference
-- note frontmatter reference or embedded note-level frontmatter payload
-- `section_ordinal`
-- section heading or heading-path metadata when present
-- `content_hash`
-- chunk text
-
-Exact file names, module names, and serialization format remain an implementer choice, but the observable contract above is fixed for this bundle.
-
-### Seam 2: Core `corpus_nodes` materialization and ingest record
-
-Using the seam 1 contract, materialize deterministic `corpus_nodes` artifacts under the supplied `artifact_root`.
-
-Minimum artifact roles required for this seam:
-
-- one durable corpus-node materialization surface containing all chunks in deterministic order
-- one ingest or update record that captures:
-  - source corpus root provenance
-  - note count
-  - chunk count
-  - note-to-chunk coverage summary
-  - enough run metadata to tell whether a later reingest overwrote or duplicated prior results
-
-The initial ingestion posture for this bundle should be a deterministic rebuild or replace flow, not a background watcher, partial sync daemon, or append-only chunk accumulator. Reingesting the same corpus must not append duplicate chunk records.
-
-### Seam 3: Reingest determinism and localized change behavior
-
-After seam 2 exists, prove deterministic behavior over repeated runs:
-
-- Reingesting an unchanged corpus through the same caller must preserve chunk ordering, `chunk_id`, `section_ordinal`, note provenance, and `content_hash`.
-- Editing only the body text inside one existing Markdown section should affect only the corresponding derived chunk content for that section and any run-level summary hashes.
-- Structural edits that add, remove, or reorder headings are allowed to renumber later sections within the same note; that broader renumbering is not the acceptance case for this seam.
-
-The acceptance probe for localized change must therefore use a same-heading body-text edit, not a heading-topology edit, so the result is falsifiable and appropriately narrow.
-
-### Seam 4: Optional lexical materialization after core seam pass
-
-This seam is conditional and may begin only after seams 1 through 3 pass.
-
-If the user wants it in `implementation-02`, the lexical follow-on may:
-
-- index chunk text plus selected non-sensitive note metadata
-- retain linkage back to `chunk_id` and `source_note_id`
-- stay storage-local to the supplied `artifact_root` unless a later decision authorizes another location
-
-Do not widen this seam into embeddings, hybrid ranking, activation, or retrieval packet assembly.
-
-### Seam 5: Optional initial graph projection after explicit frontmatter decision
-
-This seam is conditional and may begin only after seams 1 through 3 pass and the user answers the frontmatter allowlist question.
-
-If attempted, graph extraction must stay limited to:
-
-- note nodes
-- chunk containment edges
-- wiki-link note-to-note edges
-- path-topology references
-- only the explicitly allowlisted frontmatter fields
-
-Do not infer a richer ontology, synthetic-node provenance, traversal ranking, or graph runtime in this bundle.
+1. Seam 1: corpus authority and tmp artifact posture
+   - Treat repo-root `corpus/` as the primary corpus authority and `tests/fixtures/` snippet notes as the deterministic fixture corpus for focused verification.
+   - Keep ingestion markdown-note-first for this bundle. Non-markdown attachments inside `corpus/` are not part of the current ingestion contract.
+   - Keep artifact posture aligned with `implementation-01`: tmp-root output only for this bundle.
+   - Every ingest record must preserve which root a note came from, the note path, and path-topology context needed for later retrieval preparation.
+2. Seam 2: paragraph-first chunk contract inside resolved section context
+   - Resolve section identity deterministically before assigning one ordinal chunk per paragraph.
+   - For journal-shaped notes, treat the note date title as note-level context, not as the resolved section identity, whenever a more specific observed heading or inline label is present.
+   - If a markdown heading resolves to journal section content, normalize the heading by removing markdown heading markers plus one trailing colon and use the resulting heading text as the section identity.
+   - If a paragraph begins with an inline `Label:` prefix, use that observed label text as the section identity after removing the trailing colon, and treat the remainder of that paragraph plus following paragraphs up to the next resolved section boundary as that section body.
+   - Preserve the observed heading or label text itself as the section identity; do not collapse it back to the enclosing date heading and do not invent synonym remaps that are not directly observable in the note.
+   - Once the section identity is resolved from the heading or inline label, each paragraph under that section becomes its own ordinal chunk.
+   - Replace whole-section payloads with paragraph-level payloads.
+   - Preserve note identity, note path topology, resolved section identity, and local paragraph ordinals inside that section.
+   - Chunk payload text must contain only the local paragraph, not the full section body.
+   - The contract must support inline-label journal examples in the fixture corpus and heading-style journal examples in the repo corpus, but those examples are validation inputs, not a hardcoded label list.
+   - The serialized `chunk_id` must be explicit and stable: note identity plus deterministic section identity plus paragraph ordinal within that section.
+   - Content hash must be stored as a separate field over the local paragraph payload and used for drift detection or update decisions only; it must not be part of `chunk_id`.
+   - A paragraph text edit that leaves note identity, section identity, and paragraph ordinal unchanged must update content-derived fields in place for the same `chunk_id`, not mint a replacement identity.
+3. Seam 3: SQLite materialization plus JSON manifests
+   - Materialize note and chunk outputs into SQLite by default where possible.
+   - Emit JSON manifests where possible so operators and downstream code can inspect source roots, ingest runs, note identities, chunk identities, and storage locations without scraping SQLite directly.
+   - Keep the SQLite-plus-manifest surface inside tmp-root artifacts for this bundle.
+4. Seam 4: deterministic reingest verification
+   - Prove unchanged whole-vault reingest preserves the same `chunk_id` and content hash for unchanged paragraph chunks.
+   - Prove a localized paragraph text edit preserves the edited paragraph's `chunk_id` and only updates its content hash and payload, while unaffected paragraph records in the same note and section remain unchanged.
+   - Reingest verification must use at least one journal-shaped fixture note and one repo-root longform markdown note so the plan stays honest about both corpus roots.
+5. Seam 5: local swappable embedding preparation
+   - After SQLite materialization and deterministic reingest probes pass, add a local sentence-transformers-style embedding seam for the materialized chunks.
+   - The embedding boundary must stay easily swappable so a different local model or API-backed model can be substituted later without rewriting the upstream note-discovery, chunking, or storage seams.
+   - Retrieval and traversal remain out of scope even after this seam lands.
 
 ## Non-Goals
 
-- latent-space activation, semantic traversal, retrieval packet assembly, or coverage evaluation
-- vector embeddings, provider selection, model selection, or spend-bearing API work
-- synthetic-node promotion or write-back into `primary_corpus`
-- broader graph ontology, tag modeling, or graph runtime beyond the optional Obsidian-native extraction gate
-- background watch mode, automatic sync loops, or incremental scheduler work
-- choosing a default live corpus source or default artifact location without explicit user authority
-- reworking the current first-build-target thread runtime under `semantic_traversal/runtime.py`, `semantic_traversal/storage.py`, `semantic_traversal/cli.py`, or `semantic_traversal/probes.py`
+- retrieval packet assembly, traversal, ranking, or coverage evaluation
+- graph extraction or graph projection inside `implementation-02`
+- frontmatter-as-node behavior
+- synthetic-node write-back or promotion
+- non-markdown attachment ingestion
+- durable storage migration outside tmp-root SQLite plus JSON manifests
 
 ## Delivery Posture And Acceptance Criteria
 
-Named user-facing acceptance probes for the future implementation:
+Named user-facing acceptance probes for the future implementation under this bundle:
 
-1. `probe_ingest_markdown_note_to_corpus_nodes`
-   - Run the intended ingestion caller against a supplied Markdown corpus root containing at least one note with frontmatter, a headingless preamble, nested headings, and a nested relative path.
-   - Expected observable result: deterministic `corpus_nodes` materialization exists under the supplied artifact root and each chunk preserves source-note identity, path topology, note frontmatter provenance, ordered `section_ordinal`, stable `chunk_id`, `content_hash`, and chunk text.
-2. `probe_reingest_unchanged_corpus_preserves_chunk_ids`
-   - Re-run the same caller against the same unchanged corpus and artifact roots.
-   - Expected observable result: chunk counts, ordering, `chunk_id`, `section_ordinal`, provenance fields, and `content_hash` remain unchanged, and the materialization does not duplicate nodes.
-3. `probe_changed_section_only_changes_affected_chunks`
-   - Modify only the body text inside one existing Markdown section while leaving heading topology unchanged, then re-run ingestion.
-   - Expected observable result: the edited section's chunk text and `content_hash` change, unaffected chunks preserve `chunk_id` and `content_hash`, and notes outside the edited note remain unchanged.
-4. Optional lexical probe
-   - If lexical indexing is implemented in this bundle, run a keyword or exact-phrase query over the same caller-managed artifact root.
-   - Expected observable result: the expected chunk is returned with the correct `chunk_id` and `source_note_id`.
-5. Optional initial graph probe
-   - If graph projection is implemented in this bundle after allowlist approval, ingest a sample note set with a wiki link and allowlisted frontmatter.
-   - Expected observable result: the graph output includes the expected note node, chunk containment edge, wiki-link edge, path-topology linkage, and only the approved frontmatter projections.
+1. `probe_fixture_journal_section_paragraph_chunking`
+   - Ingest a journal fixture note such as `tests/fixtures/JOURNAL/2025-09/01_Monday.md`.
+   - Expected observable result: the ingest output resolves the note's actual inline section labels rather than only `September 01, 2025`, then emits one ordinal chunk per paragraph inside those resolved sections, derives each `chunk_id` from note identity plus resolved section identity plus paragraph ordinal, stores content hash separately, and keeps each chunk payload to only the local paragraph text.
+2. `probe_repo_corpus_journal_heading_section_resolution`
+   - Ingest a heading-style corpus journal note such as `corpus/LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md`.
+   - Expected observable result: the ingest output resolves the note's actual heading labels as section identities in their own right instead of collapsing them under the enclosing note title, then emits one ordinal chunk per paragraph under each resolved section with stable paragraph-addressable `chunk_id` values and separate content hashes.
+3. `probe_repo_corpus_longform_paragraph_chunking`
+   - Ingest one repo-root longform markdown note from `corpus/`.
+   - Expected observable result: the ingest output preserves corpus-root provenance, note identity, section identity, and paragraph boundaries without collapsing the note into whole-section payloads, with one ordinal chunk per paragraph inside each resolved section and stable paragraph-addressable `chunk_id` values that do not depend on paragraph text.
+4. `probe_reingest_unchanged_preserves_chunk_ids`
+   - Reingest the whole authorized vault without changing any note content.
+   - Expected observable result: note identities, paragraph `chunk_id` values, and content hashes for unchanged paragraphs remain stable across reingest.
+5. `probe_localized_paragraph_edit_changes_only_affected_paragraphs`
+   - Modify one paragraph inside a stable section in a journal-shaped note and reingest.
+   - Expected observable result: the edited paragraph record is updated in place at the same `chunk_id`, with changed payload and content hash only for that paragraph, while unaffected paragraphs in the same section and note keep both their prior `chunk_id` values and prior content hashes.
+6. `probe_sqlite_manifest_materialization`
+   - Run the ingest path through SQLite plus JSON manifest output.
+   - Expected observable result: operators can see the materialized note and chunk records in SQLite and can inspect the corresponding ingest manifest in JSON without ambiguity about source roots, stable chunk identity, or separate content-hash state.
 
 Failure conditions that block completion:
 
-- any core probe runs only against fixture serializers or internal helpers rather than the intended ingestion caller
-- unchanged reingest duplicates chunk records or renumbers unchanged sections without a structural source-note change
-- the implementation silently chooses a default live corpus source or default artifact location
-- optional lexical or graph work begins before the core chunking probes pass
-- any live embedding work begins without explicit user authorization
+- chunk payloads still contain whole sections instead of local paragraph text
+- chunk identity does not distinguish multiple chunks inside one section
+- chunk identity is derived from paragraph content or embeds content hash
+- a localized paragraph text edit mints a new `chunk_id` for the same paragraph address
+- SQLite or manifest outputs are missing from the core ingestion path
+- graph work is reported as active behavior despite the unresolved spec conflict
 
 ## Current Repo Runtime State
 
-- The repo currently contains a complete first-build-target turn runtime only.
-- Current product/runtime code is limited to thread storage, CLI turn execution, and first-target probes under `semantic_traversal/`.
-- No ingestion caller, corpus-node materializer, lexical indexer, graph extractor, or vector embedding surface exists yet.
-- `implementation-01` lives only in archive, so `implementation-02` is the next active execution bundle.
-- `harness/open-decisions.md` is empty, so defaults, embedding choices, and graph-frontmatter choices remain bundle-local unknowns or optional-seam gates rather than live pending decisions.
+- `implementation-01` is archived complete.
+- The active workspace held only `implementation-02-tracker.md`; the active plan file was missing and had to be restored as part of this planner refresh.
+- `harness/open-decisions.md` now carries the current task authority for corpus roots, artifact posture, embeddings, graph intent, and storage preference.
+- `corpus/` is present at repo root and `tests/fixtures/` contains deterministic journal snippets, including inline-label journal sections that must not collapse into the enclosing date title.
 
 ## Assumptions And Unknowns
 
 Assumptions:
 
-- The narrowest admissible seam is a caller that requires explicit corpus and artifact roots instead of choosing defaults.
-- A normalized corpus-relative Markdown path is the smallest truthful first-pass `source_note_id`.
-- `implementation-02` should use a deterministic rebuild or replace ingestion posture before any incremental sync logic.
-- Stable `chunk_id` should remain content-insensitive in this bundle, with `content_hash` carrying content drift.
+- Markdown-note ingestion is the intended first slice for both authorized corpus roots.
+- SQLite and JSON manifests can coexist in tmp-root artifacts without creating a broader storage commitment.
 
 Unknowns:
 
-- Which corpus root should become the authorized operator default, if any.
-- Where latent-space artifacts should live by default outside temporary or explicitly supplied probe paths.
-- Whether the user wants optional lexical indexing in this bundle after the core seam passes.
-- Whether the user wants optional graph projection in this bundle and, if so, which frontmatter fields are allowlisted.
-- Whether a later bundle should derive note identity from an explicit note-level identifier instead of the normalized relative path.
+- The exact SQLite schema and manifest filenames the implementer will choose.
+- The exact normalization rule the implementer will use before computing the separate paragraph content hash field.
+- Which repo-root longform note will serve as the best standing acceptance sample for chapter-like identity during implementation.
+- Whether the implementer will need a small, explicit allowlist for journal-only section-label normalization beyond stripping markdown markers and one trailing colon.
+- The spec amendment path needed before graph work can become active again.
 
 ## Affected And Non-Affected Surfaces
 
@@ -231,43 +168,43 @@ Planning surfaces changed in this bundle:
 - `harness/implementation-projects/active/implementation-02-plan.md`
 - `harness/implementation-projects/active/implementation-02-tracker.md`
 
-Runtime surfaces that must eventually move together for the core seam to be truthful:
+Implementation surfaces that must eventually move together for this bundle to be truthful:
 
-- one bounded ingestion caller or entrypoint
-- Markdown note discovery and parsing
-- frontmatter extraction and note-level provenance preservation
-- path-topology preservation
-- deterministic chunk decomposition and `chunk_id` plus `content_hash` generation
-- corpus-node materialization writer
-- ingest or update record writer
-- acceptance-probe surface for the three named core probes
+- note discovery across `corpus/` and `tests/fixtures/`
+- tmp-root artifact routing
+- resolved journal section identity detection across inline-label and heading-style notes
+- paragraph-first chunking logic with resolved section identity preservation
+- SQLite materialization for notes and chunks
+- JSON ingest-manifest emission
+- deterministic reingest verification surfaces
+- later local embedding seam with a swappable backend boundary
 
-Runtime surfaces that may move only if the conditional gates open:
+Surfaces that must not move under this bundle:
 
-- lexical materialization over corpus nodes
-- initial graph projection limited to Obsidian-native structure and allowlisted frontmatter
-
-Runtime surfaces that must not move in this bundle:
-
-- existing thread-turn runtime surfaces from `implementation-01`
-- latent-space activation, traversal, retrieval, coverage, and synthesis packet expansion
-- vector embedding, hybrid retrieval, or provider spend surfaces
-- synthetic-node promotion or any write-back path
+- retrieval and traversal runtime paths
+- graph extraction or graph storage
+- synthetic-node promotion
+- spec and open-decision authority files
 
 ## Verification Contract Summary
 
 - Structural verification:
-  - confirm every materialized chunk preserves note identity, path topology, frontmatter provenance, ordered `section_ordinal`, stable `chunk_id`, and `content_hash`
-  - confirm reingest replaces or deterministically refreshes prior materialization rather than appending duplicates
+  - confirm both authorized corpus roots are represented in the ingestion contract
+  - confirm journal section resolution prefers stable inline or heading labels over the enclosing date title when both are present
+  - confirm chunk identity is paragraph-addressable within resolved section context, with `chunk_id = note identity + section identity + paragraph ordinal`
+  - confirm paragraph content hash is stored separately from `chunk_id`
+  - confirm SQLite plus JSON manifests are part of the core seams
 - Behavior verification:
-  - run `probe_ingest_markdown_note_to_corpus_nodes`
-  - run `probe_reingest_unchanged_corpus_preserves_chunk_ids`
-  - run `probe_changed_section_only_changes_affected_chunks`
-  - run optional lexical or graph probes only if those conditional seams were actually implemented
-- Review obligation:
-  - reviewer must reject any claim based only on schemas, JSON examples, fixtures, unit tests, or helper-level chunk outputs without a passing named caller-level probe
+  - run `probe_fixture_journal_section_paragraph_chunking`
+  - run `probe_repo_corpus_journal_heading_section_resolution`
+  - run `probe_repo_corpus_longform_paragraph_chunking`
+  - run `probe_reingest_unchanged_preserves_chunk_ids`
+  - run `probe_localized_paragraph_edit_changes_only_affected_paragraphs`
+  - run `probe_sqlite_manifest_materialization`
 - Downgrade rule:
-  - if the implementation stops at serializers, helper functions, or fixture-only checks without the intended caller-level probes, report `scaffold-only` rather than complete behavior
+  - if implementation stops at fixture-only shape proof, missing SQLite materialization, or an unverified embedding path, report `scaffold-only`
+- Review obligation:
+  - reviewer must reject any claim that paragraph-level chunking, SQLite materialization, or swappable embeddings are implemented if the evidence proves only file presence, tests, or schema shape
 
 ## Completion Rule
 
@@ -278,7 +215,7 @@ Runtime surfaces that must not move in this bundle:
 - [ ] Schema
 - [ ] API
 - [ ] Auth
-- [ ] Storage
+- [x] Storage
 - [ ] Deployment
 - [ ] Destructive operation
 - [ ] Broad architecture
@@ -286,21 +223,9 @@ Runtime surfaces that must not move in this bundle:
 
 Gate notes:
 
-- Storage becomes an approval gate if the implementer proposes a default artifact location rather than requiring a caller-supplied path.
-- Project-intent authority remains open for any live embedding, vector backend, or spend-bearing work; that work is blocked in this bundle unless explicitly approved first.
-- Initial graph projection remains gated on a frontmatter allowlist decision.
-- Broad architecture becomes a gate if the implementer widens the seam into background sync, services, watchers, databases, or a richer graph runtime.
-
-## Targeted Bundle-Local Unknowns And Optional-Seam Gates
-
-1. Future authorized corpus source
-   - Seam 1 remains admissible without this answer because it requires an explicit `corpus_root`; choose a live default only if a later operator-facing seam needs one.
-2. Future latent-space artifact location
-   - Seam 1 remains admissible without this answer because it requires an explicit `artifact_root`; choose a durable default only if a later workflow needs one.
-3. Any later live vector embedding seam
-   - Embeddings are out of scope for `implementation-02`; if a later bundle reopens them, backend, model, storage posture, and spend boundary will need fresh authority then.
-4. Frontmatter allowlist for optional initial graph projection
-   - Optional graph work must not project arbitrary frontmatter keys into nodes or edges before this gate is answered, but the core ingestion seams do not depend on it.
+- Storage is covered for this bundle because current decision authority already approves tmp-root SQLite plus JSON manifests where possible.
+- Broad architecture remains blocked for graph work until the spec and current decision authority are aligned.
+- Raise a new gate if implementation tries to widen `implementation-02` into retrieval, traversal, graph activation, or a durable non-tmp storage posture.
 
 ## Handoff Packet For Next Agent
 
@@ -308,89 +233,109 @@ Gate notes:
 
 - From: planner
 - To: implementer
-- Requested action: implement seam 1 first, using explicit `corpus_root` and `artifact_root` inputs to materialize deterministic `corpus_nodes` with the chunking contract defined here, then validate the first core probe before widening to reingest behavior
+- Requested action: implement seams 1 through 4 against the explicit stable paragraph chunk identity contract, then start seam 5 only after the named ingestion and reingest probes pass
 
 ## Project And Task
 
-`implementation-01` is archived complete and the current runtime only supports the first-build-target turn path. This bundle is the next admissible transition: deterministic ingestion from `primary_corpus` into `corpus_nodes`. The implementer must keep the work centered on Markdown chunking, provenance preservation, and deterministic materialization. Optional lexical or graph work is conditional and must not begin until the core chunking probes pass.
+`implementation-02` is now the active journal-first ingestion bundle for latent-space preparation only. The plan authorizes corpus discovery from repo-root `corpus/` plus `tests/fixtures/`, tmp-root artifact routing, deterministic journal section resolution from observable heading or inline label text, paragraph-first chunking inside resolved section context, stable `chunk_id = note identity + section identity + paragraph ordinal`, separate paragraph content hashes for drift detection, SQLite plus JSON manifest materialization, deterministic reingest probes, and a later local swappable embedding seam. Retrieval and traversal remain out of scope. Graph work is intentionally deferred because current decision authority conflicts with the spec.
 
 ## Admissibility Report
 
 - Invariant constraints:
-  - deterministic `primary_corpus` to `corpus_nodes` materialization only
-  - Markdown-structure chunking with preserved ordinals, frontmatter provenance, path topology, and source-note identity
-  - no activation, traversal, retrieval, synthetic-node, or embedding work
+  - latent-space ingestion plus embedding preparation only
+  - no retrieval, traversal, or synthetic-node work
+  - no silent graph normalization around the spec conflict
 - Task constraints:
-  - start with seam 1 and caller-supplied corpus and artifact roots
-  - follow the fixed chunking contract from this plan
-  - keep optional lexical or graph work behind successful core probes
+  - current bundle must reflect dual corpus roots, tmp artifacts, deterministic journal section resolution, SQLite-plus-JSON materialization, paragraph-first chunking, explicit stable paragraph chunk IDs, separate content hashes, and later local embeddings
 - Constraint conflicts:
-  - none for seams 1 through 3 while explicit `corpus_root` and `artifact_root` inputs remain required
-  - live embeddings stay out of scope unless a later task explicitly authorizes them
-  - frontmatter allowlist remains a gate for optional graph projection only
+  - graph posture conflict between current decision authority and the spec
+  - section-only `chunk_id` example in the spec is too coarse for the current chunk unit and too permissive about content-derived identity
 - Allowed transformation types:
-  - implement the bounded ingestion caller and core chunking/materialization behavior needed for the named core probes
+  - implement seams 1 through 5 within the active bundle
 - Affected surfaces:
-  - ingestion caller surface
-  - Markdown parsing and provenance preservation surfaces
-  - chunk materialization and ingest-record surfaces
-  - core probe surfaces for deterministic ingestion behavior
+  - note discovery across `corpus/` and `tests/fixtures/`
+  - tmp-root artifact routing
+  - resolved journal section identity detection across inline-label and heading-style notes
+  - paragraph-first chunking logic with stable paragraph-addressable `chunk_id` values and separate content hashes
+  - SQLite materialization for notes and chunks
+  - JSON ingest-manifest emission
+  - deterministic reingest verification surfaces
+  - later local embedding seam with a swappable backend boundary
+  - active tracker updates needed to record implementation progress truthfully
 - Non-affected surfaces:
-  - current thread runtime
-  - activation, traversal, retrieval, synthetic-node, and vector surfaces
+  - spec and open decisions
+  - retrieval, traversal, graph activation, and synthetic-node runtime paths
+  - archive files
 - Admissibility checks:
-  - caller requires explicit roots
-  - `chunk_id` is stable by note identity plus section ordinal
-  - `content_hash` carries content drift
-  - caller-level probes prove behavior
+  - whole-section chunks removed from the core contract
+  - journal section resolution prefers the note's observed heading or inline label text over the enclosing date title
+  - `chunk_id` is stable note identity plus section identity plus paragraph ordinal
+  - content hash is stored separately from `chunk_id` and drives change detection
+  - SQLite plus JSON manifests in core seams
+  - embeddings no longer out of scope
+  - graph work deferred on spec alignment
 - Stop conditions:
-  - stop if implementation requires a default corpus source or default artifact location
-  - stop if implementation widens into vector, retrieval, activation, or richer graph runtime work
+  - report a blocker if the bundle still implies retrieval, traversal, or active graph work
 
 ## Authorized Boundaries
 
 - Affected surfaces:
-  - new ingestion caller and its directly supporting chunking and materialization surfaces
-  - probe surfaces needed to verify ingestion determinism
+  - note discovery across `corpus/` and `tests/fixtures/`
+  - tmp-root artifact routing
+  - resolved journal section identity detection across inline-label and heading-style notes
+  - paragraph-first chunking logic with stable paragraph-addressable `chunk_id` values and separate content hashes
+  - SQLite materialization for notes and chunks
+  - JSON ingest-manifest emission
+  - deterministic reingest verification surfaces
+  - later local embedding seam with a swappable backend boundary
+  - active tracker updates needed to record implementation progress truthfully
 - Non-affected surfaces:
-  - existing first-build-target runtime surfaces unless a narrow shared helper is truly necessary
-  - any optional lexical or graph surface before the core probes pass
+  - spec and open decisions
+  - retrieval, traversal, graph activation, and synthetic-node runtime paths
+  - archive files
 - Boundaries not authorized:
-  - `harness/open-decisions.md`
-  - activation, traversal, retrieval, coverage, synthetic-node, and embedding implementation
-  - any default operator corpus source or default artifact placement chosen without approval
+  - spec edits
+  - open-decision edits
+  - retrieval, traversal, graph activation, or synthetic-node implementation
+  - durable non-tmp storage expansion
+  - compatibility or fallback shims that create a longer-lived support path
 
 ## Evidence And Assumptions
 
 - Observed evidence:
-  - active bundle slot is empty
-  - current runtime supports first-build-target only
-  - spec defines `corpus_nodes` and `chunk_embed_store` semantics directly
-  - no live decisions authorize defaults or embeddings
+  - `harness/open-decisions.md` records the current bundle decisions
+  - `tests/fixtures/` includes inline-label journal-shaped notes with stable section labels
+  - `corpus/` includes heading-style journal notes whose section labels are carried by markdown headings
+  - repo-root `corpus/` contains broader longform markdown material
+  - `harness/donor_code/embed_sentence_transformers.py` keys embedding output by `chunk_id` while accepting content separately as `text`
+  - `harness/donor_code/bumblebee-source-pipeline/src/lib.rs` carries `chunk_id` and `chunk_hash` separately and compares same-ID entries by hash across reingest
 - Inferences:
-  - caller-supplied paths are the narrowest truthful way to start implementation without silently resolving open decisions
-  - the core probes can run against a small supplied Markdown corpus without requiring user production data
+  - the active bundle needed restoration plus seam-order revision, not just wording cleanup
+  - stable paragraph identity and content drift need to be modeled as separate fields
+  - graph work cannot truthfully remain an optional near-term seam under current authority
 - Unknowns:
-  - exact filenames and modules
-  - optional lexical and graph inclusion in this bundle
-  - future operator defaults for corpus and artifact roots
+  - exact longform acceptance sample to use during implementation
+  - exact SQLite schema and manifest filenames
+  - exact normalization rule for the separate paragraph content hash
 
 ## Expected Change
 
-Implementer should add only the ingestion surfaces needed to turn a supplied Markdown corpus into deterministic `corpus_nodes` materialization and prove the first core probe. The implementation must preserve note provenance and keep `chunk_id` stable across unchanged reingest. If the work cannot stay inside caller-supplied roots or would require vector, retrieval, or graph-runtime expansion, report a blocker instead of improvising.
+The next agent should implement the authorized ingestion seams so stable paragraph-addressable `chunk_id` values and separate content hashes survive whole-vault reprocessing, while preserving the graph-deferral boundary and the resolved journal-section contract for both inline-label and heading-style notes.
 
 ## Acceptance Criteria
 
-The implementer completes the first handoff only if:
-
-- the ingestion caller accepts explicit `corpus_root` and `artifact_root`
-- one supplied Markdown corpus can be materialized into deterministic `corpus_nodes`
-- the materialized output preserves the planned chunking contract
-- `probe_ingest_markdown_note_to_corpus_nodes` passes through the intended caller path
+- the runtime resolves heading-style and inline-label journal sections as their own section identities rather than collapsing them to the enclosing date title
+- paragraph-first chunking is implemented with stable `chunk_id = note identity + section identity + paragraph ordinal`
+- paragraph content hash is stored separately from `chunk_id` and used for change detection only
+- `probe_reingest_unchanged_preserves_chunk_ids` proves unchanged whole-vault reprocessing preserves both paragraph `chunk_id` values and content hashes
+- `probe_localized_paragraph_edit_changes_only_affected_paragraphs` proves the edited paragraph record updates in place at the same `chunk_id` while unaffected paragraph records remain unchanged
+- SQLite plus JSON manifests are part of the real ingest path, not just helper output
+- any started embedding seam consumes stable upstream `chunk_id` values without redefining chunk identity
+- graph work remains deferred because of the spec conflict
 
 ## Stop Conditions
 
-Acceptance criteria achieved, or a blocker is reported without widening scope.
+Acceptance criteria achieved, or the implementer reports a blocker that would require spec edits, open-decision edits, or widening into retrieval, traversal, graph activation, or durable non-tmp storage.
 
 ## Closeout Note
 

@@ -6,7 +6,7 @@ Do not use this file as a roadmap. Record only decisions already made, decisions
 
 ## Current Decisions
 
-No current decisions.
+If there are no current decisions, replace the table below with `No current decisions.`.
 
 When a current decision exists, use:
 
@@ -20,7 +20,7 @@ When a current decision exists, use:
 
 ## Pending Decisions
 
-No pending decisions.
+If there are no pending decisions, replace the empty table below with `No pending decisions.`.
 
 When a pending decision exists, use:
 

@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .ingest import build_default_source_roots, default_data_root, run_ingest
 from .llm import StubLLMBackend, resolve_llm_backend
 from .runtime import run_thread_turn
 from .storage import load_json, read_ledger
@@ -13,6 +14,12 @@ from .storage import load_json, read_ledger
 
 def _default_probe_root() -> Path:
     return Path(tempfile.gettempdir()) / "semantic-traversal-probes"
+
+
+def _load_manifest(path: Path) -> dict[str, Any]:
+    payload = load_json(path)
+    assert isinstance(payload, dict), f"expected JSON object manifest at {path}"
+    return payload
 
 
 def probe_new_thread_minimal_turn(data_root: Path, llm_backend: Any | None = None) -> dict[str, Any]:
@@ -78,24 +85,116 @@ def probe_same_thread_continuation_turn(data_root: Path, llm_backend: Any | None
     }
 
 
+def probe_fixture_journal_section_paragraph_chunking(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    result = run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    manifest = _load_manifest(result.manifest_path)
+    chunks = [
+        chunk
+        for chunk in manifest["chunks"]
+        if chunk["source_root_label"] == "tests-fixtures" and chunk["relative_path"] == "JOURNAL/2025-09/01_Monday.md"
+    ]
+    assert chunks, "expected fixture journal chunks"
+    labels = {chunk["section_label"] for chunk in chunks}
+    assert "Dream Recall" in labels
+    assert "Y-Day Review" in labels
+    assert "Daily Intent" in labels
+    assert "September 01, 2025" not in labels
+    return {
+        "probe": "probe_fixture_journal_section_paragraph_chunking",
+        "status": "pass",
+        "chunk_count": len(chunks),
+        "labels": sorted(labels),
+        "manifest_path": str(result.manifest_path),
+    }
+
+
+def probe_repo_corpus_journal_heading_section_resolution(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    result = run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    manifest = _load_manifest(result.manifest_path)
+    chunks = [
+        chunk
+        for chunk in manifest["chunks"]
+        if chunk["source_root_label"] == "corpus"
+        and chunk["relative_path"] == "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md"
+    ]
+    assert chunks, "expected corpus journal chunks"
+    labels = {chunk["section_label"] for chunk in chunks}
+    assert "Dream Motif" in labels
+    assert "Y-Day Review" in labels
+    assert "Dream recall" in labels
+    assert "Yesterday" in labels
+    return {
+        "probe": "probe_repo_corpus_journal_heading_section_resolution",
+        "status": "pass",
+        "chunk_count": len(chunks),
+        "labels": sorted(labels),
+        "manifest_path": str(result.manifest_path),
+    }
+
+
+def probe_sqlite_manifest_materialization(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    result = run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    manifest = _load_manifest(result.manifest_path)
+    assert result.database_path.exists(), "expected SQLite database to exist"
+    assert manifest["database_path"] == str(result.database_path)
+    return {
+        "probe": "probe_sqlite_manifest_materialization",
+        "status": "pass",
+        "database_path": str(result.database_path),
+        "manifest_path": str(result.manifest_path),
+        "chunk_count": result.chunk_count,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the named semantic-traversal first-target probes.")
-    parser.add_argument("probe", choices=("probe_new_thread_minimal_turn", "probe_same_thread_continuation_turn"))
+    parser.add_argument(
+        "probe",
+        choices=(
+            "probe_new_thread_minimal_turn",
+            "probe_same_thread_continuation_turn",
+            "probe_fixture_journal_section_paragraph_chunking",
+            "probe_repo_corpus_journal_heading_section_resolution",
+            "probe_sqlite_manifest_materialization",
+        ),
+    )
     parser.add_argument("--data-root", default=str(_default_probe_root()))
     parser.add_argument("--llm-mode", choices=("auto", "live", "stub"), default="stub")
     parser.add_argument("--model")
+    parser.add_argument("--repo-root", default=".")
     args = parser.parse_args()
 
     data_root = Path(args.data_root).resolve()
-    if args.llm_mode == "stub":
-        backend = StubLLMBackend(prefix="Probe stub response")
-    else:
-        backend = resolve_llm_backend(repo_root=Path(".").resolve(), llm_mode=args.llm_mode, model_override=args.model)
-
     if args.probe == "probe_new_thread_minimal_turn":
+        if args.llm_mode == "stub":
+            backend = StubLLMBackend(prefix="Probe stub response")
+        else:
+            backend = resolve_llm_backend(repo_root=Path(".").resolve(), llm_mode=args.llm_mode, model_override=args.model)
         payload = probe_new_thread_minimal_turn(data_root=data_root, llm_backend=backend)
-    else:
+    elif args.probe == "probe_same_thread_continuation_turn":
+        if args.llm_mode == "stub":
+            backend = StubLLMBackend(prefix="Probe stub response")
+        else:
+            backend = resolve_llm_backend(repo_root=Path(".").resolve(), llm_mode=args.llm_mode, model_override=args.model)
         payload = probe_same_thread_continuation_turn(data_root=data_root, llm_backend=backend)
+    elif args.probe == "probe_fixture_journal_section_paragraph_chunking":
+        payload = probe_fixture_journal_section_paragraph_chunking(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_repo_corpus_journal_heading_section_resolution":
+        payload = probe_repo_corpus_journal_heading_section_resolution(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    else:
+        payload = probe_sqlite_manifest_materialization(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
     print(json.dumps(payload, indent=2, ensure_ascii=True))
     return 0
 
