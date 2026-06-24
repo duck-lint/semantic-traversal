@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from semantic_traversal.hashing import sha256_json
 from semantic_traversal.llm import StubLLMBackend
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
 from semantic_traversal.runtime import run_thread_turn
@@ -285,6 +286,8 @@ class IngestRuntimeTests(unittest.TestCase):
             retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
             coverage_report = _load_turn_artifact(result.coverage_report_path)
             synthesis_context_packet = _load_turn_artifact(result.synthesis_context_packet_path)
+            state_delta = _load_turn_artifact(result.state_delta_path)
+            thread_state = _load_turn_artifact(result.thread_state_path)
             ledger = read_ledger(result.thread_ledger_path)
 
             self.assertEqual(coverage_report["status"], "minimal_pass")
@@ -296,10 +299,15 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_context_packet["extracted_lexical_query_terms"],
             )
             self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
-            self.assertIsNotNone(ledger[-1]["semantic_context_packet_hash"])
-            self.assertIsNotNone(ledger[-1]["semantic_traversal_manifest_hash"])
-            self.assertIsNotNone(ledger[-1]["retrieval_packet_hash"])
-            self.assertIsNotNone(ledger[-1]["coverage_report_hash"])
+            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
+            self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
+            self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
+            self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
+            self.assertEqual(ledger[-1]["synthesis_context_packet_hash"], sha256_json(synthesis_context_packet))
+            self.assertEqual(ledger[-1]["state_delta_hash"], sha256_json(state_delta))
+            thread_state_without_hash = dict(thread_state)
+            thread_state_without_hash.pop("latest_thread_state_hash", None)
+            self.assertEqual(ledger[-1]["next_thread_state_hash"], sha256_json(thread_state_without_hash))
             self.assertEqual(result.coverage_report["status"], "minimal_pass")
 
     def test_lexical_retrieval_no_index_is_explicit_and_non_crashing(self) -> None:
@@ -321,10 +329,11 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(coverage_report["status"], "no_index")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
-            self.assertIsNotNone(ledger[-1]["semantic_context_packet_hash"])
-            self.assertIsNotNone(ledger[-1]["semantic_traversal_manifest_hash"])
-            self.assertIsNotNone(ledger[-1]["retrieval_packet_hash"])
-            self.assertIsNotNone(ledger[-1]["coverage_report_hash"])
+            self.assertEqual(result.semantic_traversal_manifest["selection_reasons"], ["ingestion SQLite database not found"])
+            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
+            self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
+            self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
+            self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
 
     def test_lexical_retrieval_no_match_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -346,10 +355,42 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(coverage_report["status"], "no_matches")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
-            self.assertIsNotNone(ledger[-1]["semantic_context_packet_hash"])
-            self.assertIsNotNone(ledger[-1]["semantic_traversal_manifest_hash"])
-            self.assertIsNotNone(ledger[-1]["retrieval_packet_hash"])
-            self.assertIsNotNone(ledger[-1]["coverage_report_hash"])
+            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
+            self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
+            self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
+            self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
+
+    def test_lexical_retrieval_no_query_terms_is_explicit_and_non_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="   and the or   ",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+
+            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            semantic_traversal_manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
+            retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+            ledger = read_ledger(result.thread_ledger_path)
+
+            self.assertEqual(result.semantic_context_packet["extracted_lexical_query_terms"], [])
+            self.assertEqual(semantic_context_packet["extracted_lexical_query_terms"], [])
+            self.assertFalse(semantic_traversal_manifest["query_terms_available"])
+            self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no lexical query terms after deterministic filtering"])
+            self.assertEqual(retrieval_packet["retrieval_status"], "no_query_terms")
+            self.assertEqual(retrieval_packet["selected_chunks"], [])
+            self.assertEqual(coverage_report["status"], "no_query_terms")
+            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
+            self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
+            self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
+            self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
 
     def test_same_thread_continuation_preserves_parent_hash_with_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -382,6 +423,47 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(len(after_records), len(before_records) + 1)
             self.assertEqual(after_records[-1]["parent_perturbation_hash"], before_records[-1]["state_perturbation_hash"])
             self.assertEqual(second_turn.coverage_report["status"], "minimal_pass")
+
+    def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "semantic_traversal",
+                    "--message",
+                    "Please retrieve the candy snack food before bed note.",
+                    "--llm-mode",
+                    "stub",
+                    "--repo-root",
+                    str(repo_root),
+                    "--data-root",
+                    data_dir,
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(process.stdout)
+            for key in (
+                "turn_root",
+                "semantic_context_packet_path",
+                "semantic_traversal_manifest_path",
+                "retrieval_packet_path",
+                "coverage_report_path",
+                "synthesis_context_packet_path",
+                "state_delta_path",
+            ):
+                self.assertTrue(Path(payload[key]).exists())
+            self.assertIn(payload["coverage_status"], {"minimal_pass", "no_index", "no_query_terms", "no_matches"})
+            self.assertTrue(payload["latest_perturbation_hash"])
+            self.assertTrue(payload["latest_thread_state_hash"])
 
 
 if __name__ == "__main__":

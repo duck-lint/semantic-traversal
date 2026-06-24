@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from typing import Any
 
 from .ingest import build_default_source_roots, default_data_root, run_ingest
+from .hashing import sha256_json
 from .llm import StubLLMBackend, resolve_llm_backend
 from .runtime import run_thread_turn
 from .storage import load_json, read_ledger
@@ -160,6 +163,7 @@ def probe_lexical_retrieval_fixture_hit(data_root: Path, repo_root: Path | None 
     )
     assert result.coverage_report["status"] == "minimal_pass", "expected retrieval to succeed"
     assert result.retrieval_packet["selected_chunks"], "expected at least one retrieval hit"
+    assert any(chunk["source_root_label"] == "tests-fixtures" for chunk in result.retrieval_packet["selected_chunks"])
     assert result.synthesis_context_packet["approved_retrieval_packet"] is not None
     return {
         "probe": "probe_lexical_retrieval_fixture_hit",
@@ -207,6 +211,118 @@ def probe_lexical_retrieval_no_match(data_root: Path, repo_root: Path | None = N
     }
 
 
+def probe_lexical_retrieval_no_query_terms(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    result = run_thread_turn(
+        repo_root=resolved_repo_root,
+        data_root=data_root,
+        user_input="   and the or   ",
+        llm_backend=StubLLMBackend(prefix="Probe stub response"),
+    )
+    assert result.coverage_report["status"] == "no_query_terms", "expected no_query_terms coverage status"
+    assert result.retrieval_packet["retrieval_status"] == "no_query_terms"
+    assert result.retrieval_packet["selected_chunks"] == [], "expected an empty retrieval packet"
+    return {
+        "probe": "probe_lexical_retrieval_no_query_terms",
+        "status": "pass",
+        "turn_id": result.turn_id,
+        "coverage_status": result.coverage_report["status"],
+        "query_terms": result.semantic_context_packet["extracted_lexical_query_terms"],
+    }
+
+
+def probe_ledger_hash_artifact_integrity(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    result = run_thread_turn(
+        repo_root=resolved_repo_root,
+        data_root=data_root,
+        user_input="Please retrieve the candy snack food before bed note.",
+        llm_backend=StubLLMBackend(prefix="Probe stub response"),
+    )
+    semantic_context_packet = _load_manifest(result.semantic_context_packet_path)
+    semantic_traversal_manifest = _load_manifest(result.semantic_traversal_manifest_path)
+    retrieval_packet = _load_manifest(result.retrieval_packet_path)
+    coverage_report = _load_manifest(result.coverage_report_path)
+    synthesis_context_packet = _load_manifest(result.synthesis_context_packet_path)
+    state_delta = _load_manifest(result.state_delta_path)
+    thread_state = _load_manifest(result.thread_state_path)
+    ledger_records = read_ledger(result.thread_ledger_path)
+    ledger_record = ledger_records[-1]
+    assert ledger_record["semantic_context_packet_hash"] == sha256_json(semantic_context_packet)
+    assert ledger_record["semantic_traversal_manifest_hash"] == sha256_json(semantic_traversal_manifest)
+    assert ledger_record["retrieval_packet_hash"] == sha256_json(retrieval_packet)
+    assert ledger_record["coverage_report_hash"] == sha256_json(coverage_report)
+    assert ledger_record["synthesis_context_packet_hash"] == sha256_json(synthesis_context_packet)
+    thread_state_without_hash = dict(thread_state)
+    thread_state_without_hash.pop("latest_thread_state_hash", None)
+    assert ledger_record["next_thread_state_hash"] == sha256_json(thread_state_without_hash)
+    assert ledger_record["state_delta_hash"] == sha256_json(state_delta)
+    return {
+        "probe": "probe_ledger_hash_artifact_integrity",
+        "status": "pass",
+        "turn_id": result.turn_id,
+        "coverage_status": result.coverage_report["status"],
+        "ledger_hashes": {
+            "semantic_context_packet_hash": ledger_record["semantic_context_packet_hash"],
+            "semantic_traversal_manifest_hash": ledger_record["semantic_traversal_manifest_hash"],
+            "retrieval_packet_hash": ledger_record["retrieval_packet_hash"],
+            "coverage_report_hash": ledger_record["coverage_report_hash"],
+            "synthesis_context_packet_hash": ledger_record["synthesis_context_packet_hash"],
+            "state_delta_hash": ledger_record["state_delta_hash"],
+            "next_thread_state_hash": ledger_record["next_thread_state_hash"],
+        },
+    }
+
+
+def probe_turn_cli_artifact_paths(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    workspace_root = Path(__file__).resolve().parent.parent
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "semantic_traversal",
+            "--message",
+            "Please retrieve the candy snack food before bed note.",
+            "--llm-mode",
+            "stub",
+            "--repo-root",
+            str(resolved_repo_root),
+            "--data-root",
+            str(data_root),
+        ],
+        cwd=workspace_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    artifact_paths = {
+        key: Path(payload[key])
+        for key in (
+            "turn_root",
+            "semantic_context_packet_path",
+            "semantic_traversal_manifest_path",
+            "retrieval_packet_path",
+            "coverage_report_path",
+            "synthesis_context_packet_path",
+            "state_delta_path",
+        )
+    }
+    for path in artifact_paths.values():
+        assert path.exists(), f"expected CLI artifact path to exist: {path}"
+    return {
+        "probe": "probe_turn_cli_artifact_paths",
+        "status": "pass",
+        "coverage_status": payload["coverage_status"],
+        "artifact_paths": {key: str(path) for key, path in artifact_paths.items()},
+        "latest_perturbation_hash": payload["latest_perturbation_hash"],
+        "latest_thread_state_hash": payload["latest_thread_state_hash"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the named semantic-traversal first-target probes.")
     parser.add_argument(
@@ -220,6 +336,9 @@ def main() -> int:
             "probe_lexical_retrieval_fixture_hit",
             "probe_lexical_retrieval_no_index",
             "probe_lexical_retrieval_no_match",
+            "probe_lexical_retrieval_no_query_terms",
+            "probe_ledger_hash_artifact_integrity",
+            "probe_turn_cli_artifact_paths",
         ),
     )
     parser.add_argument("--data-root", default=str(_default_probe_root()))
@@ -258,6 +377,21 @@ def main() -> int:
         )
     elif args.probe == "probe_lexical_retrieval_no_index":
         payload = probe_lexical_retrieval_no_index(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_lexical_retrieval_no_query_terms":
+        payload = probe_lexical_retrieval_no_query_terms(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_ledger_hash_artifact_integrity":
+        payload = probe_ledger_hash_artifact_integrity(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_turn_cli_artifact_paths":
+        payload = probe_turn_cli_artifact_paths(
             data_root=data_root,
             repo_root=Path(args.repo_root).resolve(),
         )

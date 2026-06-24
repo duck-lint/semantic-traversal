@@ -27,6 +27,7 @@ class TurnExecutionResult:
     retrieval_packet_path: Path
     coverage_report_path: Path
     synthesis_context_packet_path: Path
+    state_delta_path: Path
     assistant_response: str
     llm_metadata: dict[str, Any]
     prior_thread_state: dict[str, Any]
@@ -174,6 +175,7 @@ def _build_lexical_retrieval_artifacts(
         "thread_id": semantic_context_packet["thread_id"],
         "turn_id": semantic_context_packet["turn_id"],
         "query_terms": query_terms,
+        "query_terms_available": bool(query_terms),
         "retrieval_mode": "lexical_sqlite",
         "selected_chunk_ids": [],
         "candidate_count": 0,
@@ -191,6 +193,7 @@ def _build_lexical_retrieval_artifacts(
         "thread_id": semantic_context_packet["thread_id"],
         "turn_id": semantic_context_packet["turn_id"],
         "query_terms": query_terms,
+        "query_terms_available": bool(query_terms),
         "retrieval_mode": "lexical_sqlite",
         "selection_limit": RETRIEVAL_LIMIT,
         "candidate_count": 0,
@@ -221,6 +224,10 @@ def _build_lexical_retrieval_artifacts(
 
     if not query_terms:
         traversal_manifest["selection_reasons"].append("no lexical query terms after deterministic filtering")
+        coverage_report["status"] = "no_query_terms"
+        retrieval_packet["retrieval_status"] = "no_query_terms"
+        coverage_report["retrieval_approved_for_synthesis"] = False
+        retrieval_packet["approved_for_synthesis"] = False
         return traversal_manifest, retrieval_packet, coverage_report, _chunkless_retrieval_hashes(
             traversal_manifest, retrieval_packet, coverage_report
         )
@@ -346,6 +353,7 @@ def _persist_turn_artifacts(
     retrieval_packet: dict[str, Any],
     coverage_report: dict[str, Any],
     synthesis_context_packet: dict[str, Any],
+    state_delta: dict[str, Any],
 ) -> dict[str, Path]:
     turn_root.mkdir(parents=True, exist_ok=True)
     semantic_context_packet_path = turn_root / "semantic_context_packet.json"
@@ -353,17 +361,20 @@ def _persist_turn_artifacts(
     retrieval_packet_path = turn_root / "retrieval_packet.json"
     coverage_report_path = turn_root / "coverage_report.json"
     synthesis_context_packet_path = turn_root / "synthesis_context_packet.json"
+    state_delta_path = turn_root / "state_delta.json"
     write_json(semantic_context_packet_path, semantic_context_packet)
     write_json(semantic_traversal_manifest_path, semantic_traversal_manifest)
     write_json(retrieval_packet_path, retrieval_packet)
     write_json(coverage_report_path, coverage_report)
     write_json(synthesis_context_packet_path, synthesis_context_packet)
+    write_json(state_delta_path, state_delta)
     return {
         "semantic_context_packet_path": semantic_context_packet_path,
         "semantic_traversal_manifest_path": semantic_traversal_manifest_path,
         "retrieval_packet_path": retrieval_packet_path,
         "coverage_report_path": coverage_report_path,
         "synthesis_context_packet_path": synthesis_context_packet_path,
+        "state_delta_path": state_delta_path,
     }
 
 
@@ -449,14 +460,6 @@ def run_thread_turn(
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
     )
-    artifact_paths = _persist_turn_artifacts(
-        turn_root=turn_root,
-        semantic_context_packet=semantic_context_packet,
-        semantic_traversal_manifest=semantic_traversal_manifest,
-        retrieval_packet=retrieval_packet,
-        coverage_report=coverage_report,
-        synthesis_context_packet=synthesis_context_packet,
-    )
     semantic_context_packet_hash = sha256_json(semantic_context_packet)
     semantic_traversal_manifest_hash = retrieval_hashes["semantic_traversal_manifest_hash"]
     retrieval_packet_hash = retrieval_hashes["retrieval_packet_hash"]
@@ -471,6 +474,16 @@ def run_thread_turn(
         assistant_response=llm_response.assistant_response,
         turn_id=turn_id,
         timestamp=timestamp,
+    )
+
+    artifact_paths = _persist_turn_artifacts(
+        turn_root=turn_root,
+        semantic_context_packet=semantic_context_packet,
+        semantic_traversal_manifest=semantic_traversal_manifest,
+        retrieval_packet=retrieval_packet,
+        coverage_report=coverage_report,
+        synthesis_context_packet=synthesis_context_packet,
+        state_delta=state_delta,
     )
 
     user_message = {"role": "user", "content": user_input, "turn_id": turn_id, "timestamp": timestamp}
@@ -527,6 +540,7 @@ def run_thread_turn(
         retrieval_packet_path=artifact_paths["retrieval_packet_path"],
         coverage_report_path=artifact_paths["coverage_report_path"],
         synthesis_context_packet_path=artifact_paths["synthesis_context_packet_path"],
+        state_delta_path=artifact_paths["state_delta_path"],
         assistant_response=llm_response.assistant_response,
         llm_metadata=llm_response.metadata,
         prior_thread_state=prior_thread_state,

@@ -79,6 +79,7 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         "retrieval_packet_path": str(result.retrieval_packet_path),
         "coverage_report_path": str(result.coverage_report_path),
         "synthesis_context_packet_path": str(result.synthesis_context_packet_path),
+        "state_delta_path": str(result.state_delta_path),
         "coverage_status": result.coverage_report.get("status"),
         "latest_thread_state_hash": result.next_thread_state["latest_thread_state_hash"],
         "latest_perturbation_hash": result.ledger_record["state_perturbation_hash"],
