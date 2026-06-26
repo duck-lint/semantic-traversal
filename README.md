@@ -23,6 +23,15 @@ For each user message, the runtime:
 
 The retrieval path is intentionally boring and deterministic. It does not use embeddings, vector search, graph traversal, or synthetic node promotion.
 
+The current lexical layer also classifies query terms by role before ranking:
+
+- `anchor_terms`: content-bearing terms that should usually drive retrieval
+- `support_terms`: relation or context terms that help, but do not dominate
+- `weak_question_terms`: question or wrapper terms that should not overpower the anchor
+- `ignored_instruction_terms`: request/control words that are usually downweighted or excluded
+
+That role breakdown is persisted inside `semantic_context_packet.json` so a human can inspect what the runtime thought the query meant.
+
 ## Artifact Layout
 
 Default runtime artifacts live under the local temp directory:
@@ -47,6 +56,7 @@ Per thread, the runtime writes:
 The coverage report uses a few clear statuses:
 
 - `minimal_pass`: the SQLite index exists, query terms exist, and matching chunks were found
+- `weak_lexical_match`: chunks were found, but the evidence was weak and no anchor-bearing match cleared the approval bar
 - `no_index`: the ingestion database is not present
 - `no_query_terms`: the user message produced no usable lexical terms after filtering
 - `no_matches`: the database exists, query terms exist, but nothing matched
@@ -71,6 +81,17 @@ Run a stub turn with retrieval enabled against the local ingestion database:
 ```powershell
 python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub
 ```
+
+The CLI payload now also reports:
+
+- `coverage_status`
+- `query_intent`
+- `anchor_terms`
+- `support_terms`
+- `weak_question_terms`
+- `ignored_instruction_terms`
+
+Those fields are meant to make UAT easier without reading the Python first.
 
 Run the named probes:
 
@@ -116,6 +137,7 @@ After a turn, inspect the saved files from the JSON payload printed by the CLI.
 Typical useful files are:
 
 - `semantic_context_packet.json` for the extracted query terms and prior thread context
+- `semantic_context_packet.json` for the extracted query terms, query roles, and prior thread context
 - `semantic_traversal_manifest.json` for the retrieval mode and chosen chunk IDs
 - `retrieval_packet.json` for the concrete chunk content returned to the turn
 - `coverage_report.json` for the retrieval status
@@ -152,4 +174,3 @@ Good break attempts:
 - Live mode still works only when `OPENAI_API_KEY` is available.
 - Stub mode is enough for the retrieval hardening and UAT prep flows.
 - The active implementation bundles live in `agent_harness/implementation-projects/archive/` once complete.
-

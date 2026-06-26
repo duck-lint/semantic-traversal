@@ -81,6 +81,11 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         "synthesis_context_packet_path": str(result.synthesis_context_packet_path),
         "state_delta_path": str(result.state_delta_path),
         "coverage_status": result.coverage_report.get("status"),
+        "query_intent": result.semantic_context_packet.get("query_analysis", {}).get("query_intent"),
+        "anchor_terms": result.semantic_context_packet.get("query_analysis", {}).get("anchor_terms", []),
+        "support_terms": result.semantic_context_packet.get("query_analysis", {}).get("support_terms", []),
+        "weak_question_terms": result.semantic_context_packet.get("query_analysis", {}).get("weak_question_terms", []),
+        "ignored_instruction_terms": result.semantic_context_packet.get("query_analysis", {}).get("ignored_instruction_terms", []),
         "latest_thread_state_hash": result.next_thread_state["latest_thread_state_hash"],
         "latest_perturbation_hash": result.ledger_record["state_perturbation_hash"],
     }

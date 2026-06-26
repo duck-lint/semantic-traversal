@@ -170,7 +170,12 @@ def probe_lexical_retrieval_fixture_hit(data_root: Path, repo_root: Path | None 
         "status": "pass",
         "turn_id": result.turn_id,
         "coverage_status": result.coverage_report["status"],
+        "query_intent": result.semantic_context_packet["query_analysis"]["query_intent"],
+        "anchor_terms": result.semantic_context_packet["query_analysis"]["anchor_terms"],
+        "support_terms": result.semantic_context_packet["query_analysis"]["support_terms"],
+        "weak_question_terms": result.semantic_context_packet["query_analysis"]["weak_question_terms"],
         "selected_chunk_ids": [chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]],
+        "score_breakdowns": [chunk["score_breakdown"] for chunk in result.retrieval_packet["selected_chunks"]],
     }
 
 
@@ -229,6 +234,91 @@ def probe_lexical_retrieval_no_query_terms(data_root: Path, repo_root: Path | No
         "turn_id": result.turn_id,
         "coverage_status": result.coverage_report["status"],
         "query_terms": result.semantic_context_packet["extracted_lexical_query_terms"],
+    }
+
+
+def probe_lexical_query_analysis_roles(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as repo_dir:
+        probe_repo_root = Path(repo_dir)
+        (probe_repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+        (probe_repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09").mkdir(parents=True, exist_ok=True)
+        (probe_repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md").write_text(
+            "# Weak Query Note\n"
+            "What day usually day time.\n",
+            encoding="utf-8",
+        )
+        (probe_repo_root / "corpus" / "Role Discipline.md").write_text(
+            "# Anchor Query Note\n"
+            "The orchard visit happens before bed. Orchard orchard orchard.\n",
+            encoding="utf-8",
+        )
+        run_ingest(repo_root=probe_repo_root, data_root=data_root, source_roots=build_default_source_roots(probe_repo_root))
+        result = run_thread_turn(
+            repo_root=probe_repo_root,
+            data_root=data_root,
+            user_input='What day do I usually visit "orchard"?',
+            llm_backend=StubLLMBackend(prefix="Probe stub response"),
+        )
+    analysis = result.semantic_context_packet["query_analysis"]
+    assert "orchard" in analysis["anchor_terms"], "expected quoted anchor term to be classified as anchor"
+    assert analysis["weak_question_terms"], "expected weak question terms to be classified"
+    assert analysis["query_terms_for_retrieval"], "expected usable query terms"
+    return {
+        "probe": "probe_lexical_query_analysis_roles",
+        "status": "pass",
+        "coverage_status": result.coverage_report["status"],
+        "query_intent": analysis["query_intent"],
+        "anchor_terms": analysis["anchor_terms"],
+        "support_terms": analysis["support_terms"],
+        "weak_question_terms": analysis["weak_question_terms"],
+        "ignored_instruction_terms": analysis["ignored_instruction_terms"],
+        "selected_chunk_ids": [chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]],
+        "score_breakdowns": [chunk["score_breakdown"] for chunk in result.retrieval_packet["selected_chunks"]],
+    }
+
+
+def probe_anchor_term_retrieval_precedence(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as repo_dir:
+        probe_repo_root = Path(repo_dir)
+        (probe_repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+        (probe_repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09").mkdir(parents=True, exist_ok=True)
+        (probe_repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md").write_text(
+            "# Weak Terms Only\n"
+            "What day usually what day usually.\n",
+            encoding="utf-8",
+        )
+        (probe_repo_root / "corpus" / "Anchor Precedence.md").write_text(
+            "# Anchor Terms\n"
+            "The orchard visit is the target content.\n",
+            encoding="utf-8",
+        )
+        run_ingest(repo_root=probe_repo_root, data_root=data_root, source_roots=build_default_source_roots(probe_repo_root))
+        result = run_thread_turn(
+            repo_root=probe_repo_root,
+            data_root=data_root,
+            user_input="What day do I usually visit orchard?",
+            llm_backend=StubLLMBackend(prefix="Probe stub response"),
+        )
+    analysis = result.semantic_context_packet["query_analysis"]
+    selected_chunks = result.retrieval_packet["selected_chunks"]
+    assert selected_chunks, "expected retrieval hits"
+    assert selected_chunks[0]["matched_anchor_terms"], "expected the top chunk to match the anchor term"
+    assert any(
+        "Anchor" in (chunk["note_title"] or "") or "Anchor" in (chunk["section_label"] or "")
+        for chunk in selected_chunks
+    ), "expected the anchor-bearing note to be selected"
+    weak_only_chunks = [chunk for chunk in selected_chunks if not chunk["matched_anchor_terms"]]
+    return {
+        "probe": "probe_anchor_term_retrieval_precedence",
+        "status": "pass",
+        "coverage_status": result.coverage_report["status"],
+        "query_intent": analysis["query_intent"],
+        "anchor_terms": analysis["anchor_terms"],
+        "support_terms": analysis["support_terms"],
+        "weak_question_terms": analysis["weak_question_terms"],
+        "selected_chunk_ids": [chunk["chunk_id"] for chunk in selected_chunks],
+        "top_score_breakdown": selected_chunks[0]["score_breakdown"],
+        "weak_only_selected_chunk_ids": [chunk["chunk_id"] for chunk in weak_only_chunks],
     }
 
 
@@ -337,6 +427,8 @@ def main() -> int:
             "probe_lexical_retrieval_no_index",
             "probe_lexical_retrieval_no_match",
             "probe_lexical_retrieval_no_query_terms",
+            "probe_lexical_query_analysis_roles",
+            "probe_anchor_term_retrieval_precedence",
             "probe_ledger_hash_artifact_integrity",
             "probe_turn_cli_artifact_paths",
         ),
@@ -382,6 +474,16 @@ def main() -> int:
         )
     elif args.probe == "probe_lexical_retrieval_no_query_terms":
         payload = probe_lexical_retrieval_no_query_terms(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_lexical_query_analysis_roles":
+        payload = probe_lexical_query_analysis_roles(
+            data_root=data_root,
+            repo_root=Path(args.repo_root).resolve(),
+        )
+    elif args.probe == "probe_anchor_term_retrieval_precedence":
+        payload = probe_anchor_term_retrieval_precedence(
             data_root=data_root,
             repo_root=Path(args.repo_root).resolve(),
         )

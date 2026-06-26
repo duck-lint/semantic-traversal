@@ -294,6 +294,8 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertGreater(len(retrieval_packet["selected_chunks"]), 0)
             self.assertTrue(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
+            self.assertIn("query_analysis", semantic_context_packet)
+            self.assertTrue(retrieval_packet["selected_chunks"][0]["score_breakdown"]["anchor_exact"] > 0)
             self.assertEqual(
                 synthesis_context_packet["semantic_context_packet"]["extracted_lexical_query_terms"],
                 semantic_context_packet["extracted_lexical_query_terms"],
@@ -309,6 +311,44 @@ class IngestRuntimeTests(unittest.TestCase):
             thread_state_without_hash.pop("latest_thread_state_hash", None)
             self.assertEqual(ledger[-1]["next_thread_state_hash"], sha256_json(thread_state_without_hash))
             self.assertEqual(result.coverage_report["status"], "minimal_pass")
+
+    def test_query_analysis_roles_and_anchor_precedence_are_topic_agnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            (repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09").mkdir(parents=True, exist_ok=True)
+            (repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md").write_text(
+                "# Weak Query Note\n"
+                "What day usually day time.\n",
+                encoding="utf-8",
+            )
+            (repo_root / "corpus" / "Anchor Discipline.md").write_text(
+                "# Anchor Query Note\n"
+                "The orchard visit happens before bed. Orchard orchard orchard.\n",
+                encoding="utf-8",
+            )
+
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What day do I usually visit orchard?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+
+            analysis = result.semantic_context_packet["query_analysis"]
+            self.assertIn("orchard", analysis["anchor_terms"])
+            self.assertIn("what", analysis["weak_question_terms"])
+            self.assertIn("day", analysis["weak_question_terms"])
+            self.assertIn("usually", analysis["weak_question_terms"])
+            self.assertIn("visit", analysis["support_terms"])
+            self.assertEqual(result.coverage_report["status"], "minimal_pass")
+            self.assertTrue(result.retrieval_packet["selected_chunks"])
+            self.assertTrue(result.retrieval_packet["selected_chunks"][0]["matched_anchor_terms"])
+            self.assertGreater(
+                result.retrieval_packet["selected_chunks"][0]["score_breakdown"]["anchor_exact"],
+                result.retrieval_packet["selected_chunks"][0]["score_breakdown"]["weak_exact"],
+            )
 
     def test_lexical_retrieval_no_index_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -360,6 +400,41 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
             self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
 
+    def test_weak_terms_do_not_outscore_anchor_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            (repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09").mkdir(parents=True, exist_ok=True)
+            (repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md").write_text(
+                "# Weak Term Note\n"
+                "What day usually what day usually.\n",
+                encoding="utf-8",
+            )
+            (repo_root / "corpus" / "Anchor Winner.md").write_text(
+                "# Anchor Winner Note\n"
+                "The orchard visit is the important content.\n",
+                encoding="utf-8",
+            )
+
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What day do I usually visit orchard?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+            )
+
+            selected_chunks = result.retrieval_packet["selected_chunks"]
+            self.assertGreater(len(selected_chunks), 0)
+            self.assertEqual(result.coverage_report["status"], "minimal_pass")
+            self.assertTrue(selected_chunks[0]["matched_anchor_terms"])
+            weak_only_chunks = [chunk for chunk in selected_chunks if not chunk["matched_anchor_terms"]]
+            if weak_only_chunks:
+                self.assertGreater(
+                    selected_chunks[0]["selection_score"],
+                    max(chunk["selection_score"] for chunk in weak_only_chunks),
+                )
+
     def test_lexical_retrieval_no_query_terms_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
@@ -383,7 +458,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(result.semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertEqual(semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertFalse(semantic_traversal_manifest["query_terms_available"])
-            self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no lexical query terms after deterministic filtering"])
+            self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no usable lexical query terms after query analysis"])
             self.assertEqual(retrieval_packet["retrieval_status"], "no_query_terms")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
             self.assertEqual(coverage_report["status"], "no_query_terms")
