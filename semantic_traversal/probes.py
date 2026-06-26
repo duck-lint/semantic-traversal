@@ -442,6 +442,42 @@ def probe_semantic_extraction_hash_integrity(data_root: Path, repo_root: Path | 
     }
 
 
+def probe_full_route_stub_turn(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    resolved_repo_root = (repo_root or Path(".")).resolve()
+    run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
+    result = run_thread_turn(
+        repo_root=resolved_repo_root,
+        data_root=data_root,
+        user_input="Please retrieve the candy snack food before bed note.",
+        llm_backend=StubLLMBackend(prefix="Probe stub response"),
+        semantic_extractor_backend=StubSemanticExtractorBackend(),
+    )
+    assert result.isolated_semantic_extraction_packet["status"] == "stub"
+    assert result.contextual_semantic_extraction_packet["status"] == "stub"
+    assert result.llm_metadata["mode"] == "stub"
+    for path in (
+        result.isolated_semantic_extraction_packet_path,
+        result.contextual_semantic_extraction_packet_path,
+        result.semantic_context_packet_path,
+        result.retrieval_packet_path,
+        result.synthesis_context_packet_path,
+        result.state_delta_path,
+    ):
+        assert path.exists(), f"expected full-route stub artifact to exist: {path}"
+    assert result.coverage_report["status"] == "minimal_pass"
+    assert result.ledger_record["isolated_semantic_extraction_packet_hash"]
+    assert result.ledger_record["contextual_semantic_extraction_packet_hash"]
+    return {
+        "probe": "probe_full_route_stub_turn",
+        "status": "pass",
+        "llm_mode": result.llm_metadata["mode"],
+        "isolated_status": result.isolated_semantic_extraction_packet["status"],
+        "contextual_status": result.contextual_semantic_extraction_packet["status"],
+        "coverage_status": result.coverage_report["status"],
+        "turn_root": str(result.turn_root),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the named semantic-traversal first-target probes.")
     parser.add_argument(
@@ -462,6 +498,7 @@ def main() -> int:
             "probe_semantic_extraction_disabled_fallback",
             "probe_semantic_extraction_contextual_thread_state",
             "probe_semantic_extraction_hash_integrity",
+            "probe_full_route_stub_turn",
         ),
     )
     parser.add_argument("--data-root", default=str(_default_probe_root()))
@@ -514,6 +551,8 @@ def main() -> int:
         payload = probe_semantic_extraction_disabled_fallback(data_root=data_root, repo_root=resolved_repo_root)
     elif args.probe == "probe_semantic_extraction_contextual_thread_state":
         payload = probe_semantic_extraction_contextual_thread_state(data_root=data_root, repo_root=resolved_repo_root)
+    elif args.probe == "probe_full_route_stub_turn":
+        payload = probe_full_route_stub_turn(data_root=data_root, repo_root=resolved_repo_root)
     else:
         payload = probe_semantic_extraction_hash_integrity(data_root=data_root, repo_root=resolved_repo_root)
     print(json.dumps(payload, indent=2, ensure_ascii=True))

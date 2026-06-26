@@ -257,6 +257,117 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(semantic_context_packet["raw_user_input"], user_input)
             self.assertEqual(synthesis_context_packet["raw_user_input"], user_input)
 
+    def test_extraction_raw_user_input_mismatch_is_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            stub_backend = StubSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "WRONG RAW INPUT",
+                    "probable_user_intent": "mismatch isolated pass",
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "question_shape": None,
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["candy"],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "raw_user_input": "ALSO WRONG",
+                    "contextual_user_intent": "mismatch contextual pass",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "coverage_target": {"must_preserve": [], "should_include": [], "avoid_satisfying_with": []},
+                    "activation_hints": {
+                        "lexical_terms": ["candy"],
+                        "phrases": [],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "delta_from_isolated_read": {"added_by_context": [], "removed_or_deemphasized_by_context": [], "unchanged": []},
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=stub_backend,
+            )
+
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+
+            self.assertEqual(isolated_packet["parsed_payload"]["raw_user_input"], "Please retrieve the candy snack food before bed note.")
+            self.assertTrue(isolated_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_present"])
+            self.assertFalse(isolated_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_matches"])
+            self.assertTrue(isolated_packet["diagnostics"]["raw_user_input_validation"]["raw_user_input_repaired"])
+            self.assertEqual(contextual_packet["parsed_payload"]["raw_user_input"], "Please retrieve the candy snack food before bed note.")
+            self.assertTrue(contextual_packet["diagnostics"]["raw_user_input_validation"]["raw_user_input_repaired"])
+
+    def test_extraction_missing_raw_user_input_is_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            stub_backend = StubSemanticExtractorBackend(
+                isolated_payload={
+                    "probable_user_intent": "missing raw input isolated pass",
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "question_shape": None,
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["candy"],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "contextual_user_intent": "missing raw input contextual pass",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "coverage_target": {"must_preserve": [], "should_include": [], "avoid_satisfying_with": []},
+                    "activation_hints": {
+                        "lexical_terms": ["candy"],
+                        "phrases": [],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "delta_from_isolated_read": {"added_by_context": [], "removed_or_deemphasized_by_context": [], "unchanged": []},
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=stub_backend,
+            )
+
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+
+            self.assertEqual(isolated_packet["parsed_payload"]["raw_user_input"], "Please retrieve the candy snack food before bed note.")
+            self.assertFalse(isolated_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_present"])
+            self.assertTrue(isolated_packet["diagnostics"]["raw_user_input_validation"]["raw_user_input_repaired"])
+            self.assertFalse(contextual_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_present"])
+            self.assertTrue(contextual_packet["diagnostics"]["raw_user_input_validation"]["raw_user_input_repaired"])
+
     def test_semantic_extraction_is_additive_not_destructive(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
@@ -320,6 +431,83 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertIn("snack", retrieval_preparation["combined_candidate_terms"])
             self.assertIn("food", retrieval_preparation["combined_candidate_terms"])
             self.assertEqual(retrieval_preparation["candidate_term_sources"]["snack"], ["raw_user_input"])
+
+    def test_extraction_hint_harvesting_is_pruned(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            stub_backend = StubSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "",
+                    "probable_user_intent": "pruned isolated pass",
+                    "candidate_targets": ["usefultarget"],
+                    "candidate_relations": ["usefulrelation"],
+                    "question_shape": None,
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["usefulkeep"],
+                    "ambiguities": ["junkambiguity"],
+                    "extraction_confidence": "low",
+                    "limitations": ["junklimitation"],
+                },
+                contextual_payload={
+                    "raw_user_input": "",
+                    "contextual_user_intent": "pruned contextual pass",
+                    "thread_relevant_context": ["junkcontext"],
+                    "semantic_pressure": None,
+                    "candidate_targets": ["ignoredcontexttarget"],
+                    "candidate_relations": [],
+                    "coverage_target": {
+                        "must_preserve": ["junkmustpreserve"],
+                        "should_include": ["junkshouldinclude"],
+                        "avoid_satisfying_with": ["junkavoid"],
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["helpfullexical"],
+                        "phrases": ["helpfulphrase"],
+                        "conceptual_neighbors": ["junkneighbor"],
+                        "relation_hints": ["helpfulrelationhint"],
+                        "temporal_hints": ["junktemporal"],
+                        "entity_hints": ["helpfulentity"],
+                    },
+                    "delta_from_isolated_read": {
+                        "added_by_context": ["junkdelta"],
+                        "removed_or_deemphasized_by_context": ["junkremoved"],
+                        "unchanged": ["junkunchanged"],
+                    },
+                    "ambiguities": ["junkambiguitycontext"],
+                    "extraction_confidence": "low",
+                    "limitations": ["junklimitationcontext"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve targetanchor note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=stub_backend,
+            )
+
+            retrieval_preparation = result.semantic_context_packet["retrieval_preparation"]
+            extraction_hint_terms = set(retrieval_preparation["extraction_hint_terms"])
+            self.assertIn("usefultarget", extraction_hint_terms)
+            self.assertIn("usefulrelation", extraction_hint_terms)
+            self.assertIn("usefulkeep", extraction_hint_terms)
+            self.assertIn("helpfullexical", extraction_hint_terms)
+            self.assertIn("helpfulphrase", extraction_hint_terms)
+            self.assertIn("helpfulrelationhint", extraction_hint_terms)
+            self.assertIn("helpfulentity", extraction_hint_terms)
+            self.assertNotIn("junklimitation", extraction_hint_terms)
+            self.assertNotIn("junkambiguity", extraction_hint_terms)
+            self.assertNotIn("junkdelta", extraction_hint_terms)
+            self.assertNotIn("junkavoid", extraction_hint_terms)
+            self.assertNotIn("junkmustpreserve", extraction_hint_terms)
+            self.assertNotIn("junkneighbor", extraction_hint_terms)
+            self.assertIn("targetanchor", retrieval_preparation["raw_lexical_terms"])
+            self.assertIn("targetanchor", retrieval_preparation["combined_candidate_terms"])
+            self.assertEqual(
+                retrieval_preparation["candidate_term_sources"]["helpfullexical"],
+                ["contextual.activation_hints.lexical_terms"],
+            )
 
     def test_stub_semantic_extractor_artifacts_are_persisted_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -396,6 +584,29 @@ class IngestRuntimeTests(unittest.TestCase):
             prior_thread_state = contextual_packet["request_packet"]["prior_thread_state"]
             self.assertEqual(prior_thread_state["latest_turn_id"], 1)
             self.assertEqual(prior_thread_state["latest_user_input"], "First turn to seed thread state.")
+
+    def test_full_route_stub_turn_uses_stub_extractor_and_stub_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+
+            self.assertEqual(result.isolated_semantic_extraction_packet["status"], "stub")
+            self.assertEqual(result.contextual_semantic_extraction_packet["status"], "stub")
+            self.assertEqual(result.llm_metadata["mode"], "stub")
+            self.assertTrue(result.isolated_semantic_extraction_packet_path.exists())
+            self.assertTrue(result.contextual_semantic_extraction_packet_path.exists())
+            self.assertTrue(result.synthesis_context_packet_path.exists())
+            self.assertEqual(result.coverage_report["status"], "minimal_pass")
 
     def test_lexical_retrieval_fixture_hit_persists_artifacts_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

@@ -101,6 +101,16 @@ Run a stub turn with lexical retrieval and additive extraction:
 python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --semantic-extractor-mode stub
 ```
 
+That command is the explicit full local route:
+
+- stub isolated semantic extraction
+- stub contextual semantic extraction
+- lexical retrieval when the SQLite index exists
+- stub final LLM synthesis
+- thread-state update, artifact persistence, and ledger hashing
+
+No OpenAI call and no Ollama call are required.
+
 Run a disabled-extraction turn that still uses lexical fallback:
 
 ```powershell
@@ -131,6 +141,7 @@ python -m semantic_traversal.probes probe_semantic_extraction_stub_packets --rep
 python -m semantic_traversal.probes probe_semantic_extraction_disabled_fallback --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled
 python -m semantic_traversal.probes probe_semantic_extraction_contextual_thread_state --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-context
 python -m semantic_traversal.probes probe_semantic_extraction_hash_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-integrity
+python -m semantic_traversal.probes probe_full_route_stub_turn --repo-root . --data-root $env:TEMP\semantic-traversal-probes-full-stub
 ```
 
 ## How To Inspect A Turn
@@ -155,6 +166,7 @@ Good break attempts:
 
 - confirm the raw user message is unchanged across extraction and synthesis artifacts
 - run with `--semantic-extractor-mode disabled` and confirm lexical retrieval still works
+- run `python -m semantic_traversal --message "..." --llm-mode stub --semantic-extractor-mode stub` and confirm the full local route completes without non-local calls
 - inspect `candidate_term_sources` and verify raw lexical terms are not dropped when extraction is sparse
 - run two turns on the same thread and confirm the contextual extraction request includes prior thread state
 - compare ledger hashes to the persisted artifact contents on disk

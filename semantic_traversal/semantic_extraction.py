@@ -51,6 +51,7 @@ class SemanticExtractionResponse:
     parsed_payload: dict[str, Any] | None
     raw_response: str | None
     metadata: dict[str, Any]
+    diagnostics: dict[str, Any]
     status: str
 
 
@@ -84,12 +85,27 @@ def _default_limitations() -> list[str]:
     ]
 
 
-def _ensure_raw_user_input(payload: dict[str, Any], raw_user_input: str) -> dict[str, Any]:
+def _normalize_raw_user_input(
+    payload: dict[str, Any],
+    raw_user_input: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    model_supplied_present = "raw_user_input" in payload
+    model_supplied_raw_user_input = payload.get("raw_user_input") if model_supplied_present else None
+    model_supplied_matches = model_supplied_raw_user_input == raw_user_input if model_supplied_present else False
+    raw_user_input_repaired = not model_supplied_present or not model_supplied_matches
     result = dict(payload)
     result["raw_user_input"] = raw_user_input
     if "limitations" not in result or not isinstance(result["limitations"], list):
         result["limitations"] = _default_limitations()
-    return result
+    return result, {
+        "raw_user_input_validation": {
+            "authoritative_raw_user_input": raw_user_input,
+            "model_supplied_raw_user_input": model_supplied_raw_user_input,
+            "model_supplied_raw_user_input_present": model_supplied_present,
+            "model_supplied_raw_user_input_matches": model_supplied_matches,
+            "raw_user_input_repaired": raw_user_input_repaired,
+        }
+    }
 
 
 class DisabledSemanticExtractorBackend:
@@ -103,6 +119,7 @@ class DisabledSemanticExtractorBackend:
                 "backend_mode": self.mode_name,
                 "reason": "semantic extraction disabled",
             },
+            diagnostics={},
             status="disabled",
         )
 
@@ -114,6 +131,7 @@ class DisabledSemanticExtractorBackend:
                 "backend_mode": self.mode_name,
                 "reason": "semantic extraction disabled",
             },
+            diagnostics={},
             status="disabled",
         )
 
@@ -133,13 +151,15 @@ class StubSemanticExtractorBackend:
     def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
         payload = self._isolated_payload or self._build_default_isolated_payload(raw_user_input)
+        normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
         return SemanticExtractionResponse(
-            parsed_payload=_ensure_raw_user_input(payload, raw_user_input),
+            parsed_payload=normalized_payload,
             raw_response=None,
             metadata={
                 "backend_mode": self.mode_name,
                 "stub_kind": "deterministic",
             },
+            diagnostics=diagnostics,
             status="stub",
         )
 
@@ -152,13 +172,15 @@ class StubSemanticExtractorBackend:
             prior_thread_state=prior_thread_state,
             isolated_payload=isolated_payload,
         )
+        normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
         return SemanticExtractionResponse(
-            parsed_payload=_ensure_raw_user_input(payload, raw_user_input),
+            parsed_payload=normalized_payload,
             raw_response=None,
             metadata={
                 "backend_mode": self.mode_name,
                 "stub_kind": "deterministic",
             },
+            diagnostics=diagnostics,
             status="stub",
         )
 
@@ -242,6 +264,7 @@ class OllamaSemanticExtractorBackend:
                     "base_url": self._base_url,
                     "reason": "SEMANTIC_EXTRACTOR_MODEL not configured",
                 },
+                diagnostics={},
                 status="unavailable",
             )
         prompt = (
@@ -279,6 +302,7 @@ class OllamaSemanticExtractorBackend:
                     "model": self._model,
                     "error": str(exc),
                 },
+                diagnostics={},
                 status="unavailable",
             )
 
@@ -293,17 +317,20 @@ class OllamaSemanticExtractorBackend:
                     "base_url": self._base_url,
                     "model": self._model,
                 },
+                diagnostics={},
                 status="invalid_json",
             )
 
+        normalized_payload, diagnostics = _normalize_raw_user_input(parsed_payload, str(packet.get("raw_user_input", "")))
         return SemanticExtractionResponse(
-            parsed_payload=_ensure_raw_user_input(parsed_payload, str(packet.get("raw_user_input", ""))),
+            parsed_payload=normalized_payload,
             raw_response=raw_response_text,
             metadata={
                 "backend_mode": self.mode_name,
                 "base_url": self._base_url,
                 "model": self._model,
             },
+            diagnostics=diagnostics,
             status="parsed",
         )
 

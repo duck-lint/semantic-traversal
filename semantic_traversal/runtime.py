@@ -214,17 +214,27 @@ def _build_retrieval_preparation(
     for term in raw_lexical_terms:
         candidate_term_sources.setdefault(term, []).append("raw_user_input")
 
-    isolated_hint_terms = _collect_extraction_hint_terms(isolated_packet.get("parsed_payload"))
-    contextual_hint_terms = _collect_extraction_hint_terms(contextual_packet.get("parsed_payload"))
+    isolated_hint_terms, isolated_sources = _collect_extraction_hint_terms(
+        isolated_packet.get("parsed_payload"),
+        extraction_mode="isolated",
+    )
+    contextual_hint_terms, contextual_sources = _collect_extraction_hint_terms(
+        contextual_packet.get("parsed_payload"),
+        extraction_mode="contextual",
+    )
     extraction_hint_terms: list[str] = []
     for term in isolated_hint_terms:
         if term not in extraction_hint_terms:
             extraction_hint_terms.append(term)
-            candidate_term_sources.setdefault(term, []).append("isolated_semantic_extraction")
+        for source_label in isolated_sources.get(term, []):
+            if source_label not in candidate_term_sources.setdefault(term, []):
+                candidate_term_sources[term].append(source_label)
     for term in contextual_hint_terms:
         if term not in extraction_hint_terms:
             extraction_hint_terms.append(term)
-        candidate_term_sources.setdefault(term, []).append("contextual_activation_hints")
+        for source_label in contextual_sources.get(term, []):
+            if source_label not in candidate_term_sources.setdefault(term, []):
+                candidate_term_sources[term].append(source_label)
 
     combined_candidate_terms: list[str] = []
     for term in raw_lexical_terms + extraction_hint_terms:
@@ -245,39 +255,46 @@ def _build_retrieval_preparation(
         "used_additively_for_retrieval": True,
     }
 
-
-def _collect_extraction_hint_terms(parsed_payload: dict[str, Any] | None) -> list[str]:
+def _collect_extraction_hint_terms(
+    parsed_payload: dict[str, Any] | None,
+    *,
+    extraction_mode: str,
+) -> tuple[list[str], dict[str, list[str]]]:
     if not parsed_payload:
-        return []
-    collected_values: list[str] = []
+        return [], {}
 
-    def extend_from(value: Any) -> None:
-        if isinstance(value, str):
-            collected_values.append(value)
-        elif isinstance(value, list):
-            for item in value:
-                extend_from(item)
-        elif isinstance(value, dict):
-            for item in value.values():
-                extend_from(item)
-
-    for key in ("candidate_targets", "candidate_relations", "terms_or_phrases_not_to_discard"):
-        extend_from(parsed_payload.get(key))
-    activation_hints = parsed_payload.get("activation_hints")
-    if isinstance(activation_hints, dict):
-        extend_from(activation_hints)
-    coverage_target = parsed_payload.get("coverage_target")
-    if isinstance(coverage_target, dict):
-        extend_from(coverage_target)
+    allowed_fields: list[tuple[str, Any]] = []
+    if extraction_mode == "isolated":
+        allowed_fields = [
+            ("isolated.candidate_targets", parsed_payload.get("candidate_targets")),
+            ("isolated.candidate_relations", parsed_payload.get("candidate_relations")),
+            ("isolated.terms_or_phrases_not_to_discard", parsed_payload.get("terms_or_phrases_not_to_discard")),
+        ]
+    elif extraction_mode == "contextual":
+        activation_hints = parsed_payload.get("activation_hints")
+        if isinstance(activation_hints, dict):
+            allowed_fields = [
+                ("contextual.activation_hints.lexical_terms", activation_hints.get("lexical_terms")),
+                ("contextual.activation_hints.phrases", activation_hints.get("phrases")),
+                ("contextual.activation_hints.entity_hints", activation_hints.get("entity_hints")),
+                ("contextual.activation_hints.relation_hints", activation_hints.get("relation_hints")),
+            ]
 
     terms: list[str] = []
     seen: set[str] = set()
-    for value in collected_values:
-        for term in extract_semantic_terms(value):
-            if term not in seen:
-                seen.add(term)
-                terms.append(term)
-    return terms
+    sources: dict[str, list[str]] = {}
+    for source_label, value in allowed_fields:
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            for term in extract_semantic_terms(item):
+                if term not in seen:
+                    seen.add(term)
+                    terms.append(term)
+                if source_label not in sources.setdefault(term, []):
+                    sources[term].append(source_label)
+    return terms, sources
 
 
 def _build_lexical_retrieval_artifacts(
@@ -538,6 +555,7 @@ def _build_extraction_packet(
         "request_packet": request_packet,
         "status": response.status,
         "parsed_payload": response.parsed_payload,
+        "diagnostics": response.diagnostics,
         "metadata": response.metadata,
         "limitations": limitations,
     }
