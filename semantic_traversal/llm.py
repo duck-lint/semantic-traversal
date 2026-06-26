@@ -73,7 +73,9 @@ class OpenAIResponsesBackend:
             instructions=(
                 "You are a helpful assistant inside the semantic-traversal first build target. "
                 "Respond directly to the user using the provided synthesis context packet only. "
-                "Do not invent retrieval results or graph operations."
+                "Treat semantic extraction as non-authoritative additive context only. "
+                "Do not invent retrieval results or graph operations. "
+                "Preserve the raw user intent when semantic extraction is uncertain."
             ),
             input=json.dumps(synthesis_context_packet, ensure_ascii=True, indent=2),
             max_output_tokens=400,

@@ -13,6 +13,7 @@ from .ingest import (
     run_ingest,
 )
 from .llm import resolve_llm_backend
+from .semantic_extraction import resolve_semantic_extractor_backend
 from .runtime import run_thread_turn
 
 
@@ -32,6 +33,14 @@ def build_turn_parser() -> argparse.ArgumentParser:
         help="Use OpenAI when available, require it, or force a local stub.",
     )
     parser.add_argument("--model", help="Override the OpenAI model for live mode.")
+    parser.add_argument(
+        "--semantic-extractor-mode",
+        choices=("auto", "disabled", "stub", "ollama"),
+        default="disabled",
+        help="Use a disabled, stub, or local Ollama semantic extractor before retrieval.",
+    )
+    parser.add_argument("--semantic-extractor-model", help="Override the semantic extractor model.")
+    parser.add_argument("--semantic-extractor-base-url", help="Override the semantic extractor base URL.")
     parser.add_argument("--repo-root", default=".", help="Repo root used to resolve .env.local.")
     return parser
 
@@ -58,22 +67,36 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     repo_root = Path(args.repo_root).resolve()
     data_root = Path(args.data_root).resolve()
     llm_backend = resolve_llm_backend(repo_root=repo_root, llm_mode=args.llm_mode, model_override=args.model)
+    semantic_extractor_backend = resolve_semantic_extractor_backend(
+        repo_root=repo_root,
+        extractor_mode=args.semantic_extractor_mode,
+        model_override=args.semantic_extractor_model,
+        base_url_override=args.semantic_extractor_base_url,
+    )
     result = run_thread_turn(
         repo_root=repo_root,
         data_root=data_root,
         user_input=args.message,
         llm_backend=llm_backend,
         thread_id=args.thread_id,
+        semantic_extractor_backend=semantic_extractor_backend,
     )
     payload = {
         "thread_id": result.thread_id,
         "turn_id": result.turn_id,
         "assistant_response": result.assistant_response,
         "llm_mode": result.llm_metadata.get("mode"),
+        "semantic_extractor_mode": result.semantic_context_packet["semantic_extraction"]["statuses"]["backend_mode"],
+        "isolated_extraction_status": result.isolated_semantic_extraction_packet["status"],
+        "contextual_extraction_status": result.contextual_semantic_extraction_packet["status"],
         "conversation_thread_path": str(result.conversation_thread_path),
         "thread_state_path": str(result.thread_state_path),
         "thread_ledger_path": str(result.thread_ledger_path),
         "turn_root": str(result.turn_root),
+        "isolated_semantic_extraction_packet_path": str(result.isolated_semantic_extraction_packet_path),
+        "isolated_semantic_extraction_raw_path": str(result.isolated_semantic_extraction_raw_path),
+        "contextual_semantic_extraction_packet_path": str(result.contextual_semantic_extraction_packet_path),
+        "contextual_semantic_extraction_raw_path": str(result.contextual_semantic_extraction_raw_path),
         "semantic_context_packet_path": str(result.semantic_context_packet_path),
         "semantic_traversal_manifest_path": str(result.semantic_traversal_manifest_path),
         "retrieval_packet_path": str(result.retrieval_packet_path),

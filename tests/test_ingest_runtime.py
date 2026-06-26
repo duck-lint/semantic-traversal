@@ -10,9 +10,10 @@ import unittest
 from pathlib import Path
 
 from semantic_traversal.hashing import sha256_json
-from semantic_traversal.llm import StubLLMBackend
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
+from semantic_traversal.llm import StubLLMBackend
 from semantic_traversal.runtime import run_thread_turn
+from semantic_traversal.semantic_extraction import DisabledSemanticExtractorBackend, StubSemanticExtractorBackend
 from semantic_traversal.storage import read_ledger
 
 
@@ -90,10 +91,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "pass")
             self.assertTrue(Path(payload["database_path"]).exists())
             self.assertTrue(Path(payload["manifest_path"]).exists())
-            self.assertEqual(
-                {entry["label"] for entry in payload["source_roots"]},
-                {"corpus", "tests-fixtures"},
-            )
+            self.assertEqual({entry["label"] for entry in payload["source_roots"]}, {"corpus", "tests-fixtures"})
             connection = sqlite3.connect(payload["database_path"])
             try:
                 rows = connection.execute("SELECT DISTINCT source_root_label FROM notes").fetchall()
@@ -117,14 +115,8 @@ class IngestRuntimeTests(unittest.TestCase):
             chunks = _chunks_for_note(manifest, "tests-fixtures", "JOURNAL/2025-09/01_Monday.md")
 
             self.assertEqual(len(chunks), 4)
-            self.assertEqual(
-                [chunk["section_label"] for chunk in chunks],
-                ["Dream Recall", "Y-Day Review", "Daily Intent", "Daily Intent"],
-            )
-            self.assertEqual(
-                [chunk["paragraph_ordinal"] for chunk in chunks],
-                [1, 1, 1, 2],
-            )
+            self.assertEqual([chunk["section_label"] for chunk in chunks], ["Dream Recall", "Y-Day Review", "Daily Intent", "Daily Intent"])
+            self.assertEqual([chunk["paragraph_ordinal"] for chunk in chunks], [1, 1, 1, 2])
             self.assertEqual(chunks[2]["section_id"], chunks[3]["section_id"])
             self.assertNotIn("September 01, 2025", {chunk["section_label"] for chunk in chunks})
             self.assertTrue(str(chunks[0]["chunk_id"]).startswith("tests-fixtures::JOURNAL/2025-09/01_Monday.md::"))
@@ -186,27 +178,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/Propositions & Models.md",
             )
 
-            first_result = run_ingest(
-                repo_root=repo_root,
-                data_root=Path(data_dir),
-                source_roots=build_default_source_roots(repo_root),
-            )
-            second_result = run_ingest(
-                repo_root=repo_root,
-                data_root=Path(data_dir),
-                source_roots=build_default_source_roots(repo_root),
-            )
+            first_result = run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            second_result = run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
 
             first_manifest = _load_manifest(first_result.manifest_path)
             second_manifest = _load_manifest(second_result.manifest_path)
-            first_chunks = {
-                chunk_id: chunk["chunk_hash"]
-                for chunk_id, chunk in _chunk_map(first_manifest).items()
-            }
-            second_chunks = {
-                chunk_id: chunk["chunk_hash"]
-                for chunk_id, chunk in _chunk_map(second_manifest).items()
-            }
+            first_chunks = {chunk_id: chunk["chunk_hash"] for chunk_id, chunk in _chunk_map(first_manifest).items()}
+            second_chunks = {chunk_id: chunk["chunk_hash"] for chunk_id, chunk in _chunk_map(second_manifest).items()}
 
             self.assertEqual(first_chunks, second_chunks)
             self.assertEqual(second_result.updated_chunks, 0)
@@ -220,11 +198,7 @@ class IngestRuntimeTests(unittest.TestCase):
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             fixture_copy = repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md"
 
-            first_result = run_ingest(
-                repo_root=repo_root,
-                data_root=Path(data_dir),
-                source_roots=build_default_source_roots(repo_root),
-            )
+            first_result = run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
             first_manifest = _load_manifest(first_result.manifest_path)
             first_chunks = _chunk_map(first_manifest)
 
@@ -236,11 +210,7 @@ class IngestRuntimeTests(unittest.TestCase):
             )
             fixture_copy.write_text(updated_text, encoding="utf-8")
 
-            second_result = run_ingest(
-                repo_root=repo_root,
-                data_root=Path(data_dir),
-                source_roots=build_default_source_roots(repo_root),
-            )
+            second_result = run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
             second_manifest = _load_manifest(second_result.manifest_path)
             second_chunks = _chunk_map(second_manifest)
 
@@ -256,6 +226,176 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(changed_chunk["paragraph_ordinal"], 2)
             self.assertEqual(second_result.updated_chunks, 1)
             self.assertEqual(second_result.deleted_chunks, 0)
+
+    def test_semantic_extraction_preserves_raw_user_input(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            user_input = "Please retrieve the candy snack food before bed note."
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input=user_input,
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            synthesis_context_packet = _load_turn_artifact(result.synthesis_context_packet_path)
+
+            self.assertEqual(isolated_packet["raw_user_input"], user_input)
+            self.assertEqual(isolated_packet["request_packet"]["raw_user_input"], user_input)
+            self.assertEqual(isolated_packet["parsed_payload"]["raw_user_input"], user_input)
+            self.assertEqual(contextual_packet["raw_user_input"], user_input)
+            self.assertEqual(contextual_packet["request_packet"]["raw_user_input"], user_input)
+            self.assertEqual(contextual_packet["parsed_payload"]["raw_user_input"], user_input)
+            self.assertEqual(semantic_context_packet["raw_user_input"], user_input)
+            self.assertEqual(synthesis_context_packet["raw_user_input"], user_input)
+
+    def test_semantic_extraction_is_additive_not_destructive(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            stub_backend = StubSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "",
+                    "probable_user_intent": "limited hint isolated pass",
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "question_shape": None,
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["candy"],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "raw_user_input": "",
+                    "contextual_user_intent": "limited hint contextual pass",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "coverage_target": {"must_preserve": ["candy"], "should_include": [], "avoid_satisfying_with": []},
+                    "activation_hints": {
+                        "lexical_terms": ["candy"],
+                        "phrases": [],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "delta_from_isolated_read": {
+                        "added_by_context": [],
+                        "removed_or_deemphasized_by_context": [],
+                        "unchanged": ["candy"],
+                    },
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=stub_backend,
+            )
+
+            retrieval_preparation = result.semantic_context_packet["retrieval_preparation"]
+            self.assertIn("candy", retrieval_preparation["extraction_hint_terms"])
+            self.assertIn("snack", retrieval_preparation["raw_lexical_terms"])
+            self.assertIn("food", retrieval_preparation["raw_lexical_terms"])
+            self.assertIn("before", retrieval_preparation["raw_lexical_terms"])
+            self.assertIn("snack", retrieval_preparation["combined_candidate_terms"])
+            self.assertIn("food", retrieval_preparation["combined_candidate_terms"])
+            self.assertEqual(retrieval_preparation["candidate_term_sources"]["snack"], ["raw_user_input"])
+
+    def test_stub_semantic_extractor_artifacts_are_persisted_and_hashed(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+
+            ledger = read_ledger(result.thread_ledger_path)
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
+            isolated_raw = _load_turn_artifact(result.isolated_semantic_extraction_raw_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+            contextual_raw = _load_turn_artifact(result.contextual_semantic_extraction_raw_path)
+
+            self.assertTrue(result.isolated_semantic_extraction_packet_path.exists())
+            self.assertTrue(result.isolated_semantic_extraction_raw_path.exists())
+            self.assertTrue(result.contextual_semantic_extraction_packet_path.exists())
+            self.assertTrue(result.contextual_semantic_extraction_raw_path.exists())
+            self.assertEqual(ledger[-1]["isolated_semantic_extraction_packet_hash"], sha256_json(isolated_packet))
+            self.assertEqual(ledger[-1]["isolated_semantic_extraction_raw_hash"], sha256_json(isolated_raw))
+            self.assertEqual(ledger[-1]["contextual_semantic_extraction_packet_hash"], sha256_json(contextual_packet))
+            self.assertEqual(ledger[-1]["contextual_semantic_extraction_raw_hash"], sha256_json(contextual_raw))
+
+    def test_extractor_disabled_falls_back_to_lexical_retrieval(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+            )
+
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+            self.assertEqual(isolated_packet["status"], "disabled")
+            self.assertEqual(contextual_packet["status"], "disabled")
+            self.assertEqual(result.coverage_report["status"], "minimal_pass")
+            self.assertTrue(result.retrieval_packet["selected_chunks"])
+
+    def test_contextual_extraction_receives_prior_thread_state(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            first_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="First turn to seed thread state.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+            second_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Second turn should receive prior thread state.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                thread_id=first_turn.thread_id,
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+
+            contextual_packet = _load_turn_artifact(second_turn.contextual_semantic_extraction_packet_path)
+            prior_thread_state = contextual_packet["request_packet"]["prior_thread_state"]
+            self.assertEqual(prior_thread_state["latest_turn_id"], 1)
+            self.assertEqual(prior_thread_state["latest_user_input"], "First turn to seed thread state.")
 
     def test_lexical_retrieval_fixture_hit_persists_artifacts_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -295,8 +435,8 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
             self.assertEqual(
-                synthesis_context_packet["semantic_context_packet"]["extracted_lexical_query_terms"],
-                semantic_context_packet["extracted_lexical_query_terms"],
+                synthesis_context_packet["semantic_context_packet"]["retrieval_preparation"]["raw_lexical_terms"],
+                semantic_context_packet["retrieval_preparation"]["raw_lexical_terms"],
             )
             self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
@@ -308,7 +448,6 @@ class IngestRuntimeTests(unittest.TestCase):
             thread_state_without_hash = dict(thread_state)
             thread_state_without_hash.pop("latest_thread_state_hash", None)
             self.assertEqual(ledger[-1]["next_thread_state_hash"], sha256_json(thread_state_without_hash))
-            self.assertEqual(result.coverage_report["status"], "minimal_pass")
 
     def test_lexical_retrieval_no_index_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -372,6 +511,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="   and the or   ",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
             )
 
             semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
@@ -383,7 +523,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(result.semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertEqual(semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertFalse(semantic_traversal_manifest["query_terms_available"])
-            self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no lexical query terms after deterministic filtering"])
+            self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no lexical or additive extraction candidate terms were available"])
             self.assertEqual(retrieval_packet["retrieval_status"], "no_query_terms")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
             self.assertEqual(coverage_report["status"], "no_query_terms")
@@ -440,6 +580,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "Please retrieve the candy snack food before bed note.",
                     "--llm-mode",
                     "stub",
+                    "--semantic-extractor-mode",
+                    "stub",
                     "--repo-root",
                     str(repo_root),
                     "--data-root",
@@ -453,6 +595,10 @@ class IngestRuntimeTests(unittest.TestCase):
             payload = json.loads(process.stdout)
             for key in (
                 "turn_root",
+                "isolated_semantic_extraction_packet_path",
+                "isolated_semantic_extraction_raw_path",
+                "contextual_semantic_extraction_packet_path",
+                "contextual_semantic_extraction_raw_path",
                 "semantic_context_packet_path",
                 "semantic_traversal_manifest_path",
                 "retrieval_packet_path",
@@ -461,6 +607,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 "state_delta_path",
             ):
                 self.assertTrue(Path(payload[key]).exists())
+            self.assertEqual(payload["semantic_extractor_mode"], "stub")
+            self.assertIn(payload["isolated_extraction_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
+            self.assertIn(payload["contextual_extraction_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
             self.assertIn(payload["coverage_status"], {"minimal_pass", "no_index", "no_query_terms", "no_matches"})
             self.assertTrue(payload["latest_perturbation_hash"])
             self.assertTrue(payload["latest_thread_state_hash"])

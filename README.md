@@ -1,27 +1,45 @@
 # semantic-traversal
 
-`semantic-traversal` is a local conversational runtime. A user message becomes one bounded turn, the runtime reads prior thread state, optionally looks up relevant ingested notes from SQLite, calls the LLM, then saves the updated thread state and a hash-chained ledger record.
+`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, runs bounded additive semantic extraction, prepares lexical retrieval from SQLite, calls the final LLM, updates thread state, and appends a hash-chained ledger record.
 
-This repo now has three practical layers:
+The current runtime keeps three practical layers visible:
 
-- turn runtime
-- ingestion database
-- human-readable artifacts for inspection
+- additive semantic extraction packets
+- lexical SQLite retrieval
+- inspectable per-turn artifacts and ledger hashes
 
 ## What A Turn Does
 
 For each user message, the runtime:
 
-1. Loads the prior thread state if it exists.
-2. Extracts simple lexical query terms from the user message.
-3. Looks in the ingestion SQLite database for matching note chunks when an index is available.
-4. Builds a synthesis context packet that includes the prior thread state and any approved retrieval material.
-5. Calls the LLM backend.
-6. Saves the next thread state.
-7. Appends a ledger record that is hash-chained to the previous turn.
-8. Writes inspectable JSON artifacts for the turn.
+1. Loads prior `thread_state` and `conversation_thread` artifacts if they exist.
+2. Preserves the raw user input unchanged.
+3. Runs isolated semantic extraction from the raw message.
+4. Runs contextual semantic extraction using the raw message, prior thread state, and the isolated extraction.
+5. Builds additive retrieval preparation from raw lexical terms plus semantic extraction hints.
+6. Retrieves matching chunks from the ingestion SQLite database when available.
+7. Builds a synthesis context packet that keeps the raw user input authoritative.
+8. Calls the LLM backend.
+9. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
 
-The retrieval path is intentionally boring and deterministic. It does not use embeddings, vector search, graph traversal, or synthetic node promotion.
+The runtime still does not use embeddings, vector search, graph traversal, or synthetic node promotion.
+
+## Semantic Extraction Modes
+
+Turn execution supports these semantic extractor modes:
+
+- `disabled`: persist explicit disabled extraction artifacts and continue through the lexical path
+- `stub`: deterministic local extractor for tests and probes
+- `ollama`: optional local Ollama JSON extractor
+- `auto`: use Ollama only when a semantic extractor model is configured, otherwise behave like `disabled`
+
+Environment variables and matching CLI overrides:
+
+- `SEMANTIC_EXTRACTOR_MODE=disabled|stub|ollama|auto`
+- `SEMANTIC_EXTRACTOR_MODEL=<model name>`
+- `SEMANTIC_EXTRACTOR_BASE_URL=http://localhost:11434`
+
+Semantic extraction is additive only. It does not rewrite or replace the raw user input, and it does not become the retrieval gatekeeper.
 
 ## Artifact Layout
 
@@ -30,27 +48,38 @@ Default runtime artifacts live under the local temp directory:
 - thread data root: `$env:TEMP\semantic-traversal`
 - probe data root: `$env:TEMP\semantic-traversal-probes`
 
-Per thread, the runtime writes:
+Per turn, the runtime writes:
 
-- `threads/<thread_id>/conversation_thread.json`
-- `threads/<thread_id>/thread_state.json`
-- `threads/<thread_id>/thread_ledger.jsonl`
-- `threads/<thread_id>/turns/turn-000001/semantic_context_packet.json`
-- `threads/<thread_id>/turns/turn-000001/semantic_traversal_manifest.json`
-- `threads/<thread_id>/turns/turn-000001/retrieval_packet.json`
-- `threads/<thread_id>/turns/turn-000001/coverage_report.json`
-- `threads/<thread_id>/turns/turn-000001/synthesis_context_packet.json`
-- `threads/<thread_id>/turns/turn-000001/state_delta.json`
+- `isolated_semantic_extraction_packet.json`
+- `isolated_semantic_extraction_raw.json`
+- `contextual_semantic_extraction_packet.json`
+- `contextual_semantic_extraction_raw.json`
+- `semantic_context_packet.json`
+- `semantic_traversal_manifest.json`
+- `retrieval_packet.json`
+- `coverage_report.json`
+- `synthesis_context_packet.json`
+- `state_delta.json`
+
+The ledger records hashes for all of those persisted turn artifacts, plus the next thread state.
 
 ## Status Meanings
 
-The coverage report uses a few clear statuses:
+Retrieval coverage still uses clear lexical statuses:
 
-- `minimal_pass`: the SQLite index exists, query terms exist, and matching chunks were found
-- `no_index`: the ingestion database is not present
-- `no_query_terms`: the user message produced no usable lexical terms after filtering
-- `no_matches`: the database exists, query terms exist, but nothing matched
+- `minimal_pass`: retrieval found matching chunks
+- `no_index`: the ingestion SQLite database is not present
+- `no_query_terms`: neither raw lexical extraction nor additive extraction hints produced candidate retrieval terms
+- `no_matches`: candidate terms existed but nothing matched
 - `not_attempted`: reserved for future intentional skips
+
+Semantic extraction uses explicit statuses per pass:
+
+- `parsed`
+- `stub`
+- `disabled`
+- `unavailable`
+- `invalid_json`
 
 ## Quick Start
 
@@ -60,29 +89,22 @@ Run the test suite:
 python -m unittest discover -s tests -v
 ```
 
-Run a stub turn:
+Run a stub turn with stub semantic extraction:
 
 ```powershell
-python -m semantic_traversal --message "Hello from stub mode." --llm-mode stub
+python -m semantic_traversal --message "Hello from stub mode." --llm-mode stub --semantic-extractor-mode stub
 ```
 
-Run a stub turn with retrieval enabled against the local ingestion database:
+Run a stub turn with lexical retrieval and additive extraction:
 
 ```powershell
-python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub
+python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --semantic-extractor-mode stub
 ```
 
-Run the named probes:
+Run a disabled-extraction turn that still uses lexical fallback:
 
 ```powershell
-python -m semantic_traversal.probes probe_new_thread_minimal_turn --llm-mode stub
-python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub
-python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root $env:TEMP\semantic-traversal-probes-hit
-python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root $env:TEMP\semantic-traversal-probes-noindex
-python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root $env:TEMP\semantic-traversal-probes-nomatch
-python -m semantic_traversal.probes probe_lexical_retrieval_no_query_terms --repo-root . --data-root $env:TEMP\semantic-traversal-probes-noquery
-python -m semantic_traversal.probes probe_ledger_hash_artifact_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-integrity
-python -m semantic_traversal.probes probe_turn_cli_artifact_paths --repo-root . --data-root $env:TEMP\semantic-traversal-probes-cli
+python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --semantic-extractor-mode disabled
 ```
 
 ## Ingest The Notes
@@ -95,61 +117,50 @@ python -m semantic_traversal ingest --repo-root . --data-root $env:TEMP\semantic
 
 That command reads the repository corpus and fixture notes, stores them in SQLite, and writes a JSON manifest for inspection.
 
-## How Retrieval Works
+## Probe Commands
 
-The retrieval step is lexical, not semantic:
-
-- the user message is split into simple lowercase word tokens
-- short words and common stop words are ignored
-- the runtime searches the ingested chunk text and metadata
-- matching chunks are ranked deterministically
-- the top few matches are placed into the retrieval packet
-
-If there is no SQLite database, the turn still completes and reports `no_index`.
-If there are no usable query terms, the turn still completes and reports `no_query_terms`.
-If there are terms but nothing matches, the turn still completes and reports `no_matches`.
+```powershell
+python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root $env:TEMP\semantic-traversal-probes-hit
+python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root $env:TEMP\semantic-traversal-probes-noindex
+python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root $env:TEMP\semantic-traversal-probes-nomatch
+python -m semantic_traversal.probes probe_lexical_retrieval_no_query_terms --repo-root . --data-root $env:TEMP\semantic-traversal-probes-noquery
+python -m semantic_traversal.probes probe_ledger_hash_artifact_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-integrity
+python -m semantic_traversal.probes probe_turn_cli_artifact_paths --repo-root . --data-root $env:TEMP\semantic-traversal-probes-cli
+python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub --data-root $env:TEMP\semantic-traversal-thread-continuity
+python -m semantic_traversal.probes probe_semantic_extraction_stub_packets --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-stub
+python -m semantic_traversal.probes probe_semantic_extraction_disabled_fallback --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled
+python -m semantic_traversal.probes probe_semantic_extraction_contextual_thread_state --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-context
+python -m semantic_traversal.probes probe_semantic_extraction_hash_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-integrity
+```
 
 ## How To Inspect A Turn
 
-After a turn, inspect the saved files from the JSON payload printed by the CLI.
+Useful files after a turn:
 
-Typical useful files are:
-
-- `semantic_context_packet.json` for the extracted query terms and prior thread context
-- `semantic_traversal_manifest.json` for the retrieval mode and chosen chunk IDs
-- `retrieval_packet.json` for the concrete chunk content returned to the turn
-- `coverage_report.json` for the retrieval status
-- `synthesis_context_packet.json` for the exact context sent to the LLM
-- `state_delta.json` for the state transition saved with the turn
+- `isolated_semantic_extraction_packet.json` for the isolated extraction request, status, metadata, and parsed payload
+- `contextual_semantic_extraction_packet.json` for the contextual extraction request, including prior thread state
+- `semantic_context_packet.json` for additive retrieval preparation and semantic extraction status
+- `semantic_traversal_manifest.json` for retrieval mode and selected chunk IDs
+- `retrieval_packet.json` for raw lexical terms, extraction hint terms, candidate term sources, and returned chunks
+- `coverage_report.json` for retrieval and semantic extraction status
+- `synthesis_context_packet.json` for the exact context sent to the final LLM
+- `state_delta.json` for the persisted state transition
 - `thread_ledger.jsonl` for the hash chain across turns
 
-Example inspection commands:
+## Human UAT Focus
 
-```powershell
-Get-Content "$env:TEMP\semantic-traversal\threads\<thread_id>\turns\turn-000001\coverage_report.json"
-Get-Content "$env:TEMP\semantic-traversal\threads\<thread_id>\turns\turn-000001\retrieval_packet.json"
-Get-Content "$env:TEMP\semantic-traversal\threads\<thread_id>\thread_ledger.jsonl"
-```
-
-## Human Acceptance Testing
-
-The repo is ready for “try to break it” testing if:
-
-- the CLI shows where each turn wrote its artifacts
-- the probe commands pass
-- the retrieval statuses are easy to distinguish
-- the ledger hashes match the files on disk
+The current next end goal is human UAT over additive semantic extraction and retrieval interaction.
 
 Good break attempts:
 
-- use an empty message and confirm `no_query_terms`
-- delete the ingestion database and confirm `no_index`
-- ask for unrelated words and confirm `no_matches`
-- run two turns on the same thread and confirm the parent hash chain still holds
+- confirm the raw user message is unchanged across extraction and synthesis artifacts
+- run with `--semantic-extractor-mode disabled` and confirm lexical retrieval still works
+- inspect `candidate_term_sources` and verify raw lexical terms are not dropped when extraction is sparse
+- run two turns on the same thread and confirm the contextual extraction request includes prior thread state
+- compare ledger hashes to the persisted artifact contents on disk
 
 ## Notes
 
-- Live mode still works only when `OPENAI_API_KEY` is available.
-- Stub mode is enough for the retrieval hardening and UAT prep flows.
-- The active implementation bundles live in `agent_harness/implementation-projects/archive/` once complete.
-
+- Live final-answer mode still requires `OPENAI_API_KEY`.
+- Ollama is optional and is not required for tests or acceptance.
+- Completed implementation bundles live under `agent_harness/implementation-projects/archive/`.

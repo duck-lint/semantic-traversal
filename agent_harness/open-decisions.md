@@ -30,6 +30,7 @@ When a pending decision exists, use:
 ## Notes
 
 - Bundle-local decisions for the archived `implementation-01` live in `harness/implementation-projects/archive/semantic-traversal-implementation-01-summary.md`.
+- Next end goal: human UAT over additive semantic extraction and retrieval interaction.
 - Link to archived implementation summaries or decision files when a decision's evidence lives there.
 - Do not point active decisions at stale files under `active/` after a bundle has moved to `archive/`.
 - Remove decisions that no longer affect current or paused implementation work, or move their final context into the archived bundle summary.
