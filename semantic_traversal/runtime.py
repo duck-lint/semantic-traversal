@@ -237,6 +237,249 @@ def _validate_semantic_context_payload(payload: dict[str, Any], *, raw_user_inpu
     return reasons
 
 
+def _normalize_coverage_text(value: Any) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(value).lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _coverage_target_tokens(value: Any) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in QUERY_TOKEN_RE.findall(str(value).lower()):
+        if len(token) < 3 or token in STOP_WORDS or token.isdigit():
+            continue
+        if token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def _chunk_evidence_fields(chunk: dict[str, Any]) -> list[tuple[str, str]]:
+    return [
+        ("paragraph_text", str(chunk.get("paragraph_text") or "")),
+        ("note_title", str(chunk.get("note_title") or "")),
+        ("section_label", str(chunk.get("section_label") or "")),
+        ("relative_path", str(chunk.get("relative_path") or "")),
+        ("note_path", str(chunk.get("note_path") or "")),
+        ("section_path", " / ".join(str(item) for item in list(chunk.get("section_path") or []))),
+        (
+            "frontmatter",
+            json.dumps(chunk.get("frontmatter") or {}, sort_keys=True, ensure_ascii=True),
+        ),
+        (
+            "selection_reasons",
+            " ".join(str(item) for item in list(chunk.get("selection_reasons") or [])),
+        ),
+        (
+            "surface_contributions",
+            " ".join(str(item) for item in list(chunk.get("surface_contributions") or [])),
+        ),
+        ("matched_terms", " ".join(str(item) for item in list(chunk.get("matched_terms") or []))),
+    ]
+
+
+def _build_evidence_excerpt(text: str, target: str, *, max_length: int = 200) -> str:
+    raw_text = str(text)
+    if not raw_text:
+        return ""
+    lowered = raw_text.lower()
+    target_lower = str(target).lower().strip()
+    if target_lower:
+        index = lowered.find(target_lower)
+        if index >= 0:
+            start = max(0, index - 60)
+            end = min(len(raw_text), index + len(target_lower) + 120)
+            return raw_text[start:end].strip()
+    return raw_text[:max_length].strip()
+
+
+def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
+    normalized_target = _normalize_coverage_text(target)
+    target_tokens = _coverage_target_tokens(target)
+    if not normalized_target and not target_tokens:
+        return None
+    for field_name, field_text in _chunk_evidence_fields(chunk):
+        normalized_field = _normalize_coverage_text(field_text)
+        if not normalized_field:
+            continue
+        if normalized_target and normalized_target in normalized_field:
+            return {
+                "field": field_name,
+                "match_type": "normalized_phrase",
+                "excerpt": _build_evidence_excerpt(field_text, target),
+            }
+        if target_tokens:
+            field_tokens = set(_coverage_target_tokens(field_text))
+            if all(token in field_tokens for token in target_tokens):
+                return {
+                    "field": field_name,
+                    "match_type": "token_set_same_chunk",
+                    "excerpt": _build_evidence_excerpt(field_text, target),
+                }
+    return None
+
+
+def _evaluate_semantic_target_coverage(
+    *,
+    semantic_context_packet: dict[str, Any],
+    semantic_traversal_manifest: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
+    selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
+    target_present = isinstance(semantic_coverage_target, dict)
+    target_valid = target_present
+    must_preserve_results: list[dict[str, Any]] = []
+    should_include_results: list[dict[str, Any]] = []
+    avoid_results: list[dict[str, Any]] = []
+    missing_must_preserve: list[str] = []
+    missing_should_include: list[str] = []
+    present_avoid_satisfying_with: list[str] = []
+    limits = [
+        "deterministic lexical/metadata evidence only",
+        "does not claim full semantic entailment",
+    ]
+    if not target_present:
+        return {
+            "target_present": False,
+            "target_valid": False,
+            "target_hash": None,
+            "evaluation_mode": "deterministic_retrieved_evidence_match",
+            "must_preserve": [],
+            "should_include": [],
+            "avoid_satisfying_with": [],
+            "missing_must_preserve": [],
+            "missing_should_include": [],
+            "present_avoid_satisfying_with": [],
+            "covered": False,
+            "limits": limits,
+        }
+
+    try:
+        target_hash = sha256_json(semantic_coverage_target)
+    except Exception:
+        target_hash = None
+        target_valid = False
+    if not isinstance(semantic_coverage_target.get("must_preserve"), list):
+        target_valid = False
+    if not isinstance(semantic_coverage_target.get("should_include"), list):
+        target_valid = False
+    if not isinstance(semantic_coverage_target.get("avoid_satisfying_with"), list):
+        target_valid = False
+
+    for target_value in list(semantic_coverage_target.get("must_preserve") or []):
+        target_text = str(target_value)
+        match = None
+        for chunk in selected_chunks:
+            match = _match_target_to_evidence_fields(target_text, chunk)
+            if match is not None:
+                must_preserve_results.append(
+                    {
+                        "target": target_text,
+                        "covered": True,
+                        "match_type": match["match_type"],
+                        "evidence": [
+                            {
+                                "chunk_id": chunk.get("chunk_id"),
+                                "field": match["field"],
+                                "excerpt": match["excerpt"],
+                            }
+                        ],
+                    }
+                )
+                break
+        if match is None:
+            missing_must_preserve.append(target_text)
+            must_preserve_results.append(
+                {
+                    "target": target_text,
+                    "covered": False,
+                    "match_type": None,
+                    "evidence": [],
+                }
+            )
+
+    for target_value in list(semantic_coverage_target.get("should_include") or []):
+        target_text = str(target_value)
+        match = None
+        for chunk in selected_chunks:
+            match = _match_target_to_evidence_fields(target_text, chunk)
+            if match is not None:
+                should_include_results.append(
+                    {
+                        "target": target_text,
+                        "covered": True,
+                        "match_type": match["match_type"],
+                        "evidence": [
+                            {
+                                "chunk_id": chunk.get("chunk_id"),
+                                "field": match["field"],
+                                "excerpt": match["excerpt"],
+                            }
+                        ],
+                    }
+                )
+                break
+        if match is None:
+            missing_should_include.append(target_text)
+            should_include_results.append(
+                {
+                    "target": target_text,
+                    "covered": False,
+                    "match_type": None,
+                    "evidence": [],
+                }
+            )
+
+    for target_value in list(semantic_coverage_target.get("avoid_satisfying_with") or []):
+        target_text = str(target_value)
+        match = None
+        for chunk in selected_chunks:
+            match = _match_target_to_evidence_fields(target_text, chunk)
+            if match is not None:
+                present_avoid_satisfying_with.append(target_text)
+                avoid_results.append(
+                    {
+                        "target": target_text,
+                        "present": True,
+                        "match_type": match["match_type"],
+                        "evidence": [
+                            {
+                                "chunk_id": chunk.get("chunk_id"),
+                                "field": match["field"],
+                                "excerpt": match["excerpt"],
+                            }
+                        ],
+                    }
+                )
+                break
+        if match is None:
+            avoid_results.append(
+                {
+                    "target": target_text,
+                    "present": False,
+                    "match_type": None,
+                    "evidence": [],
+                }
+            )
+
+    covered = target_valid and not missing_must_preserve and not present_avoid_satisfying_with
+    return {
+        "target_present": True,
+        "target_valid": target_valid,
+        "target_hash": target_hash,
+        "evaluation_mode": "deterministic_retrieved_evidence_match",
+        "must_preserve": must_preserve_results,
+        "should_include": should_include_results,
+        "avoid_satisfying_with": avoid_results,
+        "missing_must_preserve": missing_must_preserve,
+        "missing_should_include": missing_should_include,
+        "present_avoid_satisfying_with": present_avoid_satisfying_with,
+        "covered": covered,
+        "limits": limits,
+    }
+
+
 def _build_retrieval_preparation(
     *,
     user_input: str,
@@ -1301,6 +1544,17 @@ def _evaluate_retrieval_coverage(
         isinstance(semantic_context_packet.get("semantic_coverage_target"), dict)
         and semantic_context_packet["semantic_coverage_target"].get("allow_no_retrieval_needed")
     )
+    semantic_target_coverage = _evaluate_semantic_target_coverage(
+        semantic_context_packet=semantic_context_packet,
+        semantic_traversal_manifest=semantic_traversal_manifest,
+        retrieval_packet=retrieval_packet,
+    )
+    if not semantic_target_coverage["target_present"] or not semantic_target_coverage["target_valid"]:
+        reasons.append("semantic_coverage_target missing or invalid")
+    for target in list(semantic_target_coverage.get("missing_must_preserve") or []):
+        reasons.append(f"semantic coverage target missing required evidence: {target}")
+    for target in list(semantic_target_coverage.get("present_avoid_satisfying_with") or []):
+        reasons.append(f"semantic coverage target matched avoided evidence: {target}")
     if selected_chunk_count < min_selected_chunks and not (allow_no_retrieval_needed and target_allows_no_retrieval):
         reasons.append(f"selected chunk count below configured minimum: {selected_chunk_count} < {min_selected_chunks}")
     if selected_chunk_count > max_selected_chunks:
@@ -1315,10 +1569,11 @@ def _evaluate_retrieval_coverage(
     semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
     return {
         "decision": decision,
-        "semantic_coverage_target_hash": sha256_json(semantic_coverage_target) if isinstance(semantic_coverage_target, dict) else None,
+        "semantic_coverage_target_hash": semantic_target_coverage.get("target_hash"),
         "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
         "retrieval_packet_hash": retrieval_packet_hash,
         "evaluated_activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
+        "semantic_target_coverage": semantic_target_coverage,
         "blocking_reasons": _dedupe_reasons(reasons),
         "limits": {
             "selection_limit": config.max_retrieval_chunks,

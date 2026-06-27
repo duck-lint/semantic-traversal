@@ -25,9 +25,10 @@ from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roots, run_ingest
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
-from semantic_traversal.runtime import _query_vector_candidates, run_thread_turn
+from semantic_traversal.runtime import _evaluate_semantic_target_coverage, _query_vector_candidates, run_thread_turn
 from semantic_traversal.semantic_extraction import (
     DisabledSemanticExtractorBackend,
+    SemanticExtractionResponse,
     StubSemanticExtractorBackend,
     resolve_semantic_extractor_backend,
 )
@@ -176,14 +177,15 @@ def _load_turn_artifact(path: Path) -> dict[str, object]:
 
 
 class _FakeSentenceTransformer:
-    def __init__(self, model_name: str, device: str | None = None) -> None:
+    def __init__(self, model_name: str, device: str | None = None, **kwargs: Any) -> None:
         self.model_name = model_name
         self.device = device
 
     def encode(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
         if isinstance(texts, str):
             texts = [texts]
-        return [[float(len(text)), float(sum(ord(char) for char in text) % 97 + 1)] for text in texts]
+        keywords = ("candy", "yesterday", "dream", "bed", "fixture", "beta")
+        return [[1.0 if keyword in text.lower() else 0.0 for keyword in keywords] for text in texts]
 
     def encode_document(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
         return self.encode(texts, **kwargs)
@@ -219,6 +221,38 @@ class _TestEmbeddingBackend:
             vectors=[[1.0, 0.0]],
             metadata={"backend_mode": self.mode_name, "model": "test-fake-sentence-transformer", "vector_count": 1},
         )
+
+
+class _ParsedSemanticExtractorBackend:
+    mode_name = "parsed"
+
+    def __init__(
+        self,
+        *,
+        isolated_payload: dict[str, Any] | None = None,
+        contextual_payload: dict[str, Any] | None = None,
+    ) -> None:
+        self._delegate = StubSemanticExtractorBackend(
+            isolated_payload=isolated_payload,
+            contextual_payload=contextual_payload,
+        )
+
+    def _parsed_response(self, response: SemanticExtractionResponse) -> SemanticExtractionResponse:
+        metadata = dict(response.metadata)
+        metadata["backend_mode"] = self.mode_name
+        return SemanticExtractionResponse(
+            parsed_payload=response.parsed_payload,
+            raw_response=response.raw_response,
+            metadata=metadata,
+            diagnostics=response.diagnostics,
+            status="parsed",
+        )
+
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+        return self._parsed_response(self._delegate.extract_isolated(packet))
+
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+        return self._parsed_response(self._delegate.extract_contextual(packet))
 
 
 def _fake_sentence_transformers_import_module(name: str):
@@ -1565,6 +1599,9 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "completed")
             self.assertEqual(result.coverage_report["decision"], "approved")
+            self.assertTrue(result.coverage_report["semantic_target_coverage"]["covered"])
+            self.assertTrue(result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["covered"])
+            self.assertEqual(result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["evidence"][0]["field"], "paragraph_text")
             self.assertEqual(result.llm_metadata["mode"], "stub")
             self.assertIsNotNone(result.assistant_response)
             self.assertTrue(result.semantic_traversal_manifest["selected_chunk_ids"])
@@ -1577,6 +1614,216 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
             self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["graph_layer"])
             self.assertIsNotNone(result.synthesis_context_packet["approved_retrieval_packet"])
+
+    def test_semantic_target_coverage_blocks_when_must_preserve_evidence_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "Please retrieve the candy snack food before bed note and check the unseen phrase.",
+                    "contextual_user_intent": "coverage miss",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "perturbation_nodes": [{"id": "node:candy", "label": "candy", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "candidate_targets": ["candy", "unseen"],
+                    "candidate_relations": [],
+                    "semantic_coverage_target": {
+                        "must_preserve": ["unseen phrase alpha"],
+                        "should_include": ["midnight orchard"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "Please retrieve the candy snack food before bed note and check the unseen phrase.",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["candy", "snack", "food", "bed"],
+                        "phrases": ["candy snack food before bed"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note and check the unseen phrase.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(coverage_report["decision"], "blocked")
+            self.assertFalse(coverage_report["semantic_target_coverage"]["covered"])
+            self.assertIn("unseen phrase alpha", coverage_report["semantic_target_coverage"]["missing_must_preserve"])
+            self.assertIn("semantic coverage target missing required evidence: unseen phrase alpha", coverage_report["blocking_reasons"])
+            self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
+
+    def test_semantic_target_coverage_blocks_when_avoid_target_is_present(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            _write_markdown_fixture(
+                repo_root / "corpus",
+                "coverage/avoid_fixture.md",
+                """
+                ---
+                note_type: coverage_fixture
+                ---
+
+                # Avoid Fixture
+
+                ## Fixture Coverage Section
+
+                This paragraph contains candy snack food before bed and dream recall together so the avoided phrase is present in the retrieved evidence.
+                """,
+            )
+            _write_graph_fixture_notes(repo_root)
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "Please retrieve the candy snack food before bed note and dream recall.",
+                    "contextual_user_intent": "avoid coverage",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "perturbation_nodes": [{"id": "node:candy", "label": "candy", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "candidate_targets": ["candy", "dream"],
+                    "candidate_relations": [],
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": [],
+                        "avoid_satisfying_with": ["dream recall"],
+                        "query_text": "Please retrieve the candy snack food before bed note and dream recall.",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["candy", "snack", "food", "bed", "dream", "recall"],
+                        "phrases": ["candy snack food before bed", "dream recall"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note and dream recall.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(coverage_report["decision"], "blocked")
+            self.assertIn("dream recall", coverage_report["semantic_target_coverage"]["present_avoid_satisfying_with"])
+            self.assertIn("semantic coverage target matched avoided evidence: dream recall", coverage_report["blocking_reasons"])
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
+
+    def test_semantic_target_coverage_reports_metadata_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            _write_markdown_fixture(
+                repo_root / "corpus",
+                "coverage/metadata_fixture.md",
+                """
+                ---
+                note_type: coverage_fixture
+                ---
+
+                # Metadata Fixture
+
+                ## Fixture Corpus Beta
+
+                This paragraph exists so deterministic coverage can match the section label as retrieved evidence.
+                """,
+            )
+            _write_graph_fixture_notes(repo_root)
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "Please retrieve the fixture corpus beta note.",
+                    "contextual_user_intent": "metadata evidence",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "perturbation_nodes": [{"id": "node:fixture", "label": "fixture", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "candidate_targets": ["fixture", "beta"],
+                    "candidate_relations": [],
+                    "semantic_coverage_target": {
+                        "must_preserve": ["Fixture Corpus Beta"],
+                        "should_include": ["midnight orchard"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "Please retrieve the fixture corpus beta note.",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["fixture", "corpus", "beta"],
+                        "phrases": ["Fixture Corpus Beta"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the fixture corpus beta note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            coverage_target = result.coverage_report["semantic_target_coverage"]
+
+            self.assertEqual(result.runtime_outcome, "completed")
+            self.assertEqual(result.coverage_report["decision"], "approved")
+            self.assertTrue(coverage_target["must_preserve"][0]["covered"])
+            self.assertEqual(coverage_target["must_preserve"][0]["evidence"][0]["field"], "section_label")
+            self.assertIn("midnight orchard", coverage_target["missing_should_include"])
+
+    def test_semantic_target_coverage_returns_false_for_empty_retrieval(self) -> None:
+        report = _evaluate_semantic_target_coverage(
+            semantic_context_packet={
+                "semantic_coverage_target": {
+                    "must_preserve": ["candy snack food before bed"],
+                    "should_include": ["dream"],
+                    "avoid_satisfying_with": ["avoid this"],
+                }
+            },
+            semantic_traversal_manifest={},
+            retrieval_packet={"selected_chunks": []},
+        )
+        self.assertFalse(report["covered"])
+        self.assertEqual(report["missing_must_preserve"], ["candy snack food before bed"])
+        self.assertEqual(report["missing_should_include"], ["dream"])
 
     def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
