@@ -1,3 +1,4 @@
 .env.*
 *.pyc
 corpus/
+.semantic-traversal-data/

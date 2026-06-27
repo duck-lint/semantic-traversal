@@ -8,7 +8,6 @@ from typing import Any, Protocol
 from urllib import error, request
 
 from .config import RuntimeConfig
-from .llm import load_dotenv_local
 
 
 EXTRACTION_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -43,9 +42,6 @@ EXTRACTION_STOP_WORDS = {
     "you",
     "your",
 }
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
-
-
 @dataclass(frozen=True)
 class SemanticExtractionResponse:
     parsed_payload: dict[str, Any] | None
@@ -390,22 +386,10 @@ def resolve_semantic_extractor_backend(
     base_url_override: str | None = None,
     allow_test_backends: bool = False,
 ) -> SemanticExtractorBackend:
-    dotenv_values = load_dotenv_local(repo_root)
-    configured_mode = (
-        extractor_mode
-        or str(config.raw["semantic_extraction"].get("provider") or "auto")
-        or "auto"
-    ).strip().lower()
-    configured_model = (
-        model_override
-        or config.raw["semantic_extraction"].get("model")
-    )
-    configured_base_url = (
-        base_url_override
-        or config.raw["semantic_extraction"].get("base_url")
-        or DEFAULT_OLLAMA_BASE_URL
-    )
-    timeout_seconds = int(config.raw["semantic_extraction"].get("request_timeout_seconds") or 20)
+    configured_mode = (extractor_mode or "ollama").strip().lower()
+    configured_model = model_override or config.semantic_extraction_model
+    configured_base_url = base_url_override or config.semantic_extraction_base_url
+    timeout_seconds = config.semantic_extraction_request_timeout_seconds
 
     if configured_mode == "disabled":
         if allow_test_backends:
@@ -431,16 +415,5 @@ def resolve_semantic_extractor_backend(
             model=configured_model,
             base_url=configured_base_url,
             timeout_seconds=timeout_seconds,
-        )
-    if configured_mode == "auto":
-        if configured_model:
-            return OllamaSemanticExtractorBackend(
-                model=configured_model,
-                base_url=configured_base_url,
-                timeout_seconds=timeout_seconds,
-            )
-        return UnavailableSemanticExtractorBackend(
-            reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
-            configured_mode=configured_mode,
         )
     raise ValueError(f"Unsupported semantic extractor mode: {configured_mode}")

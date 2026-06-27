@@ -15,7 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from semantic_traversal.config import load_runtime_config
+import yaml
+
+from semantic_traversal.config import ConfigError, load_runtime_config
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
 from semantic_traversal.cli import build_turn_parser
@@ -185,9 +187,14 @@ def _write_runtime_config(repo_root: Path, overrides: dict[str, Any] | None = No
     merged = _deep_merge(base_config, overrides or {})
     destination = repo_root / relative_path
     destination.parent.mkdir(parents=True, exist_ok=True)
-    import yaml
-
     destination.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
+    return destination
+
+
+def _write_runtime_config_document(repo_root: Path, raw_config: dict[str, Any], *, relative_path: str = "semantic_traversal.runtime.yaml") -> Path:
+    destination = repo_root / relative_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(yaml.safe_dump(raw_config, sort_keys=False), encoding="utf-8")
     return destination
 
 
@@ -312,16 +319,70 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(explicit_config.data_root, (repo_root / ".explicit-data").resolve())
             self.assertNotIn("OPENAI_API_KEY", explicit_config_path.read_text(encoding="utf-8"))
 
+    def test_missing_runtime_config_field_raises_config_error_without_code_default_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["runtime"].pop("max_retrieval_chunks")
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.runtime\.max_retrieval_chunks"):
+                load_runtime_config(repo_root=repo_root)
+
+    def test_wrong_type_runtime_config_field_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["runtime"]["max_retrieval_chunks"] = "two"
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Invalid runtime config field type: root\.runtime\.max_retrieval_chunks expected int"):
+                load_runtime_config(repo_root=repo_root)
+
+    def test_unknown_runtime_config_field_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["runtime"]["unexpected_field"] = True
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Unknown runtime config field: root\.runtime\.unexpected_field"):
+                load_runtime_config(repo_root=repo_root)
+
     def test_env_local_api_key_is_separate_from_yaml_config(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = Path(repo_dir)
             _write_runtime_config(repo_root, {"llm": {"model": "fixture-llm-model"}})
-            (repo_root / ".env.local").write_text("OPENAI_API_KEY=test-secret-key\n", encoding="utf-8")
+            (repo_root / ".env.local").write_text(
+                "OPENAI_API_KEY=test-secret-key\nMAX_RETRIEVAL_CHUNKS=999\n",
+                encoding="utf-8",
+            )
             config = load_runtime_config(repo_root=repo_root)
             api_key, model, _ = resolve_openai_settings(repo_root=repo_root, config=config)
 
             self.assertEqual(api_key, "test-secret-key")
             self.assertEqual(model, "fixture-llm-model")
+            self.assertEqual(config.max_retrieval_chunks, 6)
+
+    def test_yaml_max_retrieval_chunks_controls_manifest_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir, {"runtime": {"max_retrieval_chunks": 2}})
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            _write_synthetic_corpus_journal_note(repo_root)
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+            )
+
+            manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
+            self.assertEqual(manifest["limits"]["max_selected_chunks"], 2)
+            self.assertLessEqual(len(manifest["selected_chunk_ids"]), 2)
 
     def test_cli_ingest_uses_authorized_default_roots(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as temp_dir:
@@ -1078,12 +1139,6 @@ class IngestRuntimeTests(unittest.TestCase):
                 _write_runtime_config(
                     repo_root,
                     {
-                        "runtime": {
-                            "require_vector_surface": True,
-                            "require_graph_surface": True,
-                            "require_lexical_surface": True,
-                            "require_primary_corpus_surface": True,
-                        },
                         "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
                         "embeddings": {"model": "fixture-embed", "base_url": base_url},
                         "coverage": {

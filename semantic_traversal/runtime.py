@@ -507,7 +507,7 @@ def _run_semantic_extraction(
 
 
 def _database_path(config: RuntimeConfig, data_root: Path) -> Path:
-    return (config.sqlite_path or (data_root / "ingestion" / "latent_space.sqlite3")).resolve()
+    return (data_root / "ingestion" / "latent_space.sqlite3").resolve()
 
 
 def _load_chunk_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -678,7 +678,7 @@ def _query_vector_candidates(
     response = embedding_backend.embed_texts([query_text])
     if response.status != "embedded" or not response.vectors:
         return [], response.status
-    vector_table = str(config.raw["indexes"]["vector_table"])
+    vector_table = config.vector_table
     rows = connection.execute(
         f"""
         SELECT
@@ -730,8 +730,8 @@ def _query_graph_candidates(
 ) -> list[dict[str, Any]]:
     if not seed_chunk_ids:
         return []
-    graph_edges_table = str(config.raw["indexes"]["graph_edges_table"])
-    hop_limit = int(config.raw["coverage"]["graph_expansion_hop_limit"])
+    graph_edges_table = config.graph_edges_table
+    hop_limit = config.coverage_graph_expansion_hop_limit
     placeholders = ",".join("?" for _ in seed_chunk_ids)
     seed_rows = connection.execute(
         f"SELECT chunk_id, note_id FROM chunks WHERE chunk_id IN ({placeholders})",
@@ -1249,16 +1249,16 @@ def _evaluate_retrieval_coverage(
         str(surface["surface"]): str(surface["status"])
         for surface in list(activated_semantic_regions.get("activation_surfaces") or [])
     }
-    runtime_requirements = dict(config.raw["runtime"])
-    if runtime_requirements.get("require_lexical_surface") and surface_statuses.get("lexical_index_surface") == "blocked":
+    required_surface_contributions = config.coverage_require_surface_contributions
+    if required_surface_contributions.get("lexical_index_surface") and surface_statuses.get("lexical_index_surface") == "blocked":
         reasons.append("lexical_index_surface unavailable")
-    if runtime_requirements.get("require_primary_corpus_surface") and surface_statuses.get("primary_corpus") == "blocked":
+    if required_surface_contributions.get("primary_corpus") and surface_statuses.get("primary_corpus") == "blocked":
         reasons.append("primary_corpus unavailable")
-    if runtime_requirements.get("require_vector_surface") and surface_statuses.get("vector_index_surface") != "activated":
+    if required_surface_contributions.get("vector_index_surface") and surface_statuses.get("vector_index_surface") != "activated":
         reasons.append("vector_index_surface unavailable or missing configured embeddings")
-    if runtime_requirements.get("require_graph_surface") and surface_statuses.get("graph_layer") == "blocked":
+    if required_surface_contributions.get("graph_layer") and surface_statuses.get("graph_layer") == "blocked":
         reasons.append("graph_layer unavailable")
-    if runtime_requirements.get("require_synthetic_node_surface") and surface_statuses.get("synthetic_nodes") != "activated":
+    if required_surface_contributions.get("synthetic_nodes") and surface_statuses.get("synthetic_nodes") != "activated":
         reasons.append("synthetic_nodes surface required but unavailable")
 
     manifest_validity = dict(semantic_traversal_manifest.get("manifest_validity") or {})
@@ -1274,10 +1274,9 @@ def _evaluate_retrieval_coverage(
         reasons.append("retrieval_packet selected chunks do not match traversal selected IDs")
 
     selected_chunk_count = len(selected_chunks)
-    coverage_settings = dict(config.raw["coverage"])
-    min_selected_chunks = int(coverage_settings["min_selected_chunks"])
-    max_selected_chunks = int(coverage_settings["max_selected_chunks"])
-    allow_no_retrieval_needed = bool(coverage_settings.get("allow_no_retrieval_needed"))
+    min_selected_chunks = config.coverage_min_selected_chunks
+    max_selected_chunks = config.coverage_max_selected_chunks
+    allow_no_retrieval_needed = config.coverage_allow_no_retrieval_needed
     target_allows_no_retrieval = bool(
         isinstance(semantic_context_packet.get("semantic_coverage_target"), dict)
         and semantic_context_packet["semantic_coverage_target"].get("allow_no_retrieval_needed")
@@ -1287,7 +1286,6 @@ def _evaluate_retrieval_coverage(
     if selected_chunk_count > max_selected_chunks:
         reasons.append(f"selected chunk count exceeds configured maximum: {selected_chunk_count} > {max_selected_chunks}")
 
-    required_surface_contributions = dict(coverage_settings.get("require_surface_contributions") or {})
     actual_surface_contributions = dict(semantic_traversal_manifest.get("surface_contributions") or {})
     for surface_name, required in required_surface_contributions.items():
         if required and not actual_surface_contributions.get(surface_name):

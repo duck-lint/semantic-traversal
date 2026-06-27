@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from .config import RuntimeConfig
+from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 
@@ -130,12 +130,8 @@ def create_ingest_paths(data_root: Path) -> IngestPaths:
 
 
 def build_default_source_roots(repo_root: Path, config: RuntimeConfig | None = None) -> tuple[IngestSourceRoot, ...]:
-    if config is not None:
-        return tuple(IngestSourceRoot(label=root.label, path=root.path) for root in config.source_roots())
-    return (
-        IngestSourceRoot(label="corpus", path=(repo_root / "corpus").resolve()),
-        IngestSourceRoot(label="tests-fixtures", path=(repo_root / "tests" / "fixtures").resolve()),
-    )
+    resolved_config = config or load_runtime_config(repo_root=repo_root)
+    return tuple(IngestSourceRoot(label=root.label, path=root.path) for root in resolved_config.corpus_roots)
 
 
 def parse_source_root_argument(raw: str, repo_root: Path) -> IngestSourceRoot:
@@ -164,7 +160,8 @@ def run_ingest(
     resolved_repo_root = repo_root.resolve()
     resolved_data_root = data_root.resolve()
     resolved_data_root.mkdir(parents=True, exist_ok=True)
-    resolved_source_roots = source_roots or build_default_source_roots(resolved_repo_root, config=config)
+    resolved_config = config or load_runtime_config(repo_root=resolved_repo_root)
+    resolved_source_roots = source_roots or build_default_source_roots(resolved_repo_root, config=resolved_config)
     for source_root in resolved_source_roots:
         if not source_root.path.exists():
             raise FileNotFoundError(f"Source root does not exist: {source_root.path}")
@@ -173,19 +170,19 @@ def run_ingest(
     run_id = f"ingest-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     ingest_paths = create_ingest_paths(resolved_data_root)
     note_records = tuple(_discover_and_parse_notes(resolved_source_roots))
-    resolved_embedding_backend = embedding_backend or (resolve_embedding_backend(config) if config is not None else None)
+    resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 
     connection = sqlite3.connect(ingest_paths.database_path)
     try:
         connection.row_factory = sqlite3.Row
-        _initialize_schema(connection, config=config)
+        _initialize_schema(connection, config=resolved_config)
         counts = _materialize_records(
             connection=connection,
             note_records=note_records,
             source_roots=resolved_source_roots,
             run_id=run_id,
             generated_at=generated_at,
-            config=config,
+            config=resolved_config,
             embedding_backend=resolved_embedding_backend,
         )
     finally:
@@ -562,10 +559,10 @@ def _normalize_inline_whitespace(value: str) -> str:
     return " ".join(value.split())
 
 
-def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig | None = None) -> None:
-    vector_table = str((config.raw["indexes"]["vector_table"] if config is not None else "chunk_vectors"))
-    graph_nodes_table = str((config.raw["indexes"]["graph_nodes_table"] if config is not None else "graph_nodes"))
-    graph_edges_table = str((config.raw["indexes"]["graph_edges_table"] if config is not None else "graph_edges"))
+def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig) -> None:
+    vector_table = config.vector_table
+    graph_nodes_table = config.graph_nodes_table
+    graph_edges_table = config.graph_edges_table
     connection.executescript(
         f"""
         CREATE TABLE IF NOT EXISTS ingest_runs (
@@ -667,7 +664,7 @@ def _materialize_records(
     source_roots: tuple[IngestSourceRoot, ...],
     run_id: str,
     generated_at: str,
-    config: RuntimeConfig | None,
+    config: RuntimeConfig,
     embedding_backend: EmbeddingBackend | None,
 ) -> dict[str, int]:
     counts = {
@@ -965,10 +962,10 @@ def _rebuild_graph_layer(
     note_records: tuple[NoteRecord, ...],
     run_id: str,
     generated_at: str,
-    config: RuntimeConfig | None,
+    config: RuntimeConfig,
 ) -> None:
-    graph_nodes_table = str((config.raw["indexes"]["graph_nodes_table"] if config is not None else "graph_nodes"))
-    graph_edges_table = str((config.raw["indexes"]["graph_edges_table"] if config is not None else "graph_edges"))
+    graph_nodes_table = config.graph_nodes_table
+    graph_edges_table = config.graph_edges_table
     connection.execute(f"DELETE FROM {graph_edges_table}")
     connection.execute(f"DELETE FROM {graph_nodes_table}")
 
@@ -1126,10 +1123,10 @@ def _refresh_chunk_vectors(
     note_records: tuple[NoteRecord, ...],
     run_id: str,
     generated_at: str,
-    config: RuntimeConfig | None,
+    config: RuntimeConfig,
     embedding_backend: EmbeddingBackend | None,
 ) -> None:
-    vector_table = str((config.raw["indexes"]["vector_table"] if config is not None else "chunk_vectors"))
+    vector_table = config.vector_table
     processed_chunk_ids = [chunk.chunk_id for note_record in note_records for chunk in note_record.chunks]
     if not processed_chunk_ids:
         connection.execute(f"DELETE FROM {vector_table}")

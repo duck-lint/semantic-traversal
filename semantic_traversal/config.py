@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,77 +9,64 @@ import yaml
 
 
 DEFAULT_CONFIG_FILENAME = "semantic_traversal.runtime.yaml"
-_SECRET_KEY_EXACT = {"api_key", "apikey", "secret", "password", "bearer_token", "access_token", "refresh_token", "credential", "credentials"}
+_SECRET_KEY_EXACT = {
+    "api_key",
+    "apikey",
+    "secret",
+    "password",
+    "bearer_token",
+    "access_token",
+    "refresh_token",
+    "credential",
+    "credentials",
+}
 _SECRET_VALUE_PREFIXES = ("sk-", "Bearer ")
 
-_DEFAULT_CONFIG: dict[str, Any] = {
+_EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     "runtime": {
-        "data_root": ".semantic-traversal-data",
-        "max_retrieval_chunks": 6,
-        "require_semantic_extraction": True,
-        "require_vector_surface": False,
-        "require_graph_surface": True,
-        "require_lexical_surface": True,
-        "require_primary_corpus_surface": True,
-        "require_synthetic_node_surface": False,
+        "data_root": str,
+        "max_retrieval_chunks": int,
     },
     "llm": {
-        "provider": "openai",
-        "mode": "auto",
-        "model": "gpt-5.4-mini",
-        "max_output_tokens": 400,
-        "runtime_budget": {
-            "max_input_tokens": None,
-            "max_output_tokens": 400,
-            "max_total_tokens": None,
-            "timeout_seconds": None,
-        },
+        "model": str,
+        "max_output_tokens": int,
     },
     "semantic_extraction": {
-        "provider": "ollama",
-        "model": None,
-        "base_url": "http://localhost:11434",
-        "request_timeout_seconds": 20,
+        "model": (str, type(None)),
+        "base_url": str,
+        "request_timeout_seconds": int,
     },
     "embeddings": {
-        "provider": "ollama",
-        "model": None,
-        "base_url": "http://localhost:11434",
-        "request_timeout_seconds": 20,
-        "vector_dimensions": None,
+        "model": (str, type(None)),
+        "base_url": str,
+        "request_timeout_seconds": int,
     },
     "paths": {
         "corpus_roots": [
-            {"label": "corpus", "path": "corpus"},
-            {"label": "tests-fixtures", "path": "tests/fixtures"},
+            {
+                "label": str,
+                "path": str,
+            },
         ],
-        "synthetic_nodes_root": "corpus/SYNTHETIC_NODES",
+        "synthetic_nodes_root": str,
     },
     "indexes": {
-        "sqlite_path": None,
-        "vector_table": "chunk_vectors",
-        "graph_nodes_table": "graph_nodes",
-        "graph_edges_table": "graph_edges",
-    },
-    "indexing": {
-        "embedding_batch_size": 16,
-        "rebuild_policy": "missing_or_stale",
-        "dirty_index_strategy": "block",
-        "missing_vectors": "block",
-        "store_embedding_vectors_as_json": True,
+        "vector_table": str,
+        "graph_nodes_table": str,
+        "graph_edges_table": str,
     },
     "coverage": {
-        "min_selected_chunks": 1,
-        "max_selected_chunks": 6,
+        "min_selected_chunks": int,
+        "max_selected_chunks": int,
         "require_surface_contributions": {
-            "lexical_index_surface": True,
-            "vector_index_surface": False,
-            "graph_layer": True,
-            "primary_corpus": True,
-            "synthetic_nodes": False,
+            "lexical_index_surface": bool,
+            "vector_index_surface": bool,
+            "graph_layer": bool,
+            "primary_corpus": bool,
+            "synthetic_nodes": bool,
         },
-        "graph_expansion_hop_limit": 1,
-        "allow_no_retrieval_needed": False,
+        "graph_expansion_hop_limit": int,
+        "allow_no_retrieval_needed": bool,
     },
 }
 
@@ -103,7 +89,7 @@ class RuntimeConfig:
 
     @property
     def data_root(self) -> Path:
-        return self.resolve_path(str(self.raw["runtime"]["data_root"]))
+        return self.resolve_path(self.raw["runtime"]["data_root"])
 
     @property
     def max_retrieval_chunks(self) -> int:
@@ -117,19 +103,36 @@ class RuntimeConfig:
     def llm_max_output_tokens(self) -> int:
         return int(self.raw["llm"]["max_output_tokens"])
 
-    def resolve_path(self, raw_path: str | None) -> Path:
-        if not raw_path:
-            return self.repo_root
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = (self.repo_root / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-        return candidate
+    @property
+    def semantic_extraction_model(self) -> str | None:
+        value = self.raw["semantic_extraction"]["model"]
+        return None if value is None else str(value)
 
-    def source_roots(self) -> tuple[ConfiguredSourceRoot, ...]:
+    @property
+    def semantic_extraction_base_url(self) -> str:
+        return str(self.raw["semantic_extraction"]["base_url"])
+
+    @property
+    def semantic_extraction_request_timeout_seconds(self) -> int:
+        return int(self.raw["semantic_extraction"]["request_timeout_seconds"])
+
+    @property
+    def embedding_model(self) -> str | None:
+        value = self.raw["embeddings"]["model"]
+        return None if value is None else str(value)
+
+    @property
+    def embedding_base_url(self) -> str:
+        return str(self.raw["embeddings"]["base_url"])
+
+    @property
+    def embedding_request_timeout_seconds(self) -> int:
+        return int(self.raw["embeddings"]["request_timeout_seconds"])
+
+    @property
+    def corpus_roots(self) -> tuple[ConfiguredSourceRoot, ...]:
         roots: list[ConfiguredSourceRoot] = []
-        for entry in list(self.raw["paths"]["corpus_roots"]):
+        for entry in self.raw["paths"]["corpus_roots"]:
             roots.append(
                 ConfiguredSourceRoot(
                     label=str(entry["label"]),
@@ -140,24 +143,57 @@ class RuntimeConfig:
 
     @property
     def synthetic_nodes_root(self) -> Path:
-        return self.resolve_path(str(self.raw["paths"]["synthetic_nodes_root"]))
+        return self.resolve_path(self.raw["paths"]["synthetic_nodes_root"])
 
     @property
-    def sqlite_path(self) -> Path | None:
-        raw_path = self.raw["indexes"].get("sqlite_path")
-        if raw_path in {None, ""}:
-            return None
-        return self.resolve_path(str(raw_path))
+    def vector_table(self) -> str:
+        return str(self.raw["indexes"]["vector_table"])
 
+    @property
+    def graph_nodes_table(self) -> str:
+        return str(self.raw["indexes"]["graph_nodes_table"])
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = copy.deepcopy(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value)
+    @property
+    def graph_edges_table(self) -> str:
+        return str(self.raw["indexes"]["graph_edges_table"])
+
+    @property
+    def coverage_min_selected_chunks(self) -> int:
+        return int(self.raw["coverage"]["min_selected_chunks"])
+
+    @property
+    def coverage_max_selected_chunks(self) -> int:
+        return int(self.raw["coverage"]["max_selected_chunks"])
+
+    @property
+    def coverage_require_surface_contributions(self) -> dict[str, bool]:
+        return dict(self.raw["coverage"]["require_surface_contributions"])
+
+    @property
+    def coverage_graph_expansion_hop_limit(self) -> int:
+        return int(self.raw["coverage"]["graph_expansion_hop_limit"])
+
+    @property
+    def coverage_allow_no_retrieval_needed(self) -> bool:
+        return bool(self.raw["coverage"]["allow_no_retrieval_needed"])
+
+    def resolve_path(self, raw_path: str | Path) -> Path:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = (self.repo_root / candidate).resolve()
         else:
-            merged[key] = copy.deepcopy(value)
-    return merged
+            candidate = candidate.resolve()
+        return candidate
+
+
+def _resolve_config_path(repo_root: Path, explicit_config_path: str | None = None) -> Path:
+    raw_path = explicit_config_path or os.environ.get("SEMANTIC_TRAVERSAL_CONFIG") or DEFAULT_CONFIG_FILENAME
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = (repo_root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate
 
 
 def _assert_no_secrets(payload: Any, *, path: str = "root") -> None:
@@ -172,19 +208,66 @@ def _assert_no_secrets(payload: Any, *, path: str = "root") -> None:
         for index, value in enumerate(payload):
             _assert_no_secrets(value, path=f"{path}[{index}]")
         return
-    if isinstance(payload, str):
-        if payload.startswith(_SECRET_VALUE_PREFIXES):
-            raise ConfigError(f"Config YAML appears to contain a secret value at {path}")
+    if isinstance(payload, str) and payload.startswith(_SECRET_VALUE_PREFIXES):
+        raise ConfigError(f"Config YAML appears to contain a secret value at {path}")
 
 
-def _resolve_config_path(repo_root: Path, explicit_config_path: str | None = None) -> Path:
-    raw_path = explicit_config_path or os.environ.get("SEMANTIC_TRAVERSAL_CONFIG") or DEFAULT_CONFIG_FILENAME
-    candidate = Path(raw_path)
-    if not candidate.is_absolute():
-        candidate = (repo_root / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    return candidate
+def _validate_type(value: Any, expected_type: Any, *, path: str) -> None:
+    if isinstance(expected_type, dict):
+        if not isinstance(value, dict):
+            raise ConfigError(f"Invalid runtime config field type: {path} expected mapping")
+        _validate_mapping(value, expected_type, path=path)
+        return
+    if isinstance(expected_type, list):
+        if not isinstance(value, list):
+            raise ConfigError(f"Invalid runtime config field type: {path} expected list")
+        if len(expected_type) != 1:
+            raise ConfigError("Internal config schema error: list schema must have one item schema")
+        item_schema = expected_type[0]
+        for index, item in enumerate(value):
+            _validate_type(item, item_schema, path=f"{path}[{index}]")
+        return
+    if isinstance(expected_type, tuple):
+        if not any(_matches_exact_type(value, item_type) for item_type in expected_type):
+            expected_name = " or ".join(_describe_type(t) for t in expected_type)
+            raise ConfigError(f"Invalid runtime config field type: {path} expected {expected_name}")
+        return
+    if not _matches_exact_type(value, expected_type):
+        raise ConfigError(f"Invalid runtime config field type: {path} expected {_describe_type(expected_type)}")
+
+
+def _matches_exact_type(value: Any, expected_type: Any) -> bool:
+    if expected_type is str:
+        return type(value) is str
+    if expected_type is int:
+        return type(value) is int
+    if expected_type is bool:
+        return type(value) is bool
+    if expected_type is type(None):
+        return value is None
+    return isinstance(value, expected_type)
+
+
+def _describe_type(expected_type: Any) -> str:
+    if expected_type is str:
+        return "str"
+    if expected_type is int:
+        return "int"
+    if expected_type is bool:
+        return "bool"
+    if expected_type is type(None):
+        return "None"
+    return getattr(expected_type, "__name__", str(expected_type))
+
+
+def _validate_mapping(payload: dict[str, Any], schema: dict[str, Any], *, path: str) -> None:
+    unknown_fields = sorted(set(payload) - set(schema))
+    if unknown_fields:
+        raise ConfigError(f"Unknown runtime config field: {path}.{unknown_fields[0]}")
+    for key, expected_type in schema.items():
+        if key not in payload:
+            raise ConfigError(f"Missing required runtime config field: {path}.{key}")
+        _validate_type(payload[key], expected_type, path=f"{path}.{key}")
 
 
 def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> RuntimeConfig:
@@ -193,9 +276,9 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
     if not resolved_config_path.exists():
         raise FileNotFoundError(f"Runtime config not found: {resolved_config_path}")
     raw_text = resolved_config_path.read_text(encoding="utf-8")
-    parsed = yaml.safe_load(raw_text) or {}
+    parsed = yaml.safe_load(raw_text)
     if not isinstance(parsed, dict):
         raise ConfigError(f"Runtime config must parse to a mapping: {resolved_config_path}")
     _assert_no_secrets(parsed)
-    merged = _deep_merge(_DEFAULT_CONFIG, parsed)
-    return RuntimeConfig(repo_root=resolved_repo_root, config_path=resolved_config_path, raw=merged)
+    _validate_mapping(parsed, _EXPECTED_CONFIG_SCHEMA, path="root")
+    return RuntimeConfig(repo_root=resolved_repo_root, config_path=resolved_config_path, raw=parsed)
