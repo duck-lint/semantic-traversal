@@ -1,0 +1,66 @@
+runtime:
+  data_root: ".semantic-traversal-data"
+  max_retrieval_chunks: 6
+  require_semantic_extraction: true
+  require_vector_surface: false
+  require_graph_surface: true
+  require_lexical_surface: true
+  require_primary_corpus_surface: true
+  require_synthetic_node_surface: false
+
+llm:
+  provider: "openai"
+  mode: "auto"
+  model: "gpt-5.4-mini"
+  max_output_tokens: 400
+  runtime_budget:
+    max_input_tokens: null
+    max_output_tokens: 400
+    max_total_tokens: null
+    timeout_seconds: null
+
+semantic_extraction:
+  provider: "ollama"
+  model: null
+  base_url: "http://localhost:11434"
+  request_timeout_seconds: 20
+
+embeddings:
+  provider: "ollama"
+  model: null
+  base_url: "http://localhost:11434"
+  request_timeout_seconds: 20
+  vector_dimensions: null
+
+paths:
+  corpus_roots:
+    - label: "corpus"
+      path: "corpus"
+    - label: "tests-fixtures"
+      path: "tests/fixtures"
+  synthetic_nodes_root: "corpus/SYNTHETIC_NODES"
+
+indexes:
+  sqlite_path: null
+  vector_table: "chunk_vectors"
+  graph_nodes_table: "graph_nodes"
+  graph_edges_table: "graph_edges"
+
+indexing:
+  embedding_batch_size: 16
+  rebuild_policy: "missing_or_stale"
+  dirty_index_strategy: "block"
+  missing_vectors: "block"
+  store_embedding_vectors_as_json: true
+
+coverage:
+  min_selected_chunks: 1
+  max_selected_chunks: 6
+  require_surface_contributions:
+    lexical_index_surface: true
+    vector_index_surface: false
+    graph_layer: true
+    primary_corpus: true
+    synthetic_nodes: false
+  graph_expansion_hop_limit: 1
+  allow_no_retrieval_needed: false

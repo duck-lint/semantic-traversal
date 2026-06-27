@@ -7,8 +7,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol
 
-
-DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
+from .config import RuntimeConfig
 
 
 class LLMBackend(Protocol):
@@ -63,9 +62,10 @@ class StubLLMBackend:
 
 
 class OpenAIResponsesBackend:
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, max_output_tokens: int) -> None:
         self._client = _build_openai_client(api_key=api_key)
         self._model = model
+        self._max_output_tokens = max_output_tokens
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
         response = self._client.responses.create(
@@ -78,7 +78,7 @@ class OpenAIResponsesBackend:
                 "Preserve the raw user intent when semantic extraction is uncertain."
             ),
             input=json.dumps(synthesis_context_packet, ensure_ascii=True, indent=2),
-            max_output_tokens=400,
+            max_output_tokens=self._max_output_tokens,
             store=False,
         )
         assistant_text = (getattr(response, "output_text", "") or "").strip()
@@ -113,15 +113,20 @@ def load_dotenv_local(repo_root: Path) -> dict[str, str]:
     return values
 
 
-def resolve_openai_settings(repo_root: Path, model_override: str | None = None) -> tuple[str | None, str]:
+def resolve_openai_settings(
+    repo_root: Path,
+    config: RuntimeConfig,
+    model_override: str | None = None,
+) -> tuple[str | None, str, int]:
     dotenv_values = load_dotenv_local(repo_root)
     api_key = os.environ.get("OPENAI_API_KEY") or dotenv_values.get("OPENAI_API_KEY")
-    model = model_override or os.environ.get("OPENAI_MODEL") or dotenv_values.get("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
-    return api_key, model
+    model = model_override or config.llm_model
+    return api_key, model, config.llm_max_output_tokens
 
 
 def resolve_llm_backend(
     repo_root: Path,
+    config: RuntimeConfig,
     llm_mode: str,
     model_override: str | None = None,
     stub_prefix: str = "Stub assistant response",
@@ -129,14 +134,18 @@ def resolve_llm_backend(
     if llm_mode == "stub":
         return StubLLMBackend(prefix=stub_prefix)
 
-    api_key, model = resolve_openai_settings(repo_root=repo_root, model_override=model_override)
+    api_key, model, max_output_tokens = resolve_openai_settings(
+        repo_root=repo_root,
+        config=config,
+        model_override=model_override,
+    )
     if not api_key:
         if llm_mode == "auto":
             return StubLLMBackend(prefix=stub_prefix)
         raise LiveLLMNotConfigured("OPENAI_API_KEY is not available for live execution.")
 
     if llm_mode == "auto":
-        return OpenAIResponsesBackend(api_key=api_key, model=model)
+        return OpenAIResponsesBackend(api_key=api_key, model=model, max_output_tokens=max_output_tokens)
     if llm_mode == "live":
-        return OpenAIResponsesBackend(api_key=api_key, model=model)
+        return OpenAIResponsesBackend(api_key=api_key, model=model, max_output_tokens=max_output_tokens)
     raise ValueError(f"Unsupported llm_mode: {llm_mode}")

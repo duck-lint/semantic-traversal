@@ -10,10 +10,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from semantic_traversal.config import load_runtime_config
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 class LazyOpenAIImportTests(unittest.TestCase):
     def _import_llm_module(self):
         return importlib.import_module("semantic_traversal.llm")
+
+    def _config(self):
+        return load_runtime_config(repo_root=REPO_ROOT)
 
     def test_module_import_succeeds_without_openai_installed(self) -> None:
         original_import = builtins.__import__
@@ -42,7 +49,7 @@ class LazyOpenAIImportTests(unittest.TestCase):
                     "import_module",
                     side_effect=AssertionError("stub mode should not import openai"),
                 ) as mocked_import:
-                    backend = llm_module.resolve_llm_backend(repo_root=Path(temp_dir), llm_mode="stub")
+                    backend = llm_module.resolve_llm_backend(repo_root=Path(temp_dir), config=self._config(), llm_mode="stub")
 
         self.assertIsInstance(backend, llm_module.StubLLMBackend)
         mocked_import.assert_not_called()
@@ -56,7 +63,7 @@ class LazyOpenAIImportTests(unittest.TestCase):
                     "import_module",
                     side_effect=AssertionError("auto mode without a key should not import openai"),
                 ) as mocked_import:
-                    backend = llm_module.resolve_llm_backend(repo_root=Path(temp_dir), llm_mode="auto")
+                    backend = llm_module.resolve_llm_backend(repo_root=Path(temp_dir), config=self._config(), llm_mode="auto")
 
         self.assertIsInstance(backend, llm_module.StubLLMBackend)
         mocked_import.assert_not_called()
@@ -71,7 +78,7 @@ class LazyOpenAIImportTests(unittest.TestCase):
                     side_effect=ModuleNotFoundError("No module named 'openai'"),
                 ) as mocked_import:
                     with self.assertRaises(llm_module.LiveLLMNotConfigured) as exc_info:
-                        llm_module.resolve_llm_backend(repo_root=Path(temp_dir), llm_mode="live")
+                        llm_module.resolve_llm_backend(repo_root=Path(temp_dir), config=self._config(), llm_mode="live")
 
         self.assertIn("python -m pip install openai", str(exc_info.exception))
         self.assertIn("--llm-mode stub", str(exc_info.exception))
@@ -87,7 +94,7 @@ class LazyOpenAIImportTests(unittest.TestCase):
                     return_value=SimpleNamespace(),
                 ) as mocked_import:
                     with self.assertRaises(llm_module.LiveLLMNotConfigured) as exc_info:
-                        llm_module.resolve_llm_backend(repo_root=Path(temp_dir), llm_mode="live")
+                        llm_module.resolve_llm_backend(repo_root=Path(temp_dir), config=self._config(), llm_mode="live")
 
         self.assertIn("openai.OpenAI", str(exc_info.exception))
         self.assertIn("--llm-mode stub", str(exc_info.exception))

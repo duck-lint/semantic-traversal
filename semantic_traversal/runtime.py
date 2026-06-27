@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .config import RuntimeConfig, load_runtime_config
+from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .semantic_extraction import (
@@ -62,10 +65,6 @@ class SemanticExtractionArtifacts:
     contextual_raw_artifact: dict[str, Any]
 
 
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 STOP_WORDS = {
     "a",
@@ -98,7 +97,10 @@ STOP_WORDS = {
     "you",
     "your",
 }
-RETRIEVAL_LIMIT = 6
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _default_thread_document(thread_id: str, created_at: str) -> dict[str, Any]:
@@ -131,158 +133,39 @@ def _default_thread_state(thread_id: str, created_at: str) -> dict[str, Any]:
     }
 
 
-def _build_synthesis_context_packet(
-    thread_document: dict[str, Any],
-    prior_thread_state: dict[str, Any],
-    user_input: str,
-    turn_id: int,
-    semantic_context_packet: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
-    retrieval_packet: dict[str, Any],
-    coverage_report: dict[str, Any],
-) -> dict[str, Any]:
-    coverage_decision = str(coverage_report.get("decision") or "blocked")
-    return {
-        "thread_id": thread_document["thread_id"],
-        "turn_id": turn_id,
-        "user_input": user_input,
-        "raw_user_input": user_input,
-        "prior_thread_state": prior_thread_state,
-        "visible_transcript_tail": thread_document["messages"][-6:],
-        "semantic_extraction": semantic_context_packet["semantic_extraction"],
-        "semantic_context_packet": semantic_context_packet,
-        "semantic_traversal_manifest": semantic_traversal_manifest,
-        "retrieval_packet": retrieval_packet,
-        "approved_retrieval_packet": retrieval_packet if coverage_decision == "approved" else None,
-        "coverage_report": coverage_report,
-        "runtime_outcome": "completed" if coverage_decision == "approved" else "blocked",
-        "blocking_reasons": list(coverage_report.get("blocking_reasons") or []),
-        "output_requirements": [
-            "Respond directly to the latest raw user input.",
-            "Preserve continuity with the prior thread state.",
-            "Do not emit a user-facing answer when the runtime outcome is blocked.",
-            "Use retrieved material only when it has been approved for synthesis.",
-            "Do not invent retrieval results or claim thesis-valid traversal when blocked.",
-        ],
-    }
+def _dedupe_reasons(reasons: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for reason in reasons:
+        if reason not in deduped:
+            deduped.append(reason)
+    return deduped
 
 
-def _extract_semantic_outputs(
-    *,
-    isolated_packet: dict[str, Any],
-    contextual_packet: dict[str, Any],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    isolated_payload = isolated_packet.get("parsed_payload") if isinstance(isolated_packet.get("parsed_payload"), dict) else {}
-    contextual_payload = contextual_packet.get("parsed_payload") if isinstance(contextual_packet.get("parsed_payload"), dict) else {}
-    perturbation_semantic_graph = contextual_payload.get("perturbation_semantic_graph") or isolated_payload.get("perturbation_semantic_graph")
-    semantic_coverage_target = (
-        contextual_payload.get("semantic_coverage_target")
-        or contextual_payload.get("coverage_target")
-        or isolated_payload.get("semantic_coverage_target")
-        or isolated_payload.get("coverage_target")
-    )
-    return (
-        perturbation_semantic_graph if isinstance(perturbation_semantic_graph, dict) else None,
-        semantic_coverage_target if isinstance(semantic_coverage_target, dict) else None,
-    )
+def _extract_lexical_query_terms(user_input: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for token in QUERY_TOKEN_RE.findall(user_input.lower()):
+        if len(token) < 3 or token in STOP_WORDS or token.isdigit():
+            continue
+        if token not in seen:
+            seen.add(token)
+            terms.append(token)
+    return terms
 
 
-def _build_semantic_context_packet(
-    *,
-    thread_document: dict[str, Any],
-    prior_thread_state: dict[str, Any],
-    user_input: str,
-    turn_id: int,
-    semantic_extraction: SemanticExtractionArtifacts,
-) -> dict[str, Any]:
-    perturbation_semantic_graph, semantic_coverage_target = _extract_semantic_outputs(
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
-    )
-    retrieval_preparation = _build_retrieval_preparation(
-        user_input=user_input,
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
-    )
-    return {
-        "thread_id": thread_document["thread_id"],
-        "turn_id": turn_id,
-        "user_input": user_input,
-        "raw_user_input": user_input,
-        "perturbation_semantic_graph": perturbation_semantic_graph,
-        "semantic_coverage_target": semantic_coverage_target,
-        "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
-        "retrieval_preparation": retrieval_preparation,
-        "semantic_extraction": {
-            "isolated": semantic_extraction.isolated_packet,
-            "contextual": semantic_extraction.contextual_packet,
-            "statuses": {
-                "backend_mode": semantic_extraction.isolated_packet["backend_mode"],
-                "isolated_status": semantic_extraction.isolated_packet["status"],
-                "contextual_status": semantic_extraction.contextual_packet["status"],
-            },
-        },
-        "prior_thread_state_context": {
-            "latest_turn_id": prior_thread_state.get("latest_turn_id", 0),
-            "conversation_summary": prior_thread_state.get("conversation_summary", ""),
-            "recent_semantic_trajectory": list(prior_thread_state.get("recent_semantic_trajectory") or []),
-            "recent_messages": list(prior_thread_state.get("recent_messages") or [])[-4:],
-        },
-        "explicit_limitation": "raw user input remains authoritative; semantic extraction is additive only",
-    }
+def _collect_string_terms(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return extract_semantic_terms(value)
+    if isinstance(value, list):
+        terms: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                for term in extract_semantic_terms(item):
+                    if term not in terms:
+                        terms.append(term)
+        return terms
+    return []
 
-
-def _build_retrieval_preparation(
-    *,
-    user_input: str,
-    isolated_packet: dict[str, Any],
-    contextual_packet: dict[str, Any],
-) -> dict[str, Any]:
-    raw_lexical_terms = _extract_lexical_query_terms(user_input)
-    candidate_term_sources: dict[str, list[str]] = {}
-    for term in raw_lexical_terms:
-        candidate_term_sources.setdefault(term, []).append("raw_user_input")
-
-    isolated_hint_terms, isolated_sources = _collect_extraction_hint_terms(
-        isolated_packet.get("parsed_payload"),
-        extraction_mode="isolated",
-    )
-    contextual_hint_terms, contextual_sources = _collect_extraction_hint_terms(
-        contextual_packet.get("parsed_payload"),
-        extraction_mode="contextual",
-    )
-    extraction_hint_terms: list[str] = []
-    for term in isolated_hint_terms:
-        if term not in extraction_hint_terms:
-            extraction_hint_terms.append(term)
-        for source_label in isolated_sources.get(term, []):
-            if source_label not in candidate_term_sources.setdefault(term, []):
-                candidate_term_sources[term].append(source_label)
-    for term in contextual_hint_terms:
-        if term not in extraction_hint_terms:
-            extraction_hint_terms.append(term)
-        for source_label in contextual_sources.get(term, []):
-            if source_label not in candidate_term_sources.setdefault(term, []):
-                candidate_term_sources[term].append(source_label)
-
-    combined_candidate_terms: list[str] = []
-    for term in raw_lexical_terms + extraction_hint_terms:
-        if term not in combined_candidate_terms:
-            combined_candidate_terms.append(term)
-
-    model_proposed_only_terms = [
-        term
-        for term in extraction_hint_terms
-        if "raw_user_input" not in candidate_term_sources.get(term, [])
-    ]
-    return {
-        "raw_lexical_terms": raw_lexical_terms,
-        "extraction_hint_terms": extraction_hint_terms,
-        "combined_candidate_terms": combined_candidate_terms,
-        "candidate_term_sources": candidate_term_sources,
-        "model_proposed_only_terms": model_proposed_only_terms,
-        "used_additively_for_retrieval": True,
-    }
 
 def _collect_extraction_hint_terms(
     parsed_payload: dict[str, Any] | None,
@@ -310,273 +193,175 @@ def _collect_extraction_hint_terms(
             ]
 
     terms: list[str] = []
-    seen: set[str] = set()
     sources: dict[str, list[str]] = {}
     for source_label, value in allowed_fields:
-        values = value if isinstance(value, list) else [value]
-        for item in values:
-            if not isinstance(item, str):
-                continue
-            for term in extract_semantic_terms(item):
-                if term not in seen:
-                    seen.add(term)
-                    terms.append(term)
-                if source_label not in sources.setdefault(term, []):
-                    sources[term].append(source_label)
+        for term in _collect_string_terms(value):
+            if term not in terms:
+                terms.append(term)
+            if source_label not in sources.setdefault(term, []):
+                sources[term].append(source_label)
     return terms, sources
 
 
-def _build_diagnostic_retrieval_artifacts(
+def _extract_semantic_outputs(
     *,
-    repo_root: Path,
-    data_root: Path,
-    semantic_context_packet: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    retrieval_preparation = dict(semantic_context_packet.get("retrieval_preparation") or {})
-    raw_lexical_terms = list(retrieval_preparation.get("raw_lexical_terms") or [])
-    extraction_hint_terms = list(retrieval_preparation.get("extraction_hint_terms") or [])
-    query_terms = list(retrieval_preparation.get("combined_candidate_terms") or [])
-    database_path = (data_root / "ingestion" / "latent_space.sqlite3").resolve()
-    traversal_manifest: dict[str, Any] = {
-        "thread_id": semantic_context_packet["thread_id"],
-        "turn_id": semantic_context_packet["turn_id"],
-        "query_terms": query_terms,
-        "query_terms_available": bool(query_terms),
-        "diagnostic_retrieval_mode": "lexical_sqlite_component_observation",
-        "evaluated_activation_surfaces": [
-            {"surface": "lexical_index_surface", "status": "diagnostic_only"},
-            {"surface": "vector_index_surface", "status": "not_implemented"},
-            {"surface": "graph_layer", "status": "not_implemented"},
-        ],
-        "selected_chunk_ids": [],
-        "candidate_count": 0,
-        "selection_reasons": [],
-        "limitations": [
-            "latent_space_activation is not thesis-valid in this runtime",
-            "semantic_traversal is not implemented for the normal runtime",
-            "lexical SQLite observations are diagnostic only",
-        ],
-        "database_path": str(database_path),
-        "repo_root": str(repo_root),
-        "retrieval_preparation": retrieval_preparation,
+    isolated_packet: dict[str, Any],
+    contextual_packet: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    isolated_payload = isolated_packet.get("parsed_payload") if isinstance(isolated_packet.get("parsed_payload"), dict) else {}
+    contextual_payload = contextual_packet.get("parsed_payload") if isinstance(contextual_packet.get("parsed_payload"), dict) else {}
+    semantic_payload = contextual_payload or isolated_payload
+    semantic_coverage_target = semantic_payload.get("semantic_coverage_target") or semantic_payload.get("coverage_target")
+    return (
+        semantic_payload if isinstance(semantic_payload, dict) else {},
+        semantic_coverage_target if isinstance(semantic_coverage_target, dict) else None,
+    )
+
+
+def _validate_semantic_context_payload(payload: dict[str, Any], *, raw_user_input: str) -> list[str]:
+    reasons: list[str] = []
+    if payload.get("raw_user_input") != raw_user_input:
+        reasons.append("semantic extraction did not preserve raw_user_input")
+    required_fields = {
+        "perturbation_nodes": list,
+        "contextual_salt_nodes": list,
+        "perturbation_semantic_graph": dict,
+        "semantic_coverage_target": dict,
+        "activation_hints": dict,
+        "limitations": list,
     }
-    retrieval_packet: dict[str, Any] = {
-        "thread_id": semantic_context_packet["thread_id"],
-        "turn_id": semantic_context_packet["turn_id"],
-        "query_terms": query_terms,
+    for field_name, expected_type in required_fields.items():
+        value = payload.get(field_name)
+        if not isinstance(value, expected_type):
+            reasons.append(f"{field_name} missing")
+    return reasons
+
+
+def _build_retrieval_preparation(
+    *,
+    user_input: str,
+    isolated_packet: dict[str, Any],
+    contextual_packet: dict[str, Any],
+    semantic_coverage_target: dict[str, Any] | None,
+) -> dict[str, Any]:
+    raw_lexical_terms = _extract_lexical_query_terms(user_input)
+    candidate_term_sources: dict[str, list[str]] = {}
+    for term in raw_lexical_terms:
+        candidate_term_sources.setdefault(term, []).append("raw_user_input")
+
+    isolated_hint_terms, isolated_sources = _collect_extraction_hint_terms(
+        isolated_packet.get("parsed_payload"),
+        extraction_mode="isolated",
+    )
+    contextual_hint_terms, contextual_sources = _collect_extraction_hint_terms(
+        contextual_packet.get("parsed_payload"),
+        extraction_mode="contextual",
+    )
+    coverage_target_terms: list[str] = []
+    if semantic_coverage_target:
+        for key in ("must_preserve", "should_include"):
+            for term in _collect_string_terms(semantic_coverage_target.get(key)):
+                if term not in coverage_target_terms:
+                    coverage_target_terms.append(term)
+                if "semantic_coverage_target" not in candidate_term_sources.setdefault(term, []):
+                    candidate_term_sources[term].append("semantic_coverage_target")
+        query_text = semantic_coverage_target.get("query_text")
+        for term in _collect_string_terms(query_text):
+            if term not in coverage_target_terms:
+                coverage_target_terms.append(term)
+            if "semantic_coverage_target.query_text" not in candidate_term_sources.setdefault(term, []):
+                candidate_term_sources[term].append("semantic_coverage_target.query_text")
+
+    extraction_hint_terms: list[str] = []
+    for term in isolated_hint_terms:
+        if term not in extraction_hint_terms:
+            extraction_hint_terms.append(term)
+        for source_label in isolated_sources.get(term, []):
+            if source_label not in candidate_term_sources.setdefault(term, []):
+                candidate_term_sources[term].append(source_label)
+    for term in contextual_hint_terms:
+        if term not in extraction_hint_terms:
+            extraction_hint_terms.append(term)
+        for source_label in contextual_sources.get(term, []):
+            if source_label not in candidate_term_sources.setdefault(term, []):
+                candidate_term_sources[term].append(source_label)
+
+    combined_candidate_terms: list[str] = []
+    for term in raw_lexical_terms + extraction_hint_terms + coverage_target_terms:
+        if term not in combined_candidate_terms:
+            combined_candidate_terms.append(term)
+
+    model_proposed_only_terms = [
+        term
+        for term in extraction_hint_terms + coverage_target_terms
+        if "raw_user_input" not in candidate_term_sources.get(term, [])
+    ]
+    return {
         "raw_lexical_terms": raw_lexical_terms,
         "extraction_hint_terms": extraction_hint_terms,
-        "combined_candidate_terms": query_terms,
-        "candidate_term_sources": dict(retrieval_preparation.get("candidate_term_sources") or {}),
-        "model_proposed_only_terms": list(retrieval_preparation.get("model_proposed_only_terms") or []),
-        "query_terms_available": bool(query_terms),
-        "retrieval_mode": "lexical_sqlite_component_observation",
-        "selection_limit": RETRIEVAL_LIMIT,
-        "candidate_count": 0,
-        "matched_chunk_count": 0,
-        "diagnostic_only": True,
-        "approved_for_synthesis": False,
-        "retrieval_observation": "not_attempted",
-        "selected_chunks": [],
-        "database_path": str(database_path),
+        "coverage_target_terms": coverage_target_terms,
+        "combined_candidate_terms": combined_candidate_terms,
+        "candidate_term_sources": candidate_term_sources,
+        "model_proposed_only_terms": model_proposed_only_terms,
+        "used_additively_for_retrieval": True,
     }
 
-    if not database_path.exists():
-        traversal_manifest["selection_reasons"].append("ingestion SQLite database not found")
-        retrieval_packet["retrieval_observation"] = "index_missing"
-        return traversal_manifest, retrieval_packet
 
-    if not query_terms:
-        traversal_manifest["selection_reasons"].append("no lexical or additive extraction candidate terms were available")
-        retrieval_packet["retrieval_observation"] = "no_query_terms"
-        return traversal_manifest, retrieval_packet
-
-    connection = sqlite3.connect(database_path)
-    try:
-        connection.row_factory = sqlite3.Row
-        candidates = _query_lexical_candidates(connection, query_terms=query_terms)
-    finally:
-        connection.close()
-
-    traversal_manifest["candidate_count"] = len(candidates)
-    retrieval_packet["candidate_count"] = len(candidates)
-
-    if not candidates:
-        traversal_manifest["selection_reasons"].append("no chunk text or metadata matched the lexical candidate terms")
-        retrieval_packet["retrieval_observation"] = "no_matches"
-        return traversal_manifest, retrieval_packet
-
-    selected_chunks = candidates[:RETRIEVAL_LIMIT]
-    traversal_manifest["selected_chunk_ids"] = [chunk["chunk_id"] for chunk in selected_chunks]
-    traversal_manifest["selection_reasons"] = [chunk["selection_reason"] for chunk in selected_chunks]
-    retrieval_packet["matched_chunk_count"] = len(selected_chunks)
-    retrieval_packet["retrieval_observation"] = "matched_chunks"
-    retrieval_packet["selected_chunks"] = selected_chunks
-    return traversal_manifest, retrieval_packet
-
-
-def _dedupe_reasons(reasons: list[str]) -> list[str]:
-    deduped: list[str] = []
-    for reason in reasons:
-        if reason not in deduped:
-            deduped.append(reason)
-    return deduped
-
-
-def _build_blocking_reasons(
+def _build_semantic_context_packet(
     *,
-    semantic_context_packet: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
-    retrieval_packet: dict[str, Any],
-) -> list[str]:
-    statuses = dict(semantic_context_packet.get("semantic_extraction", {}).get("statuses") or {})
-    backend_mode = str(statuses.get("backend_mode") or "unknown")
-    isolated_status = str(statuses.get("isolated_status") or "unknown")
-    contextual_status = str(statuses.get("contextual_status") or "unknown")
-    reasons: list[str] = []
-    if backend_mode in {"disabled", "stub", "unavailable"}:
-        reasons.append(f"semantic_context_extraction backend `{backend_mode}` is not valid for the normal runtime")
-    if isolated_status != "parsed":
-        reasons.append(f"isolated semantic extraction did not produce a valid parsed result: {isolated_status}")
-    if contextual_status != "parsed":
-        reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
-    if semantic_context_packet.get("perturbation_semantic_graph") is None:
-        reasons.append("perturbation_semantic_graph is missing")
-    if semantic_context_packet.get("semantic_coverage_target") is None:
-        reasons.append("semantic_coverage_target is missing")
-    reasons.append("latent_space_activation is not implemented for the thesis-valid normal runtime")
-    reasons.append("semantic_traversal is not implemented for the thesis-valid normal runtime")
-
-    retrieval_observation = str(retrieval_packet.get("retrieval_observation") or "not_attempted")
-    if retrieval_observation == "index_missing":
-        reasons.append("lexical index diagnostic database is unavailable")
-    elif retrieval_observation == "no_query_terms":
-        reasons.append("no lexical candidate terms were available for diagnostic retrieval")
-    elif retrieval_observation == "no_matches":
-        reasons.append("lexical diagnostic retrieval found no matching chunks")
-    elif retrieval_observation == "matched_chunks":
-        reasons.append(
-            "lexical SQLite diagnostic retrieval cannot approve synthesis without a semantic_traversal_manifest generated from latent_space_activation"
-        )
-
-    if not semantic_traversal_manifest.get("selected_chunk_ids"):
-        reasons.append("no thesis-valid semantic traversal candidates were produced")
-    return _dedupe_reasons(reasons)
-
-
-def _build_coverage_report(
-    *,
-    semantic_context_packet: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
-    retrieval_packet: dict[str, Any],
-    semantic_traversal_manifest_hash: str,
-    retrieval_packet_hash: str,
+    thread_document: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+    user_input: str,
+    turn_id: int,
+    semantic_extraction: SemanticExtractionArtifacts,
 ) -> dict[str, Any]:
-    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
-    semantic_coverage_target_hash = (
-        sha256_json(semantic_coverage_target)
-        if isinstance(semantic_coverage_target, dict)
-        else None
+    semantic_payload, semantic_coverage_target = _extract_semantic_outputs(
+        isolated_packet=semantic_extraction.isolated_packet,
+        contextual_packet=semantic_extraction.contextual_packet,
+    )
+    contract_reasons = _validate_semantic_context_payload(semantic_payload, raw_user_input=user_input) if semantic_payload else [
+        "semantic extraction parsed but failed contract validation",
+    ]
+    retrieval_preparation = _build_retrieval_preparation(
+        user_input=user_input,
+        isolated_packet=semantic_extraction.isolated_packet,
+        contextual_packet=semantic_extraction.contextual_packet,
+        semantic_coverage_target=semantic_coverage_target,
     )
     return {
-        "decision": "blocked",
-        "semantic_coverage_target_hash": semantic_coverage_target_hash,
-        "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
-        "retrieval_packet_hash": retrieval_packet_hash,
-        "evaluated_activation_surfaces": list(semantic_traversal_manifest.get("evaluated_activation_surfaces") or []),
-        "blocking_reasons": _build_blocking_reasons(
-            semantic_context_packet=semantic_context_packet,
-            semantic_traversal_manifest=semantic_traversal_manifest,
-            retrieval_packet=retrieval_packet,
-        ),
-        "limits": {
-            "selection_limit": RETRIEVAL_LIMIT,
-            "diagnostic_retrieval_observation": retrieval_packet.get("retrieval_observation"),
+        "thread_id": thread_document["thread_id"],
+        "turn_id": turn_id,
+        "user_input": user_input,
+        "raw_user_input": user_input,
+        "perturbation_nodes": list(semantic_payload.get("perturbation_nodes") or []),
+        "contextual_salt_nodes": list(semantic_payload.get("contextual_salt_nodes") or []),
+        "perturbation_semantic_graph": semantic_payload.get("perturbation_semantic_graph"),
+        "semantic_coverage_target": semantic_coverage_target,
+        "activation_hints": dict(semantic_payload.get("activation_hints") or {}),
+        "limitations": list(semantic_payload.get("limitations") or []),
+        "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
+        "retrieval_preparation": retrieval_preparation,
+        "semantic_contract_validation": {
+            "valid": not contract_reasons,
+            "reasons": contract_reasons,
         },
         "semantic_extraction": {
-            "backend_mode": semantic_context_packet["semantic_extraction"]["statuses"]["backend_mode"],
-            "isolated_status": semantic_context_packet["semantic_extraction"]["statuses"]["isolated_status"],
-            "contextual_status": semantic_context_packet["semantic_extraction"]["statuses"]["contextual_status"],
-            "used_additively_for_retrieval": True,
-            "limitations": [
-                "semantic extraction does not satisfy the thesis-valid normal runtime unless required semantic outputs are present",
-                "diagnostic lexical retrieval observations are not approved retrieval",
-            ],
+            "isolated": semantic_extraction.isolated_packet,
+            "contextual": semantic_extraction.contextual_packet,
+            "statuses": {
+                "backend_mode": semantic_extraction.isolated_packet["backend_mode"],
+                "isolated_status": semantic_extraction.isolated_packet["status"],
+                "contextual_status": semantic_extraction.contextual_packet["status"],
+            },
         },
-        "diagnostic_retrieval_summary": {
-            "query_terms_used": list(retrieval_packet.get("query_terms") or []),
-            "candidate_count": int(retrieval_packet.get("candidate_count") or 0),
-            "matched_chunk_count": int(retrieval_packet.get("matched_chunk_count") or 0),
-            "selected_chunk_count": len(list(retrieval_packet.get("selected_chunks") or [])),
+        "prior_thread_state_context": {
+            "latest_turn_id": prior_thread_state.get("latest_turn_id", 0),
+            "conversation_summary": prior_thread_state.get("conversation_summary", ""),
+            "recent_semantic_trajectory": list(prior_thread_state.get("recent_semantic_trajectory") or []),
+            "recent_messages": list(prior_thread_state.get("recent_messages") or [])[-4:],
         },
+        "explicit_limitation": "raw user input remains authoritative; semantic extraction is additive only",
     }
-
-
-def _query_lexical_candidates(connection: sqlite3.Connection, *, query_terms: list[str]) -> list[dict[str, Any]]:
-    clauses: list[str] = []
-    parameters: list[str] = []
-    for term in query_terms:
-        like_term = f"%{term}%"
-        term_clause = []
-        for field in ("paragraph_text", "note_title", "section_label", "relative_path", "note_path"):
-            term_clause.append(f"lower({field}) LIKE ?")
-            parameters.append(like_term)
-        clauses.append("(" + " OR ".join(term_clause) + ")")
-
-    sql = (
-        "SELECT chunk_id, note_id, source_root_label, relative_path, note_path, note_title, "
-        "section_id, section_label, section_path_json, paragraph_ordinal, paragraph_text, chunk_hash "
-        "FROM chunks WHERE "
-        + " OR ".join(clauses)
-    )
-    rows = connection.execute(sql, tuple(parameters)).fetchall()
-    candidates: list[dict[str, Any]] = []
-    for row in rows:
-        searchable_text = " ".join(
-            [
-                str(row["note_title"]),
-                str(row["section_label"]),
-                str(row["relative_path"]),
-                str(row["paragraph_text"]),
-            ]
-        ).lower()
-        matched_terms = [term for term in query_terms if term in searchable_text]
-        selection_reason = f"matched {len(matched_terms)} candidate term(s): {', '.join(matched_terms) if matched_terms else 'none'}"
-        section_path = json.loads(row["section_path_json"]) if row["section_path_json"] else []
-        candidates.append(
-            {
-                "chunk_id": row["chunk_id"],
-                "note_id": row["note_id"],
-                "note_title": row["note_title"],
-                "relative_path": row["relative_path"],
-                "section_id": row["section_id"],
-                "section_label": row["section_label"],
-                "section_path": section_path,
-                "paragraph_ordinal": row["paragraph_ordinal"],
-                "paragraph_text": row["paragraph_text"],
-                "chunk_hash": row["chunk_hash"],
-                "source_root_label": row["source_root_label"],
-                "selection_score": len(matched_terms),
-                "matched_terms": matched_terms,
-                "selection_reason": selection_reason,
-            }
-        )
-    candidates.sort(key=lambda item: (-item["selection_score"], item["chunk_id"]))
-    return candidates
-
-
-def _extract_lexical_query_terms(user_input: str) -> list[str]:
-    terms: list[str] = []
-    seen: set[str] = set()
-    for token in QUERY_TOKEN_RE.findall(user_input.lower()):
-        if len(token) < 3 or token in STOP_WORDS:
-            continue
-        if token.isdigit():
-            continue
-        if token not in seen:
-            seen.add(token)
-            terms.append(token)
-    return terms
 
 
 def _build_isolated_extraction_request(user_input: str) -> dict[str, Any]:
@@ -603,8 +388,10 @@ def _build_contextual_extraction_request(
         "isolated_semantic_extraction": isolated_semantic_extraction or {},
         "instruction": (
             "Hydrate the isolated extraction with conversation context. "
+            "Return JSON only. "
             "Do not answer the user. Preserve the raw message. "
-            "Record what changed between isolated and contextual readings."
+            "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
+            "semantic_coverage_target, activation_hints, and limitations."
         ),
     }
 
@@ -719,6 +506,849 @@ def _run_semantic_extraction(
     )
 
 
+def _database_path(config: RuntimeConfig, data_root: Path) -> Path:
+    return (config.sqlite_path or (data_root / "ingestion" / "latent_space.sqlite3")).resolve()
+
+
+def _load_chunk_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    return connection.execute(
+        """
+        SELECT
+            chunks.chunk_id,
+            chunks.note_id,
+            chunks.source_root_label,
+            chunks.relative_path,
+            chunks.note_path,
+            chunks.note_title,
+            chunks.section_id,
+            chunks.section_label,
+            chunks.section_path_json,
+            chunks.paragraph_ordinal,
+            chunks.paragraph_text,
+            chunks.chunk_hash,
+            notes.frontmatter_json
+        FROM chunks
+        JOIN notes ON notes.note_id = chunks.note_id
+        """
+    ).fetchall()
+
+
+def _score_fields_for_terms(fields: dict[str, str], query_terms: list[str]) -> tuple[list[str], list[str]]:
+    matched_terms: list[str] = []
+    source_fields: list[str] = []
+    for field_name, raw_value in fields.items():
+        lowered_value = raw_value.lower()
+        field_matched = False
+        for term in query_terms:
+            if term in lowered_value:
+                if term not in matched_terms:
+                    matched_terms.append(term)
+                field_matched = True
+        if field_matched:
+            source_fields.append(field_name)
+    return matched_terms, source_fields
+
+
+def _base_candidate_from_row(
+    row: sqlite3.Row,
+    *,
+    surface: str,
+    matched_terms: list[str],
+    source_fields: list[str],
+    score: float,
+    reason: str,
+) -> dict[str, Any]:
+    section_path = json.loads(row["section_path_json"]) if row["section_path_json"] else []
+    return {
+        "chunk_id": row["chunk_id"],
+        "note_id": row["note_id"],
+        "note_title": row["note_title"],
+        "relative_path": row["relative_path"],
+        "section_id": row["section_id"],
+        "section_label": row["section_label"],
+        "section_path": section_path,
+        "paragraph_ordinal": row["paragraph_ordinal"],
+        "paragraph_text": row["paragraph_text"],
+        "chunk_hash": row["chunk_hash"],
+        "source_root_label": row["source_root_label"],
+        "surface": surface,
+        "surface_score": score,
+        "matched_terms": matched_terms,
+        "source_fields_matched": source_fields,
+        "selection_reason": reason,
+    }
+
+
+def _query_lexical_candidates(connection: sqlite3.Connection, *, query_terms: list[str]) -> list[dict[str, Any]]:
+    if not query_terms:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for row in _load_chunk_rows(connection):
+        matched_terms, source_fields = _score_fields_for_terms(
+            {
+                "paragraph_text": str(row["paragraph_text"]),
+                "note_title": str(row["note_title"]),
+                "section_label": str(row["section_label"]),
+                "relative_path": str(row["relative_path"]),
+                "note_path": str(row["note_path"]),
+            },
+            query_terms,
+        )
+        if not matched_terms:
+            continue
+        reason = f"lexical index matched {', '.join(matched_terms)}"
+        candidates.append(
+            _base_candidate_from_row(
+                row,
+                surface="lexical_index_surface",
+                matched_terms=matched_terms,
+                source_fields=source_fields,
+                score=float(len(matched_terms)) + (0.1 * len(source_fields)),
+                reason=reason,
+            )
+        )
+    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
+    return candidates
+
+
+def _query_primary_corpus_candidates(connection: sqlite3.Connection, *, query_terms: list[str]) -> list[dict[str, Any]]:
+    if not query_terms:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for row in _load_chunk_rows(connection):
+        matched_terms, source_fields = _score_fields_for_terms(
+            {
+                "note_title": str(row["note_title"]),
+                "section_label": str(row["section_label"]),
+                "relative_path": str(row["relative_path"]),
+                "note_path": str(row["note_path"]),
+                "source_root_label": str(row["source_root_label"]),
+                "frontmatter_json": str(row["frontmatter_json"]),
+            },
+            query_terms,
+        )
+        if not matched_terms:
+            continue
+        reason = f"primary corpus metadata matched {', '.join(matched_terms)}"
+        candidates.append(
+            _base_candidate_from_row(
+                row,
+                surface="primary_corpus",
+                matched_terms=matched_terms,
+                source_fields=source_fields,
+                score=float(len(matched_terms)) + 0.25,
+                reason=reason,
+            )
+        )
+    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
+    return candidates
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right) or not left:
+        return 0.0
+    numerator = sum(a * b for a, b in zip(left, right, strict=True))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return numerator / (left_norm * right_norm)
+
+
+def _build_query_embedding_text(semantic_context_packet: dict[str, Any]) -> str:
+    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target") or {}
+    parts = [
+        str(semantic_coverage_target.get("query_text") or ""),
+        " ".join(str(item) for item in list(semantic_coverage_target.get("must_preserve") or [])),
+        " ".join(str(item) for item in list(semantic_coverage_target.get("should_include") or [])),
+        str(semantic_context_packet.get("user_input") or ""),
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def _query_vector_candidates(
+    connection: sqlite3.Connection,
+    *,
+    query_text: str,
+    embedding_backend: EmbeddingBackend,
+    config: RuntimeConfig,
+) -> tuple[list[dict[str, Any]], str]:
+    if not query_text:
+        return [], "no_query_text"
+    response = embedding_backend.embed_texts([query_text])
+    if response.status != "embedded" or not response.vectors:
+        return [], response.status
+    vector_table = str(config.raw["indexes"]["vector_table"])
+    rows = connection.execute(
+        f"""
+        SELECT
+            {vector_table}.chunk_id,
+            {vector_table}.vector_json,
+            chunks.note_id,
+            chunks.source_root_label,
+            chunks.relative_path,
+            chunks.note_path,
+            chunks.note_title,
+            chunks.section_id,
+            chunks.section_label,
+            chunks.section_path_json,
+            chunks.paragraph_ordinal,
+            chunks.paragraph_text,
+            chunks.chunk_hash
+        FROM {vector_table}
+        JOIN chunks ON chunks.chunk_id = {vector_table}.chunk_id
+        """
+    ).fetchall()
+    query_vector = response.vectors[0]
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        stored_vector = json.loads(str(row["vector_json"]))
+        if not isinstance(stored_vector, list) or not all(isinstance(value, (int, float)) for value in stored_vector):
+            continue
+        score = _cosine_similarity(query_vector, [float(value) for value in stored_vector])
+        if score <= 0:
+            continue
+        candidates.append(
+            _base_candidate_from_row(
+                row,
+                surface="vector_index_surface",
+                matched_terms=[],
+                source_fields=["vector_similarity"],
+                score=score,
+                reason=f"vector similarity score {score:.4f}",
+            )
+        )
+    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
+    return candidates[: config.max_retrieval_chunks], "ok"
+
+
+def _query_graph_candidates(
+    connection: sqlite3.Connection,
+    *,
+    seed_chunk_ids: list[str],
+    config: RuntimeConfig,
+) -> list[dict[str, Any]]:
+    if not seed_chunk_ids:
+        return []
+    graph_edges_table = str(config.raw["indexes"]["graph_edges_table"])
+    hop_limit = int(config.raw["coverage"]["graph_expansion_hop_limit"])
+    placeholders = ",".join("?" for _ in seed_chunk_ids)
+    seed_rows = connection.execute(
+        f"SELECT chunk_id, note_id FROM chunks WHERE chunk_id IN ({placeholders})",
+        tuple(seed_chunk_ids),
+    ).fetchall()
+    seed_note_ids = {str(row["note_id"]) for row in seed_rows}
+    candidates_by_chunk: dict[str, dict[str, Any]] = {}
+
+    if seed_note_ids:
+        note_placeholders = ",".join("?" for _ in seed_note_ids)
+        sibling_rows = connection.execute(
+            f"""
+            SELECT
+                chunks.chunk_id,
+                chunks.note_id,
+                chunks.source_root_label,
+                chunks.relative_path,
+                chunks.note_path,
+                chunks.note_title,
+                chunks.section_id,
+                chunks.section_label,
+                chunks.section_path_json,
+                chunks.paragraph_ordinal,
+                chunks.paragraph_text,
+                chunks.chunk_hash
+            FROM chunks
+            WHERE chunks.note_id IN ({note_placeholders})
+            """,
+            tuple(seed_note_ids),
+        ).fetchall()
+        for row in sibling_rows:
+            chunk_id = str(row["chunk_id"])
+            if chunk_id in seed_chunk_ids:
+                continue
+            candidates_by_chunk[chunk_id] = _base_candidate_from_row(
+                row,
+                surface="graph_layer",
+                matched_terms=[],
+                source_fields=["note_contains_chunk"],
+                score=2.0,
+                reason="graph expansion reached sibling chunk through note_contains_chunk",
+            )
+
+    if hop_limit >= 2 and seed_note_ids:
+        note_node_ids = [f"note::{note_id}" for note_id in seed_note_ids]
+        node_placeholders = ",".join("?" for _ in note_node_ids)
+        wikilink_edges = connection.execute(
+            f"""
+            SELECT source_node_id, target_node_id
+            FROM {graph_edges_table}
+            WHERE edge_type = 'wikilink' AND source_node_id IN ({node_placeholders})
+            """,
+            tuple(note_node_ids),
+        ).fetchall()
+        target_note_ids = {
+            str(row["target_node_id"]).split("note::", 1)[1]
+            for row in wikilink_edges
+            if str(row["target_node_id"]).startswith("note::")
+        }
+        if target_note_ids:
+            target_placeholders = ",".join("?" for _ in target_note_ids)
+            linked_rows = connection.execute(
+                f"""
+                SELECT
+                    chunks.chunk_id,
+                    chunks.note_id,
+                    chunks.source_root_label,
+                    chunks.relative_path,
+                    chunks.note_path,
+                    chunks.note_title,
+                    chunks.section_id,
+                    chunks.section_label,
+                    chunks.section_path_json,
+                    chunks.paragraph_ordinal,
+                    chunks.paragraph_text,
+                    chunks.chunk_hash
+                FROM chunks
+                WHERE chunks.note_id IN ({target_placeholders})
+                """,
+                tuple(target_note_ids),
+            ).fetchall()
+            for row in linked_rows:
+                chunk_id = str(row["chunk_id"])
+                candidates_by_chunk.setdefault(
+                    chunk_id,
+                    _base_candidate_from_row(
+                        row,
+                        surface="graph_layer",
+                        matched_terms=[],
+                        source_fields=["wikilink"],
+                        score=1.5,
+                        reason="graph expansion reached chunk through wikilink edge",
+                    ),
+                )
+
+    candidates = list(candidates_by_chunk.values())
+    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
+    return candidates
+
+
+def _query_synthetic_candidates(
+    connection: sqlite3.Connection,
+    *,
+    query_terms: list[str],
+    config: RuntimeConfig,
+) -> list[dict[str, Any]]:
+    if not query_terms:
+        return []
+    synthetic_root = config.synthetic_nodes_root
+    candidates: list[dict[str, Any]] = []
+    for row in _load_chunk_rows(connection):
+        note_path = Path(str(row["note_path"])).resolve()
+        try:
+            note_path.relative_to(synthetic_root)
+        except ValueError:
+            continue
+        matched_terms, source_fields = _score_fields_for_terms(
+            {
+                "paragraph_text": str(row["paragraph_text"]),
+                "section_label": str(row["section_label"]),
+                "relative_path": str(row["relative_path"]),
+            },
+            query_terms,
+        )
+        if not matched_terms:
+            continue
+        candidates.append(
+            _base_candidate_from_row(
+                row,
+                surface="synthetic_nodes",
+                matched_terms=matched_terms,
+                source_fields=source_fields,
+                score=float(len(matched_terms)) + 0.1,
+                reason=f"synthetic node matched {', '.join(matched_terms)}",
+            )
+        )
+    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
+    return candidates
+
+
+def _build_latent_space_activation(
+    *,
+    repo_root: Path,
+    data_root: Path,
+    config: RuntimeConfig,
+    semantic_context_packet: dict[str, Any],
+    embedding_backend: EmbeddingBackend,
+) -> dict[str, Any]:
+    database_path = _database_path(config, data_root)
+    retrieval_preparation = dict(semantic_context_packet.get("retrieval_preparation") or {})
+    query_terms = list(retrieval_preparation.get("combined_candidate_terms") or [])
+    activation_surfaces: list[dict[str, Any]] = []
+    candidate_regions: dict[str, list[dict[str, Any]]] = {
+        "lexical_index_surface": [],
+        "primary_corpus": [],
+        "vector_index_surface": [],
+        "graph_layer": [],
+        "synthetic_nodes": [],
+    }
+    blocked_surfaces: list[dict[str, Any]] = []
+    if not database_path.exists():
+        for surface in candidate_regions:
+            activation_surfaces.append(
+                {
+                    "surface": surface,
+                    "status": "blocked",
+                    "candidate_count": 0,
+                    "reason": "ingestion SQLite database not found",
+                }
+            )
+        activated_regions = {
+            "thread_id": semantic_context_packet["thread_id"],
+            "turn_id": semantic_context_packet["turn_id"],
+            "database_path": str(database_path),
+            "query_terms": query_terms,
+            "activation_surfaces": activation_surfaces,
+            "candidate_regions": candidate_regions,
+            "blocked_surfaces": [{"surface": surface, "reason": "ingestion SQLite database not found"} for surface in candidate_regions],
+            "repo_root": str(repo_root),
+        }
+        activated_regions["activated_region_hash"] = sha256_json(activated_regions)
+        return activated_regions
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        lexical_candidates = _query_lexical_candidates(connection, query_terms=query_terms)
+        candidate_regions["lexical_index_surface"] = lexical_candidates[: config.max_retrieval_chunks]
+        activation_surfaces.append(
+            {
+                "surface": "lexical_index_surface",
+                "status": "activated" if lexical_candidates else ("no_query_terms" if not query_terms else "no_matches"),
+                "candidate_count": len(lexical_candidates),
+                "reason": None if lexical_candidates else ("no query terms available" if not query_terms else "no lexical matches"),
+            }
+        )
+
+        primary_candidates = _query_primary_corpus_candidates(connection, query_terms=query_terms)
+        candidate_regions["primary_corpus"] = primary_candidates[: config.max_retrieval_chunks]
+        activation_surfaces.append(
+            {
+                "surface": "primary_corpus",
+                "status": "activated" if primary_candidates else ("no_query_terms" if not query_terms else "no_matches"),
+                "candidate_count": len(primary_candidates),
+                "reason": None if primary_candidates else ("no query terms available" if not query_terms else "no primary corpus metadata matches"),
+            }
+        )
+
+        query_text = _build_query_embedding_text(semantic_context_packet)
+        vector_candidates: list[dict[str, Any]] = []
+        vector_status = "unavailable"
+        if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
+            vector_status = "unavailable"
+        else:
+            vector_candidates, vector_status = _query_vector_candidates(
+                connection,
+                query_text=query_text,
+                embedding_backend=embedding_backend,
+                config=config,
+            )
+        candidate_regions["vector_index_surface"] = vector_candidates
+        activation_surfaces.append(
+            {
+                "surface": "vector_index_surface",
+                "status": "activated" if vector_candidates else vector_status,
+                "candidate_count": len(vector_candidates),
+                "reason": None if vector_candidates else vector_status,
+            }
+        )
+
+        seed_chunk_ids = [
+            candidate["chunk_id"]
+            for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface")
+            for candidate in candidate_regions[surface_name][: config.max_retrieval_chunks]
+        ]
+        deduped_seed_chunk_ids: list[str] = []
+        for chunk_id in seed_chunk_ids:
+            if chunk_id not in deduped_seed_chunk_ids:
+                deduped_seed_chunk_ids.append(chunk_id)
+        graph_candidates = _query_graph_candidates(connection, seed_chunk_ids=deduped_seed_chunk_ids, config=config)
+        candidate_regions["graph_layer"] = graph_candidates[: config.max_retrieval_chunks]
+        activation_surfaces.append(
+            {
+                "surface": "graph_layer",
+                "status": "activated" if graph_candidates else ("no_seed_candidates" if not deduped_seed_chunk_ids else "no_expansion_matches"),
+                "candidate_count": len(graph_candidates),
+                "reason": None if graph_candidates else ("no seed candidates available for graph expansion" if not deduped_seed_chunk_ids else "graph expansion produced no additional chunk candidates"),
+            }
+        )
+
+        synthetic_candidates = _query_synthetic_candidates(connection, query_terms=query_terms, config=config)
+        candidate_regions["synthetic_nodes"] = synthetic_candidates[: config.max_retrieval_chunks]
+        activation_surfaces.append(
+            {
+                "surface": "synthetic_nodes",
+                "status": "activated" if synthetic_candidates else ("no_query_terms" if not query_terms else "no_matches"),
+                "candidate_count": len(synthetic_candidates),
+                "reason": None if synthetic_candidates else ("no query terms available" if not query_terms else "no synthetic node matches"),
+            }
+        )
+    finally:
+        connection.close()
+
+    for surface in activation_surfaces:
+        if surface["status"] not in {"activated", "no_matches", "no_query_terms", "no_expansion_matches", "no_seed_candidates"}:
+            blocked_surfaces.append({"surface": surface["surface"], "reason": surface["reason"]})
+    activated_regions = {
+        "thread_id": semantic_context_packet["thread_id"],
+        "turn_id": semantic_context_packet["turn_id"],
+        "database_path": str(database_path),
+        "query_terms": query_terms,
+        "activation_surfaces": activation_surfaces,
+        "candidate_regions": candidate_regions,
+        "blocked_surfaces": blocked_surfaces,
+        "repo_root": str(repo_root),
+    }
+    activated_regions["activated_region_hash"] = sha256_json(activated_regions)
+    return activated_regions
+
+
+def _build_semantic_traversal_manifest(
+    *,
+    semantic_context_packet: dict[str, Any],
+    activated_semantic_regions: dict[str, Any],
+    config: RuntimeConfig,
+) -> dict[str, Any]:
+    candidate_regions = dict(activated_semantic_regions.get("candidate_regions") or {})
+    aggregate: dict[str, dict[str, Any]] = {}
+    for surface_name, candidates in candidate_regions.items():
+        for candidate in list(candidates or []):
+            chunk_id = str(candidate["chunk_id"])
+            entry = aggregate.setdefault(
+                chunk_id,
+                {
+                    "chunk_id": chunk_id,
+                    "total_score": 0.0,
+                    "surface_contributions": [],
+                    "selection_reasons": [],
+                    "matched_terms": [],
+                },
+            )
+            entry["total_score"] += float(candidate["surface_score"])
+            if surface_name not in entry["surface_contributions"]:
+                entry["surface_contributions"].append(surface_name)
+            selection_reason = str(candidate["selection_reason"])
+            if selection_reason not in entry["selection_reasons"]:
+                entry["selection_reasons"].append(selection_reason)
+            for term in list(candidate.get("matched_terms") or []):
+                if term not in entry["matched_terms"]:
+                    entry["matched_terms"].append(term)
+
+    ranked_candidates = sorted(
+        aggregate.values(),
+        key=lambda item: (-float(item["total_score"]), str(item["chunk_id"])),
+    )
+    selected = ranked_candidates[: config.max_retrieval_chunks]
+    selected_chunk_ids = [str(item["chunk_id"]) for item in selected]
+    selection_reasons = [reason for item in selected for reason in item["selection_reasons"]]
+    if not selection_reasons:
+        if not list(activated_semantic_regions.get("query_terms") or []):
+            selection_reasons = ["no lexical or additive extraction candidate terms were available"]
+        elif any(str(surface.get("reason") or "") == "ingestion SQLite database not found" for surface in list(activated_semantic_regions.get("activation_surfaces") or [])):
+            selection_reasons = ["ingestion SQLite database not found"]
+        elif not ranked_candidates:
+            selection_reasons = ["no chunk text or metadata matched the activated candidate terms"]
+    surface_contributions = {
+        surface_name: any(surface_name in list(item["surface_contributions"]) for item in selected)
+        for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface", "graph_layer", "synthetic_nodes")
+    }
+    manifest_validity_reasons: list[str] = []
+    if not semantic_context_packet.get("semantic_contract_validation", {}).get("valid"):
+        manifest_validity_reasons.append("semantic extraction parsed but failed contract validation")
+    if semantic_context_packet.get("perturbation_semantic_graph") is None:
+        manifest_validity_reasons.append("perturbation_semantic_graph missing")
+    if semantic_context_packet.get("semantic_coverage_target") is None:
+        manifest_validity_reasons.append("semantic_coverage_target missing")
+    if not ranked_candidates:
+        manifest_validity_reasons.append("semantic traversal produced no candidate regions")
+    manifest = {
+        "thread_id": semantic_context_packet["thread_id"],
+        "turn_id": semantic_context_packet["turn_id"],
+        "semantic_coverage_target_hash": (
+            sha256_json(semantic_context_packet["semantic_coverage_target"])
+            if isinstance(semantic_context_packet.get("semantic_coverage_target"), dict)
+            else None
+        ),
+        "activated_region_hash": activated_semantic_regions.get("activated_region_hash"),
+        "activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
+        "candidate_regions": {
+            surface_name: list(candidates or [])
+            for surface_name, candidates in candidate_regions.items()
+        },
+        "query_terms_available": bool(list(activated_semantic_regions.get("query_terms") or [])),
+        "selected_chunk_ids": selected_chunk_ids,
+        "selection_reasons": selection_reasons,
+        "surface_contributions": surface_contributions,
+        "ranking_inputs": {
+            "query_terms": list(activated_semantic_regions.get("query_terms") or []),
+            "max_selected_chunks": config.max_retrieval_chunks,
+        },
+        "limits": {
+            "max_selected_chunks": config.max_retrieval_chunks,
+            "candidate_count": len(ranked_candidates),
+        },
+        "blocked_surfaces": list(activated_semantic_regions.get("blocked_surfaces") or []),
+        "selected_candidates": selected,
+        "manifest_validity": {
+            "valid": not manifest_validity_reasons,
+            "reasons": manifest_validity_reasons,
+        },
+    }
+    return manifest
+
+
+def _assemble_retrieval_packet(
+    *,
+    data_root: Path,
+    config: RuntimeConfig,
+    semantic_traversal_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    database_path = _database_path(config, data_root)
+    selected_chunk_ids = list(semantic_traversal_manifest.get("selected_chunk_ids") or [])
+    retrieval_packet: dict[str, Any] = {
+        "thread_id": semantic_traversal_manifest["thread_id"],
+        "turn_id": semantic_traversal_manifest["turn_id"],
+        "database_path": str(database_path),
+        "assembled_from_traversal_manifest": True,
+        "selected_chunk_ids_from_manifest": selected_chunk_ids,
+        "selected_chunks": [],
+        "graph_context_available": False,
+        "matched_chunk_count": 0,
+        "retrieval_observation": "not_attempted",
+    }
+    if not database_path.exists() or not selected_chunk_ids:
+        if not database_path.exists():
+            retrieval_packet["retrieval_observation"] = "index_missing"
+        elif not semantic_traversal_manifest.get("query_terms_available"):
+            retrieval_packet["retrieval_observation"] = "no_query_terms"
+        else:
+            retrieval_packet["retrieval_observation"] = "no_matches"
+        return retrieval_packet
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        placeholders = ",".join("?" for _ in selected_chunk_ids)
+        rows = connection.execute(
+            f"""
+            SELECT
+                chunks.chunk_id,
+                chunks.note_id,
+                chunks.source_root_label,
+                chunks.relative_path,
+                chunks.note_path,
+                chunks.note_title,
+                chunks.section_id,
+                chunks.section_label,
+                chunks.section_path_json,
+                chunks.paragraph_ordinal,
+                chunks.paragraph_text,
+                chunks.chunk_hash,
+                notes.frontmatter_json
+            FROM chunks
+            JOIN notes ON notes.note_id = chunks.note_id
+            WHERE chunks.chunk_id IN ({placeholders})
+            """,
+            tuple(selected_chunk_ids),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    row_map = {str(row["chunk_id"]): row for row in rows}
+    selected_candidates = {
+        str(item["chunk_id"]): item
+        for item in list(semantic_traversal_manifest.get("selected_candidates") or [])
+    }
+    selected_chunks: list[dict[str, Any]] = []
+    for chunk_id in selected_chunk_ids:
+        row = row_map.get(chunk_id)
+        if row is None:
+            continue
+        selected_candidate = selected_candidates.get(chunk_id, {})
+        selected_chunks.append(
+            {
+                "chunk_id": row["chunk_id"],
+                "note_id": row["note_id"],
+                "source_root_label": row["source_root_label"],
+                "relative_path": row["relative_path"],
+                "note_path": row["note_path"],
+                "note_title": row["note_title"],
+                "section_id": row["section_id"],
+                "section_label": row["section_label"],
+                "section_path": json.loads(row["section_path_json"]) if row["section_path_json"] else [],
+                "paragraph_ordinal": row["paragraph_ordinal"],
+                "paragraph_text": row["paragraph_text"],
+                "chunk_hash": row["chunk_hash"],
+                "frontmatter": json.loads(str(row["frontmatter_json"])) if row["frontmatter_json"] else {},
+                "surface_contributions": list(selected_candidate.get("surface_contributions") or []),
+                "selection_reasons": list(selected_candidate.get("selection_reasons") or []),
+                "vector_score": next(
+                    (
+                        candidate["surface_score"]
+                        for candidate in list(semantic_traversal_manifest.get("candidate_regions", {}).get("vector_index_surface") or [])
+                        if candidate["chunk_id"] == chunk_id
+                    ),
+                    None,
+                ),
+                "lexical_match_info": next(
+                    (
+                        {
+                            "matched_terms": list(candidate.get("matched_terms") or []),
+                            "source_fields_matched": list(candidate.get("source_fields_matched") or []),
+                        }
+                        for candidate in list(semantic_traversal_manifest.get("candidate_regions", {}).get("lexical_index_surface") or [])
+                        if candidate["chunk_id"] == chunk_id
+                    ),
+                    None,
+                ),
+            }
+        )
+    retrieval_packet["selected_chunks"] = selected_chunks
+    retrieval_packet["matched_chunk_count"] = len(selected_chunks)
+    retrieval_packet["retrieval_observation"] = "matched_chunks" if selected_chunks else "no_matches"
+    return retrieval_packet
+
+
+def _evaluate_retrieval_coverage(
+    *,
+    semantic_context_packet: dict[str, Any],
+    activated_semantic_regions: dict[str, Any],
+    semantic_traversal_manifest: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+    config: RuntimeConfig,
+    semantic_traversal_manifest_hash: str,
+    retrieval_packet_hash: str,
+) -> dict[str, Any]:
+    statuses = dict(semantic_context_packet.get("semantic_extraction", {}).get("statuses") or {})
+    backend_mode = str(statuses.get("backend_mode") or "unknown")
+    isolated_status = str(statuses.get("isolated_status") or "unknown")
+    contextual_status = str(statuses.get("contextual_status") or "unknown")
+    reasons: list[str] = []
+
+    if backend_mode in {"disabled", "stub", "unavailable"}:
+        reasons.append(f"semantic_context_extraction backend `{backend_mode}` is not valid for the normal runtime")
+    if isolated_status != "parsed":
+        reasons.append(f"isolated semantic extraction did not produce a valid parsed result: {isolated_status}")
+    if contextual_status != "parsed":
+        reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
+    contract_validation = dict(semantic_context_packet.get("semantic_contract_validation") or {})
+    if not contract_validation.get("valid"):
+        reasons.extend(list(contract_validation.get("reasons") or []))
+        reasons.append("semantic extraction parsed but failed contract validation")
+
+    surface_statuses = {
+        str(surface["surface"]): str(surface["status"])
+        for surface in list(activated_semantic_regions.get("activation_surfaces") or [])
+    }
+    runtime_requirements = dict(config.raw["runtime"])
+    if runtime_requirements.get("require_lexical_surface") and surface_statuses.get("lexical_index_surface") == "blocked":
+        reasons.append("lexical_index_surface unavailable")
+    if runtime_requirements.get("require_primary_corpus_surface") and surface_statuses.get("primary_corpus") == "blocked":
+        reasons.append("primary_corpus unavailable")
+    if runtime_requirements.get("require_vector_surface") and surface_statuses.get("vector_index_surface") != "activated":
+        reasons.append("vector_index_surface unavailable or missing configured embeddings")
+    if runtime_requirements.get("require_graph_surface") and surface_statuses.get("graph_layer") == "blocked":
+        reasons.append("graph_layer unavailable")
+    if runtime_requirements.get("require_synthetic_node_surface") and surface_statuses.get("synthetic_nodes") != "activated":
+        reasons.append("synthetic_nodes surface required but unavailable")
+
+    manifest_validity = dict(semantic_traversal_manifest.get("manifest_validity") or {})
+    if not manifest_validity.get("valid"):
+        reasons.extend(list(manifest_validity.get("reasons") or []))
+        reasons.append("semantic_traversal_manifest invalid")
+
+    selected_chunk_ids = list(semantic_traversal_manifest.get("selected_chunk_ids") or [])
+    selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
+    if not retrieval_packet.get("assembled_from_traversal_manifest"):
+        reasons.append("retrieval_packet was not assembled from traversal manifest")
+    if [str(chunk["chunk_id"]) for chunk in selected_chunks] != selected_chunk_ids[: len(selected_chunks)]:
+        reasons.append("retrieval_packet selected chunks do not match traversal selected IDs")
+
+    selected_chunk_count = len(selected_chunks)
+    coverage_settings = dict(config.raw["coverage"])
+    min_selected_chunks = int(coverage_settings["min_selected_chunks"])
+    max_selected_chunks = int(coverage_settings["max_selected_chunks"])
+    allow_no_retrieval_needed = bool(coverage_settings.get("allow_no_retrieval_needed"))
+    target_allows_no_retrieval = bool(
+        isinstance(semantic_context_packet.get("semantic_coverage_target"), dict)
+        and semantic_context_packet["semantic_coverage_target"].get("allow_no_retrieval_needed")
+    )
+    if selected_chunk_count < min_selected_chunks and not (allow_no_retrieval_needed and target_allows_no_retrieval):
+        reasons.append(f"selected chunk count below configured minimum: {selected_chunk_count} < {min_selected_chunks}")
+    if selected_chunk_count > max_selected_chunks:
+        reasons.append(f"selected chunk count exceeds configured maximum: {selected_chunk_count} > {max_selected_chunks}")
+
+    required_surface_contributions = dict(coverage_settings.get("require_surface_contributions") or {})
+    actual_surface_contributions = dict(semantic_traversal_manifest.get("surface_contributions") or {})
+    for surface_name, required in required_surface_contributions.items():
+        if required and not actual_surface_contributions.get(surface_name):
+            reasons.append(f"required surface contribution missing: {surface_name}")
+
+    decision = "approved" if not reasons else "blocked"
+    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
+    return {
+        "decision": decision,
+        "semantic_coverage_target_hash": sha256_json(semantic_coverage_target) if isinstance(semantic_coverage_target, dict) else None,
+        "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
+        "retrieval_packet_hash": retrieval_packet_hash,
+        "evaluated_activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
+        "blocking_reasons": _dedupe_reasons(reasons),
+        "limits": {
+            "selection_limit": config.max_retrieval_chunks,
+            "min_selected_chunks": min_selected_chunks,
+            "max_selected_chunks": max_selected_chunks,
+            "selected_chunk_count": selected_chunk_count,
+            "diagnostic_retrieval_observation": retrieval_packet.get("retrieval_observation"),
+        },
+        "surface_contributions": actual_surface_contributions,
+    }
+
+
+def _build_synthesis_context_packet(
+    thread_document: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+    user_input: str,
+    turn_id: int,
+    semantic_context_packet: dict[str, Any],
+    semantic_traversal_manifest: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+    coverage_report: dict[str, Any],
+) -> dict[str, Any]:
+    coverage_decision = str(coverage_report.get("decision") or "blocked")
+    return {
+        "thread_id": thread_document["thread_id"],
+        "turn_id": turn_id,
+        "user_input": user_input,
+        "raw_user_input": user_input,
+        "prior_thread_state": prior_thread_state,
+        "visible_transcript_tail": thread_document["messages"][-6:],
+        "semantic_extraction": semantic_context_packet["semantic_extraction"],
+        "semantic_context_packet": semantic_context_packet,
+        "semantic_traversal_manifest": semantic_traversal_manifest,
+        "retrieval_packet": retrieval_packet,
+        "approved_retrieval_packet": retrieval_packet if coverage_decision == "approved" else None,
+        "coverage_report": coverage_report,
+        "runtime_outcome": "completed" if coverage_decision == "approved" else "blocked",
+        "blocking_reasons": list(coverage_report.get("blocking_reasons") or []),
+        "output_requirements": [
+            "Respond directly to the latest raw user input.",
+            "Preserve continuity with the prior thread state.",
+            "Do not emit a user-facing answer when the runtime outcome is blocked.",
+            "Use retrieved material only when it has been approved for synthesis.",
+            "Do not invent retrieval results or claim thesis-valid traversal when blocked.",
+        ],
+    }
+
+
 def _persist_turn_artifacts(
     *,
     turn_root: Path,
@@ -810,8 +1440,11 @@ def run_thread_turn(
     user_input: str,
     llm_backend: LLMBackend,
     thread_id: str | None = None,
+    config: RuntimeConfig | None = None,
     semantic_extractor_backend: SemanticExtractorBackend | None = None,
+    embedding_backend: EmbeddingBackend | None = None,
 ) -> TurnExecutionResult:
+    resolved_config = config or load_runtime_config(repo_root=repo_root)
     timestamp = _utc_now()
     paths = create_thread_paths(data_root=data_root, thread_id=thread_id)
 
@@ -822,7 +1455,8 @@ def run_thread_turn(
     parent_perturbation_hash = ledger_records[-1]["state_perturbation_hash"] if ledger_records else None
     prior_thread_state_hash = prior_thread_state.get("latest_thread_state_hash")
     turn_root = paths.turn_root(turn_id)
-    extractor_backend = semantic_extractor_backend or resolve_semantic_extractor_backend(repo_root=repo_root)
+    extractor_backend = semantic_extractor_backend or resolve_semantic_extractor_backend(repo_root=repo_root, config=resolved_config)
+    resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 
     semantic_extraction = _run_semantic_extraction(
         thread_id=paths.thread_id,
@@ -838,17 +1472,31 @@ def run_thread_turn(
         turn_id=turn_id,
         semantic_extraction=semantic_extraction,
     )
-    semantic_traversal_manifest, retrieval_packet = _build_diagnostic_retrieval_artifacts(
+    activated_semantic_regions = _build_latent_space_activation(
         repo_root=repo_root,
         data_root=data_root,
+        config=resolved_config,
         semantic_context_packet=semantic_context_packet,
+        embedding_backend=resolved_embedding_backend,
+    )
+    semantic_traversal_manifest = _build_semantic_traversal_manifest(
+        semantic_context_packet=semantic_context_packet,
+        activated_semantic_regions=activated_semantic_regions,
+        config=resolved_config,
+    )
+    retrieval_packet = _assemble_retrieval_packet(
+        data_root=data_root,
+        config=resolved_config,
+        semantic_traversal_manifest=semantic_traversal_manifest,
     )
     semantic_traversal_manifest_hash = sha256_json(semantic_traversal_manifest)
     retrieval_packet_hash = sha256_json(retrieval_packet)
-    coverage_report = _build_coverage_report(
+    coverage_report = _evaluate_retrieval_coverage(
         semantic_context_packet=semantic_context_packet,
+        activated_semantic_regions=activated_semantic_regions,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
+        config=resolved_config,
         semantic_traversal_manifest_hash=semantic_traversal_manifest_hash,
         retrieval_packet_hash=retrieval_packet_hash,
     )

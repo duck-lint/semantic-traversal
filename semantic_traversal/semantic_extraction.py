@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 from urllib import error, request
 
+from .config import RuntimeConfig
 from .llm import load_dotenv_local
 
 
@@ -213,15 +213,29 @@ class StubSemanticExtractorBackend:
         return {
             "raw_user_input": raw_user_input,
             "contextual_user_intent": "stub contextual hydration of the isolated semantic extraction",
+            "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms[:4]],
+            "contextual_salt_nodes": [
+                {"id": f"context:{index}", "label": text, "kind": "recent_trajectory"}
+                for index, text in enumerate(recent_trajectory, start=1)
+            ],
+            "perturbation_semantic_graph": {
+                "nodes": [
+                    {"id": f"term:{term}", "label": term, "kind": "lexical_term"}
+                    for term in terms[:4]
+                ],
+                "edges": [],
+            },
+            "semantic_coverage_target": {
+                "must_preserve": preserved_terms,
+                "should_include": list(isolated_payload.get("candidate_targets") or terms[:2]),
+                "avoid_satisfying_with": [],
+                "query_text": raw_user_input,
+                "allow_no_retrieval_needed": False,
+            },
             "thread_relevant_context": recent_trajectory,
             "semantic_pressure": None,
             "candidate_targets": list(isolated_payload.get("candidate_targets") or terms[:3]),
             "candidate_relations": list(isolated_payload.get("candidate_relations") or []),
-            "coverage_target": {
-                "must_preserve": preserved_terms,
-                "should_include": list(isolated_payload.get("candidate_targets") or terms[:2]),
-                "avoid_satisfying_with": [],
-            },
             "activation_hints": {
                 "lexical_terms": terms[:4],
                 "phrases": [],
@@ -244,9 +258,10 @@ class StubSemanticExtractorBackend:
 class OllamaSemanticExtractorBackend:
     mode_name = "ollama"
 
-    def __init__(self, *, model: str | None, base_url: str) -> None:
+    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
+        self._timeout_seconds = timeout_seconds
 
     def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
         return self._extract(packet)
@@ -272,6 +287,8 @@ class OllamaSemanticExtractorBackend:
             f"{packet.get('instruction', '')}\n"
             "Do not answer the user.\n"
             "Preserve the raw_user_input field exactly.\n"
+            "For contextual mode, produce these required fields: raw_user_input, perturbation_nodes, contextual_salt_nodes, "
+            "perturbation_semantic_graph, semantic_coverage_target, activation_hints, limitations.\n"
             "Packet:\n"
             f"{json.dumps(packet, ensure_ascii=True, indent=2)}"
         )
@@ -288,7 +305,7 @@ class OllamaSemanticExtractorBackend:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with request.urlopen(http_request, timeout=20) as response:
+            with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
                 envelope_text = response.read().decode("utf-8")
             envelope = json.loads(envelope_text)
             raw_response_text = str(envelope.get("response", ""))
@@ -367,6 +384,7 @@ class UnavailableSemanticExtractorBackend:
 def resolve_semantic_extractor_backend(
     *,
     repo_root: Path,
+    config: RuntimeConfig,
     extractor_mode: str | None = None,
     model_override: str | None = None,
     base_url_override: str | None = None,
@@ -375,21 +393,19 @@ def resolve_semantic_extractor_backend(
     dotenv_values = load_dotenv_local(repo_root)
     configured_mode = (
         extractor_mode
-        or os.environ.get("SEMANTIC_EXTRACTOR_MODE")
-        or dotenv_values.get("SEMANTIC_EXTRACTOR_MODE")
+        or str(config.raw["semantic_extraction"].get("provider") or "auto")
         or "auto"
     ).strip().lower()
     configured_model = (
         model_override
-        or os.environ.get("SEMANTIC_EXTRACTOR_MODEL")
-        or dotenv_values.get("SEMANTIC_EXTRACTOR_MODEL")
+        or config.raw["semantic_extraction"].get("model")
     )
     configured_base_url = (
         base_url_override
-        or os.environ.get("SEMANTIC_EXTRACTOR_BASE_URL")
-        or dotenv_values.get("SEMANTIC_EXTRACTOR_BASE_URL")
+        or config.raw["semantic_extraction"].get("base_url")
         or DEFAULT_OLLAMA_BASE_URL
     )
+    timeout_seconds = int(config.raw["semantic_extraction"].get("request_timeout_seconds") or 20)
 
     if configured_mode == "disabled":
         if allow_test_backends:
@@ -406,10 +422,23 @@ def resolve_semantic_extractor_backend(
             configured_mode=configured_mode,
         )
     if configured_mode == "ollama":
-        return OllamaSemanticExtractorBackend(model=configured_model, base_url=configured_base_url)
+        if not isinstance(configured_model, str) or not configured_model.strip():
+            return UnavailableSemanticExtractorBackend(
+                reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
+                configured_mode=configured_mode,
+            )
+        return OllamaSemanticExtractorBackend(
+            model=configured_model,
+            base_url=configured_base_url,
+            timeout_seconds=timeout_seconds,
+        )
     if configured_mode == "auto":
         if configured_model:
-            return OllamaSemanticExtractorBackend(model=configured_model, base_url=configured_base_url)
+            return OllamaSemanticExtractorBackend(
+                model=configured_model,
+                base_url=configured_base_url,
+                timeout_seconds=timeout_seconds,
+            )
         return UnavailableSemanticExtractorBackend(
             reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
             configured_mode=configured_mode,

@@ -8,14 +8,18 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import textwrap
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
+from semantic_traversal.config import load_runtime_config
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
 from semantic_traversal.cli import build_turn_parser
-from semantic_traversal.llm import StubLLMBackend
+from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
 from semantic_traversal.runtime import run_thread_turn
 from semantic_traversal.semantic_extraction import (
     DisabledSemanticExtractorBackend,
@@ -27,6 +31,7 @@ from semantic_traversal.storage import read_ledger
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_NOTE = REPO_ROOT / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md"
+DEFAULT_CONFIG_SOURCE = REPO_ROOT / "semantic_traversal.runtime.yaml"
 
 
 def _load_manifest(path: Path) -> dict[str, object]:
@@ -110,6 +115,42 @@ def _write_synthetic_longform_note(repo_root: Path) -> Path:
     )
 
 
+def _write_graph_fixture_notes(repo_root: Path) -> tuple[Path, Path]:
+    first = _write_markdown_fixture(
+        repo_root / "corpus",
+        "SYNTHETIC/GRAPH/source_note.md",
+        """
+        ---
+        tags:
+          - fixture-tag
+        ---
+
+        # Source Note
+
+        ## Fixture Link Section
+
+        This note links to [[target note]] and mentions candy snack food before bed plus yesterday dream recall so it becomes a graph seed.
+        """,
+    )
+    second = _write_markdown_fixture(
+        repo_root / "corpus",
+        "SYNTHETIC/GRAPH/target note.md",
+        """
+        ---
+        tags:
+          - fixture-tag
+        ---
+
+        # Target Note
+
+        ## Fixture Target Section
+
+        This target note exists only to be reached through the wikilink graph expansion.
+        """,
+    )
+    return first, second
+
+
 def _chunk_map(manifest: dict[str, object]) -> dict[str, dict[str, object]]:
     return {
         chunk["chunk_id"]: chunk
@@ -129,15 +170,162 @@ def _load_turn_artifact(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(dict(merged[key]), value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _write_runtime_config(repo_root: Path, overrides: dict[str, Any] | None = None, *, relative_path: str = "semantic_traversal.runtime.yaml") -> Path:
+    base_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+    merged = _deep_merge(base_config, overrides or {})
+    destination = repo_root / relative_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    import yaml
+
+    destination.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
+    return destination
+
+
+def _prepared_repo_root(repo_dir: str | Path, overrides: dict[str, Any] | None = None) -> Path:
+    repo_root = Path(repo_dir)
+    _write_runtime_config(repo_root, overrides)
+    return repo_root
+
+
+class _OllamaFixtureHandler(BaseHTTPRequestHandler):
+    response_mode = "valid"
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(length).decode("utf-8")
+        payload = json.loads(raw_body or "{}")
+        if self.path == "/api/generate":
+            response = self._build_generate_response(payload)
+        elif self.path == "/api/embeddings":
+            response = self._build_embeddings_response(payload)
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+    def _build_generate_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = str(payload.get("prompt") or "")
+        if self.response_mode == "invalid":
+            return {"response": "{\"raw_user_input\":\"broken\"}"}
+        packet_json = prompt.split("Packet:\n", 1)[1] if "Packet:\n" in prompt else "{}"
+        packet = json.loads(packet_json)
+        raw_user_input = str(packet.get("raw_user_input") or "")
+        prior_thread_state = packet.get("prior_thread_state") or {}
+        recent_messages = list(prior_thread_state.get("recent_messages") or [])
+        terms = ["candy", "snack", "food", "bed"]
+        response_payload = {
+            "raw_user_input": raw_user_input,
+            "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
+            "contextual_salt_nodes": [
+                {"id": f"context:{index}", "label": message.get("content", ""), "kind": "recent_message"}
+                for index, message in enumerate(recent_messages[-2:], start=1)
+            ],
+            "perturbation_semantic_graph": {
+                "nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
+                "edges": [{"source": "term:candy", "target": "term:bed", "kind": "association"}],
+            },
+            "semantic_coverage_target": {
+                "must_preserve": ["candy snack food before bed"],
+                "should_include": ["yesterday", "dream"],
+                "avoid_satisfying_with": [],
+                "query_text": raw_user_input,
+                "allow_no_retrieval_needed": False,
+            },
+            "activation_hints": {
+                "lexical_terms": terms + ["yesterday", "dream"],
+                "phrases": ["candy snack food before bed"],
+                "conceptual_neighbors": ["night routine"],
+                "relation_hints": ["before bed"],
+                "temporal_hints": ["yesterday"],
+                "entity_hints": ["dream recall"],
+            },
+            "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+        }
+        return {"response": json.dumps(response_payload)}
+
+    def _build_embeddings_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = str(payload.get("prompt") or "")
+        lowered = prompt.lower()
+        vector = [
+            1.0 if "candy" in lowered else 0.0,
+            1.0 if "yesterday" in lowered else 0.0,
+            1.0 if "dream" in lowered else 0.0,
+            1.0 if "bed" in lowered else 0.0,
+        ]
+        return {"embedding": vector}
+
+
+@contextlib.contextmanager
+def _ollama_fixture_server(*, response_mode: str = "valid"):
+    handler_class = type("TestOllamaFixtureHandler", (_OllamaFixtureHandler,), {"response_mode": response_mode})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 class FailingLLMBackend:
     def generate(self, synthesis_context_packet: dict[str, object]) -> object:
         raise AssertionError("LLM backend should not be called for blocked runtime execution")
 
 
 class IngestRuntimeTests(unittest.TestCase):
+    def test_runtime_config_loads_default_and_explicit_paths_without_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            default_config_path = _write_runtime_config(repo_root, {"runtime": {"data_root": ".custom-data"}})
+            explicit_config_path = _write_runtime_config(
+                repo_root,
+                {"runtime": {"data_root": ".explicit-data"}},
+                relative_path="configs/runtime.yaml",
+            )
+            default_config = load_runtime_config(repo_root=repo_root)
+            explicit_config = load_runtime_config(repo_root=repo_root, config_path="configs/runtime.yaml")
+
+            self.assertEqual(default_config.config_path, default_config_path.resolve())
+            self.assertEqual(default_config.data_root, (repo_root / ".custom-data").resolve())
+            self.assertEqual(explicit_config.config_path, explicit_config_path.resolve())
+            self.assertEqual(explicit_config.data_root, (repo_root / ".explicit-data").resolve())
+            self.assertNotIn("OPENAI_API_KEY", explicit_config_path.read_text(encoding="utf-8"))
+
+    def test_env_local_api_key_is_separate_from_yaml_config(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(repo_root, {"llm": {"model": "fixture-llm-model"}})
+            (repo_root / ".env.local").write_text("OPENAI_API_KEY=test-secret-key\n", encoding="utf-8")
+            config = load_runtime_config(repo_root=repo_root)
+            api_key, model, _ = resolve_openai_settings(repo_root=repo_root, config=config)
+
+            self.assertEqual(api_key, "test-secret-key")
+            self.assertEqual(model, "fixture-llm-model")
+
     def test_cli_ingest_uses_authorized_default_roots(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             _write_synthetic_corpus_journal_note(repo_root)
@@ -172,7 +360,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_markdown_headings_become_section_labels_for_paragraph_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
@@ -202,7 +390,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_heading_sections_and_longform_paragraphs_survive_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
             _write_synthetic_corpus_journal_note(repo_root)
             _write_synthetic_longform_note(repo_root)
@@ -239,7 +427,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_reingest_unchanged_preserves_chunk_ids_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             _write_synthetic_corpus_journal_note(repo_root)
@@ -258,9 +446,47 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(second_result.deleted_chunks, 0)
             self.assertEqual(second_result.unchanged_chunks, second_result.chunk_count)
 
-    def test_localized_paragraph_edit_changes_only_the_edited_chunk(self) -> None:
+    def test_ingest_creates_graph_tables_and_vector_rows_when_embeddings_are_configured(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
+            with _ollama_fixture_server() as base_url:
+                _write_runtime_config(
+                    repo_root,
+                    {
+                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
+                        "embeddings": {"model": "fixture-embed", "base_url": base_url},
+                    },
+                )
+                (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
+                _write_graph_fixture_notes(repo_root)
+                config = load_runtime_config(repo_root=repo_root)
+
+                result = run_ingest(
+                    repo_root=repo_root,
+                    data_root=Path(data_dir),
+                    source_roots=build_default_source_roots(repo_root, config=config),
+                    config=config,
+                )
+
+            connection = sqlite3.connect(result.database_path)
+            try:
+                edge_types = {
+                    row[0]
+                    for row in connection.execute("SELECT DISTINCT edge_type FROM graph_edges").fetchall()
+                }
+                vector_count = connection.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0]
+            finally:
+                connection.close()
+
+            self.assertIn("note_contains_chunk", edge_types)
+            self.assertIn("chunk_derived_from_note", edge_types)
+            self.assertIn("wikilink", edge_types)
+            self.assertIn("note_has_tag", edge_types)
+            self.assertGreater(vector_count, 0)
+
+    def test_localized_paragraph_edit_changes_only_the_edited_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             fixture_copy = repo_root / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md"
@@ -296,7 +522,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_extraction_preserves_raw_user_input(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -326,7 +552,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_extraction_raw_user_input_mismatch_is_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             stub_backend = StubSemanticExtractorBackend(
                 isolated_payload={
                     "raw_user_input": "WRONG RAW INPUT",
@@ -383,7 +609,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_extraction_missing_raw_user_input_is_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             stub_backend = StubSemanticExtractorBackend(
                 isolated_payload={
                     "probable_user_intent": "missing raw input isolated pass",
@@ -437,7 +663,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_extraction_is_additive_not_destructive(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -501,7 +727,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_extraction_hint_harvesting_is_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             stub_backend = StubSemanticExtractorBackend(
                 isolated_payload={
                     "raw_user_input": "",
@@ -578,7 +804,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_stub_semantic_extractor_artifacts_are_persisted_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -609,7 +835,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_disabled_semantic_extraction_blocks_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -636,7 +862,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_contextual_extraction_receives_prior_thread_state(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             first_turn = run_thread_turn(
                 repo_root=repo_root,
                 data_root=Path(data_dir),
@@ -660,7 +886,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_stub_semantic_extraction_blocks_normal_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -686,7 +912,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_lexical_retrieval_fixture_hit_persists_artifacts_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             _write_synthetic_corpus_journal_note(repo_root)
@@ -732,7 +958,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_lexical_retrieval_no_index_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
 
@@ -759,7 +985,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_lexical_retrieval_no_match_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -786,7 +1012,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_lexical_retrieval_no_query_terms_is_explicit_and_non_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -819,7 +1045,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_same_thread_continuation_preserves_parent_hash_with_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             _write_synthetic_corpus_journal_note(repo_root)
@@ -845,9 +1071,71 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(after_records[-1]["parent_perturbation_hash"], before_records[-1]["state_perturbation_hash"])
             self.assertEqual(second_turn.coverage_report["decision"], "blocked")
 
-    def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
+    def test_completed_runtime_uses_real_activation_traversal_and_coverage_chain(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
+            with _ollama_fixture_server() as base_url:
+                _write_runtime_config(
+                    repo_root,
+                    {
+                        "runtime": {
+                            "require_vector_surface": True,
+                            "require_graph_surface": True,
+                            "require_lexical_surface": True,
+                            "require_primary_corpus_surface": True,
+                        },
+                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
+                        "embeddings": {"model": "fixture-embed", "base_url": base_url},
+                        "coverage": {
+                            "graph_expansion_hop_limit": 2,
+                            "require_surface_contributions": {
+                                "lexical_index_surface": True,
+                                "vector_index_surface": True,
+                                "graph_layer": True,
+                                "primary_corpus": True,
+                                "synthetic_nodes": False,
+                            }
+                        },
+                    },
+                )
+                (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+                _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+                _write_synthetic_corpus_journal_note(repo_root)
+                _write_graph_fixture_notes(repo_root)
+                config = load_runtime_config(repo_root=repo_root)
+                run_ingest(
+                    repo_root=repo_root,
+                    data_root=Path(data_dir),
+                    source_roots=build_default_source_roots(repo_root, config=config),
+                    config=config,
+                )
+
+                result = run_thread_turn(
+                    repo_root=repo_root,
+                    data_root=Path(data_dir),
+                    user_input="Please retrieve the candy snack food before bed note and relate it to yesterday dream recall.",
+                    llm_backend=StubLLMBackend(prefix="Approved stub response"),
+                    config=config,
+                )
+
+            self.assertEqual(result.runtime_outcome, "completed")
+            self.assertEqual(result.coverage_report["decision"], "approved")
+            self.assertEqual(result.llm_metadata["mode"], "stub")
+            self.assertIsNotNone(result.assistant_response)
+            self.assertTrue(result.semantic_traversal_manifest["selected_chunk_ids"])
+            self.assertEqual(
+                [chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]],
+                result.semantic_traversal_manifest["selected_chunk_ids"],
+            )
+            self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["lexical_index_surface"])
+            self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["primary_corpus"])
+            self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
+            self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["graph_layer"])
+            self.assertIsNotNone(result.synthesis_context_packet["approved_retrieval_packet"])
+
+    def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -903,13 +1191,13 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_runtime_semantic_extractor_resolver_fails_closed_without_configured_backend(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
-            repo_root = Path(repo_dir)
-            backend = resolve_semantic_extractor_backend(repo_root=repo_root)
+            repo_root = _prepared_repo_root(repo_dir)
+            backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=load_runtime_config(repo_root=repo_root))
             self.assertEqual(backend.mode_name, "unavailable")
 
     def test_blocked_runtime_does_not_call_llm_backend(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             result = run_thread_turn(
                 repo_root=repo_root,
                 data_root=Path(data_dir),
@@ -923,7 +1211,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_stub_semantic_extraction_cannot_produce_thesis_valid_state_perturbation(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -952,7 +1240,7 @@ class IngestRuntimeTests(unittest.TestCase):
             "stub_success",
         }
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = Path(repo_dir)
+            repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -980,3 +1268,4 @@ class IngestRuntimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

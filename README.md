@@ -1,11 +1,11 @@
 # semantic-traversal
 
-`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, persists semantic-extraction and retrieval diagnostics, updates thread state, and appends a hash-chained ledger record. The current checked-in runtime fails closed before synthesis because the thesis-valid semantic activation and traversal chain is not yet implemented.
+`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, performs semantic extraction, activates retrieval surfaces, builds a traversal manifest, evaluates coverage, optionally synthesizes through the LLM boundary, updates thread state, and appends a hash-chained ledger record.
 
 The current runtime keeps three practical layers visible:
 
 - additive semantic extraction packets
-- lexical SQLite retrieval
+- SQLite-backed lexical, vector, graph, and primary-corpus activation surfaces
 - inspectable per-turn artifacts and ledger hashes
 
 ## What A Turn Does
@@ -17,30 +17,38 @@ For each user message, the runtime:
 3. Runs isolated semantic extraction from the raw message.
 4. Runs contextual semantic extraction using the raw message, prior thread state, and the isolated extraction.
 5. Builds additive retrieval preparation from raw lexical terms plus semantic extraction hints.
-6. Records lexical SQLite observations from the ingestion database when available.
-7. Builds a blocked-or-approved synthesis context packet that keeps the raw user input authoritative.
-8. Calls the LLM backend only when the runtime outcome is `completed`.
-9. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
+6. Activates lexical, primary-corpus, vector, graph, and optional synthetic-node surfaces from the ingestion database when available and configured.
+7. Builds a semantic traversal manifest from activated candidate regions.
+8. Assembles a retrieval packet only from traversal-selected chunk IDs.
+9. Evaluates coverage as `approved` or `blocked`.
+10. Builds a synthesis context packet that keeps the raw user input authoritative.
+11. Calls the LLM backend only when the runtime outcome is `completed`.
+12. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
 
-The runtime still does not use embeddings, vector search, graph traversal, or synthetic node promotion.
+Synthetic node promotion is still deferred.
 
-## Semantic Extraction
+## Config And Secrets
 
-Normal turn execution does not expose semantic extractor mode selection on the CLI. The normal runtime resolves a real extractor from configuration and blocks if the extractor is unavailable, invalid, disabled, or fixture-backed.
+Checked-in runtime authority lives in [`semantic_traversal.runtime.yaml`](/F:/PROJECT-REPOS/semantic-traversal/semantic_traversal.runtime.yaml).
 
-Environment variables:
+Use that YAML for:
 
-- `SEMANTIC_EXTRACTOR_MODE=ollama|auto`
-- `SEMANTIC_EXTRACTOR_MODEL=<model name>`
-- `SEMANTIC_EXTRACTOR_BASE_URL=http://localhost:11434`
+- runtime paths
+- surface requirements
+- provider/model/base URLs
+- coverage limits and thresholds
 
-Stub and disabled semantic extractors are reserved for tests and diagnostic probes only.
+Use `.env.local` only for secrets such as `OPENAI_API_KEY`.
+
+The YAML must not contain API keys or credentials.
+
+Normal turn execution does not expose semantic extractor mode selection on the CLI. Disabled and stub semantic extractors remain test-only or probe-only.
 
 ## Artifact Layout
 
-Default runtime artifacts live under the local temp directory:
+Default runtime artifacts live under the repo-local configured data root:
 
-- thread data root: `$env:TEMP\semantic-traversal`
+- thread data root: `.semantic-traversal-data`
 - probe data root: `$env:TEMP\semantic-traversal-probes`
 
 Per turn, the runtime writes:
@@ -65,7 +73,7 @@ Normal runtime execution is binary:
 - `completed`
 - `blocked`
 
-Coverage uses `decision=approved` or `decision=blocked`. Diagnostic lexical observations may still record index-missing, no-query-term, no-match, or matched-chunk component results, but those observations do not approve synthesis.
+Coverage uses `decision=approved` or `decision=blocked`. Blocked turns may still persist diagnostic observations, but those observations do not approve synthesis.
 
 Semantic extraction still uses explicit per-pass statuses:
 
@@ -83,16 +91,10 @@ Run the test suite:
 python -m unittest discover -s tests -v
 ```
 
-Run the test suite:
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
 Run a normal CLI turn:
 
 ```powershell
-python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub
+python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --repo-root .
 ```
 
 Without a configured real semantic extractor, that command emits blocked diagnostic artifacts and exits non-zero.
@@ -102,10 +104,10 @@ Without a configured real semantic extractor, that command emits blocked diagnos
 Build or refresh the local ingestion database:
 
 ```powershell
-python -m semantic_traversal ingest --repo-root . --data-root $env:TEMP\semantic-traversal
+python -m semantic_traversal ingest --repo-root .
 ```
 
-That command reads the repository corpus and fixture notes, stores them in SQLite, and writes a JSON manifest for inspection.
+That command reads the configured corpus roots, stores notes/chunks plus graph/vector surfaces in SQLite, and writes a JSON manifest for inspection.
 
 ## Probe Commands
 
@@ -131,8 +133,8 @@ Useful files after a turn:
 - `isolated_semantic_extraction_packet.json` for the isolated extraction request, status, metadata, and parsed payload
 - `contextual_semantic_extraction_packet.json` for the contextual extraction request, including prior thread state
 - `semantic_context_packet.json` for additive retrieval preparation and semantic extraction status
-- `semantic_traversal_manifest.json` for diagnostic activation surfaces and selected chunk IDs
-- `retrieval_packet.json` for raw lexical terms, extraction hint terms, candidate term sources, and returned chunks
+- `semantic_traversal_manifest.json` for activation surfaces, candidate regions, and selected chunk IDs
+- `retrieval_packet.json` for traversal-selected chunks and retrieval provenance
 - `coverage_report.json` for binary approval-vs-blocked gating plus blocking reasons
 - `synthesis_context_packet.json` for the exact context that would reach the final LLM when the runtime is approved
 - `state_delta.json` for the persisted state transition
@@ -140,19 +142,20 @@ Useful files after a turn:
 
 ## Human UAT Focus
 
-The current next end goal is implementing the missing thesis-valid activation and traversal chain so blocked diagnostic turns can become completed runtime turns.
+The current focus is tightening the existing activation/traversal slice and expanding the remaining deferred surfaces, especially synthetic node promotion and broader coverage heuristics.
 
 Good break attempts:
 
 - confirm the raw user message is unchanged across extraction and synthesis artifacts
 - confirm the normal CLI blocks when no real semantic extractor is configured
-- run the stub and disabled diagnostic probes and confirm they stay blocked while still persisting extraction and retrieval artifacts
+- run the stub and disabled diagnostic probes and confirm they stay blocked while still persisting extraction and traversal artifacts
 - inspect `candidate_term_sources` and verify raw lexical terms are not dropped when extraction is sparse
+- confirm `approved_retrieval_packet` appears only when coverage is approved
 - run two turns on the same thread and confirm the contextual extraction request includes prior thread state
 - compare ledger hashes to the persisted artifact contents on disk
 
 ## Notes
 
 - Live final-answer mode still requires `OPENAI_API_KEY`.
-- Ollama is optional and is not required for tests or acceptance.
+- Ollama-backed semantic extraction and embeddings are required for a fully completed live runtime path.
 - Completed implementation bundles live under `agent_harness/implementation-projects/archive/`.

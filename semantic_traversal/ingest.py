@@ -10,6 +10,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from .config import RuntimeConfig
+from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 
 
@@ -17,6 +19,7 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 INLINE_LABEL_RE = re.compile(r"^(?P<label>[A-Za-z0-9][A-Za-z0-9/&()'., \-]{0,80}):(?:\s*(?P<remainder>.*))?$")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
 THEMATIC_BREAK_RE = re.compile(r"^\s*(?:---|\*\*\*|___)\s*$")
+WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,8 @@ class NoteRecord:
     note_title: str
     frontmatter: dict[str, Any]
     note_hash: str
+    tag_values: tuple[str, ...]
+    wikilink_targets: tuple[str, ...]
     chunks: tuple[ChunkRecord, ...]
 
 
@@ -124,7 +129,9 @@ def create_ingest_paths(data_root: Path) -> IngestPaths:
     )
 
 
-def build_default_source_roots(repo_root: Path) -> tuple[IngestSourceRoot, ...]:
+def build_default_source_roots(repo_root: Path, config: RuntimeConfig | None = None) -> tuple[IngestSourceRoot, ...]:
+    if config is not None:
+        return tuple(IngestSourceRoot(label=root.label, path=root.path) for root in config.source_roots())
     return (
         IngestSourceRoot(label="corpus", path=(repo_root / "corpus").resolve()),
         IngestSourceRoot(label="tests-fixtures", path=(repo_root / "tests" / "fixtures").resolve()),
@@ -151,11 +158,13 @@ def run_ingest(
     repo_root: Path,
     data_root: Path,
     source_roots: tuple[IngestSourceRoot, ...] | None = None,
+    config: RuntimeConfig | None = None,
+    embedding_backend: EmbeddingBackend | None = None,
 ) -> IngestRunResult:
     resolved_repo_root = repo_root.resolve()
     resolved_data_root = data_root.resolve()
     resolved_data_root.mkdir(parents=True, exist_ok=True)
-    resolved_source_roots = source_roots or build_default_source_roots(resolved_repo_root)
+    resolved_source_roots = source_roots or build_default_source_roots(resolved_repo_root, config=config)
     for source_root in resolved_source_roots:
         if not source_root.path.exists():
             raise FileNotFoundError(f"Source root does not exist: {source_root.path}")
@@ -164,17 +173,20 @@ def run_ingest(
     run_id = f"ingest-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     ingest_paths = create_ingest_paths(resolved_data_root)
     note_records = tuple(_discover_and_parse_notes(resolved_source_roots))
+    resolved_embedding_backend = embedding_backend or (resolve_embedding_backend(config) if config is not None else None)
 
     connection = sqlite3.connect(ingest_paths.database_path)
     try:
         connection.row_factory = sqlite3.Row
-        _initialize_schema(connection)
+        _initialize_schema(connection, config=config)
         counts = _materialize_records(
             connection=connection,
             note_records=note_records,
             source_roots=resolved_source_roots,
             run_id=run_id,
             generated_at=generated_at,
+            config=config,
+            embedding_backend=resolved_embedding_backend,
         )
     finally:
         connection.close()
@@ -228,6 +240,8 @@ def _parse_markdown_note(*, source_root: IngestSourceRoot, note_path: Path, rela
     frontmatter_text, body_text = _split_frontmatter(raw_text)
     frontmatter = _parse_frontmatter(frontmatter_text)
     note_title = _derive_note_title(frontmatter=frontmatter, note_path=note_path)
+    tag_values = _extract_tag_values(frontmatter)
+    wikilink_targets = _extract_wikilink_targets(body_text)
     blocks = _tokenize_markdown_blocks(body_text)
     chunks = _extract_chunks(
         blocks=blocks,
@@ -247,6 +261,8 @@ def _parse_markdown_note(*, source_root: IngestSourceRoot, note_path: Path, rela
         note_title=note_title,
         frontmatter=frontmatter,
         note_hash=sha256_text(raw_text),
+        tag_values=tag_values,
+        wikilink_targets=wikilink_targets,
         chunks=tuple(chunks),
     )
 
@@ -309,6 +325,33 @@ def _derive_note_title(*, frontmatter: dict[str, Any], note_path: Path) -> str:
         except ValueError:
             pass
     return note_path.stem.replace("_", " ")
+
+
+def _extract_tag_values(frontmatter: dict[str, Any]) -> tuple[str, ...]:
+    raw_tags = frontmatter.get("tags")
+    values: list[str] = []
+    if isinstance(raw_tags, list):
+        candidates = raw_tags
+    elif isinstance(raw_tags, str):
+        candidates = [raw_tags]
+    else:
+        candidates = []
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        normalized = _normalize_inline_whitespace(candidate).lstrip("#")
+        if normalized and normalized not in values:
+            values.append(normalized)
+    return tuple(values)
+
+
+def _extract_wikilink_targets(body_text: str) -> tuple[str, ...]:
+    targets: list[str] = []
+    for match in WIKILINK_RE.findall(body_text):
+        normalized = _normalize_inline_whitespace(match)
+        if normalized and normalized not in targets:
+            targets.append(normalized)
+    return tuple(targets)
 
 
 def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
@@ -519,9 +562,12 @@ def _normalize_inline_whitespace(value: str) -> str:
     return " ".join(value.split())
 
 
-def _initialize_schema(connection: sqlite3.Connection) -> None:
+def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig | None = None) -> None:
+    vector_table = str((config.raw["indexes"]["vector_table"] if config is not None else "chunk_vectors"))
+    graph_nodes_table = str((config.raw["indexes"]["graph_nodes_table"] if config is not None else "graph_nodes"))
+    graph_edges_table = str((config.raw["indexes"]["graph_edges_table"] if config is not None else "graph_edges"))
     connection.executescript(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS ingest_runs (
             run_id TEXT PRIMARY KEY,
             generated_at TEXT NOT NULL,
@@ -572,6 +618,43 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_notes_source_root_label ON notes(source_root_label);
         CREATE INDEX IF NOT EXISTS idx_chunks_note_id ON chunks(note_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_source_root_label ON chunks(source_root_label);
+
+        CREATE TABLE IF NOT EXISTS {vector_table} (
+            chunk_id TEXT PRIMARY KEY,
+            vector_json TEXT NOT NULL,
+            vector_dimensions INTEGER NOT NULL,
+            embedding_provider TEXT NOT NULL,
+            embedding_model TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            last_indexed_run_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS {graph_nodes_table} (
+            node_id TEXT PRIMARY KEY,
+            node_type TEXT NOT NULL,
+            label TEXT NOT NULL,
+            ref_id TEXT,
+            metadata_json TEXT NOT NULL,
+            last_ingested_run_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS {graph_edges_table} (
+            edge_id TEXT PRIMARY KEY,
+            source_node_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            edge_type TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            last_ingested_run_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{vector_table}_content_hash ON {vector_table}(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_{graph_nodes_table}_node_type ON {graph_nodes_table}(node_type);
+        CREATE INDEX IF NOT EXISTS idx_{graph_edges_table}_source ON {graph_edges_table}(source_node_id);
+        CREATE INDEX IF NOT EXISTS idx_{graph_edges_table}_target ON {graph_edges_table}(target_node_id);
+        CREATE INDEX IF NOT EXISTS idx_{graph_edges_table}_type ON {graph_edges_table}(edge_type);
         """
     )
     connection.commit()
@@ -584,6 +667,8 @@ def _materialize_records(
     source_roots: tuple[IngestSourceRoot, ...],
     run_id: str,
     generated_at: str,
+    config: RuntimeConfig | None,
+    embedding_backend: EmbeddingBackend | None,
 ) -> dict[str, int]:
     counts = {
         "inserted_chunks": 0,
@@ -611,6 +696,21 @@ def _materialize_records(
         connection=connection,
         source_root_labels=source_root_labels,
         processed_note_ids=processed_note_ids,
+    )
+    _rebuild_graph_layer(
+        connection=connection,
+        note_records=note_records,
+        run_id=run_id,
+        generated_at=generated_at,
+        config=config,
+    )
+    _refresh_chunk_vectors(
+        connection=connection,
+        note_records=note_records,
+        run_id=run_id,
+        generated_at=generated_at,
+        config=config,
+        embedding_backend=embedding_backend,
     )
 
     connection.execute(
@@ -859,6 +959,277 @@ def _delete_ids(
     )
 
 
+def _rebuild_graph_layer(
+    *,
+    connection: sqlite3.Connection,
+    note_records: tuple[NoteRecord, ...],
+    run_id: str,
+    generated_at: str,
+    config: RuntimeConfig | None,
+) -> None:
+    graph_nodes_table = str((config.raw["indexes"]["graph_nodes_table"] if config is not None else "graph_nodes"))
+    graph_edges_table = str((config.raw["indexes"]["graph_edges_table"] if config is not None else "graph_edges"))
+    connection.execute(f"DELETE FROM {graph_edges_table}")
+    connection.execute(f"DELETE FROM {graph_nodes_table}")
+
+    note_lookup: dict[str, str] = {}
+    for note_record in note_records:
+        note_lookup[_normalize_note_reference(note_record.note_title)] = note_record.note_id
+        note_lookup[_normalize_note_reference(Path(note_record.relative_path).stem.replace("_", " "))] = note_record.note_id
+
+    node_rows: list[tuple[Any, ...]] = []
+    edge_rows: list[tuple[Any, ...]] = []
+    seen_tag_nodes: set[str] = set()
+    seen_unresolved_nodes: set[str] = set()
+
+    for note_record in note_records:
+        note_node_id = _note_node_id(note_record.note_id)
+        node_rows.append(
+            (
+                note_node_id,
+                "note",
+                note_record.note_title,
+                note_record.note_id,
+                json.dumps(
+                    {
+                        "relative_path": note_record.relative_path,
+                        "source_root_label": note_record.source_root_label,
+                        "tags": list(note_record.tag_values),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                run_id,
+                generated_at,
+            )
+        )
+        for chunk in note_record.chunks:
+            chunk_node_id = _chunk_node_id(chunk.chunk_id)
+            node_rows.append(
+                (
+                    chunk_node_id,
+                    "chunk",
+                    chunk.section_label,
+                    chunk.chunk_id,
+                    json.dumps(
+                        {
+                            "note_id": chunk.note_id,
+                            "relative_path": chunk.relative_path,
+                            "paragraph_ordinal": chunk.paragraph_ordinal,
+                            "source_root_label": chunk.source_root_label,
+                        },
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
+                    run_id,
+                    generated_at,
+                )
+            )
+            edge_rows.extend(
+                [
+                    (
+                        _edge_id("note_contains_chunk", note_node_id, chunk_node_id),
+                        note_node_id,
+                        chunk_node_id,
+                        "note_contains_chunk",
+                        json.dumps({"note_id": note_record.note_id, "chunk_id": chunk.chunk_id}, ensure_ascii=True, sort_keys=True),
+                        run_id,
+                        generated_at,
+                    ),
+                    (
+                        _edge_id("chunk_derived_from_note", chunk_node_id, note_node_id),
+                        chunk_node_id,
+                        note_node_id,
+                        "chunk_derived_from_note",
+                        json.dumps({"note_id": note_record.note_id, "chunk_id": chunk.chunk_id}, ensure_ascii=True, sort_keys=True),
+                        run_id,
+                        generated_at,
+                    ),
+                ]
+            )
+
+        for tag_value in note_record.tag_values:
+            tag_node_id = _tag_node_id(tag_value)
+            if tag_node_id not in seen_tag_nodes:
+                node_rows.append(
+                    (
+                        tag_node_id,
+                        "tag",
+                        tag_value,
+                        tag_value,
+                        json.dumps({"tag": tag_value}, ensure_ascii=True, sort_keys=True),
+                        run_id,
+                        generated_at,
+                    )
+                )
+                seen_tag_nodes.add(tag_node_id)
+            edge_rows.append(
+                (
+                    _edge_id("note_has_tag", note_node_id, tag_node_id),
+                    note_node_id,
+                    tag_node_id,
+                    "note_has_tag",
+                    json.dumps({"tag": tag_value}, ensure_ascii=True, sort_keys=True),
+                    run_id,
+                    generated_at,
+                )
+            )
+
+        for target_label in note_record.wikilink_targets:
+            resolved_note_id = note_lookup.get(_normalize_note_reference(target_label))
+            if resolved_note_id is not None:
+                target_node_id = _note_node_id(resolved_note_id)
+            else:
+                target_node_id = _unresolved_reference_node_id(target_label)
+                if target_node_id not in seen_unresolved_nodes:
+                    node_rows.append(
+                        (
+                            target_node_id,
+                            "unresolved_note_ref",
+                            target_label,
+                            target_label,
+                            json.dumps({"target_label": target_label}, ensure_ascii=True, sort_keys=True),
+                            run_id,
+                            generated_at,
+                        )
+                    )
+                    seen_unresolved_nodes.add(target_node_id)
+            edge_rows.append(
+                (
+                    _edge_id("wikilink", note_node_id, target_node_id, target_label),
+                    note_node_id,
+                    target_node_id,
+                    "wikilink",
+                    json.dumps(
+                        {"target_label": target_label, "resolved_note_id": resolved_note_id},
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
+                    run_id,
+                    generated_at,
+                )
+            )
+
+    connection.executemany(
+        f"INSERT INTO {graph_nodes_table} (node_id, node_type, label, ref_id, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        node_rows,
+    )
+    connection.executemany(
+        f"INSERT INTO {graph_edges_table} (edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        edge_rows,
+    )
+
+
+def _refresh_chunk_vectors(
+    *,
+    connection: sqlite3.Connection,
+    note_records: tuple[NoteRecord, ...],
+    run_id: str,
+    generated_at: str,
+    config: RuntimeConfig | None,
+    embedding_backend: EmbeddingBackend | None,
+) -> None:
+    vector_table = str((config.raw["indexes"]["vector_table"] if config is not None else "chunk_vectors"))
+    processed_chunk_ids = [chunk.chunk_id for note_record in note_records for chunk in note_record.chunks]
+    if not processed_chunk_ids:
+        connection.execute(f"DELETE FROM {vector_table}")
+        return
+
+    placeholders = ",".join("?" for _ in processed_chunk_ids)
+    existing_rows = connection.execute(
+        f"SELECT chunk_id, content_hash FROM {vector_table} WHERE chunk_id IN ({placeholders})",
+        tuple(processed_chunk_ids),
+    ).fetchall()
+    existing_hashes = {str(row["chunk_id"]): str(row["content_hash"]) for row in existing_rows}
+    rows_to_index: list[ChunkRecord] = []
+    for note_record in note_records:
+        for chunk in note_record.chunks:
+            if existing_hashes.get(chunk.chunk_id) != chunk.chunk_hash:
+                rows_to_index.append(chunk)
+
+    if embedding_backend is not None and rows_to_index:
+        response = embedding_backend.embed_texts([_embedding_text_for_chunk(chunk) for chunk in rows_to_index])
+        if response.status == "embedded" and response.vectors is not None:
+            model_name = str(response.metadata.get("model") or "unknown")
+            provider_name = str(response.metadata.get("backend_mode") or getattr(embedding_backend, "mode_name", "unknown"))
+            connection.executemany(
+                f"""
+                INSERT INTO {vector_table} (
+                    chunk_id,
+                    vector_json,
+                    vector_dimensions,
+                    embedding_provider,
+                    embedding_model,
+                    content_hash,
+                    last_indexed_run_id,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chunk_id) DO UPDATE SET
+                    vector_json=excluded.vector_json,
+                    vector_dimensions=excluded.vector_dimensions,
+                    embedding_provider=excluded.embedding_provider,
+                    embedding_model=excluded.embedding_model,
+                    content_hash=excluded.content_hash,
+                    last_indexed_run_id=excluded.last_indexed_run_id,
+                    updated_at=excluded.updated_at
+                """,
+                [
+                    (
+                        chunk.chunk_id,
+                        json.dumps(vector, ensure_ascii=True),
+                        len(vector),
+                        provider_name,
+                        model_name,
+                        chunk.chunk_hash,
+                        run_id,
+                        generated_at,
+                    )
+                    for chunk, vector in zip(rows_to_index, response.vectors, strict=True)
+                ],
+            )
+
+    connection.execute(
+        f"DELETE FROM {vector_table} WHERE chunk_id NOT IN ({placeholders})",
+        tuple(processed_chunk_ids),
+    )
+
+
+def _embedding_text_for_chunk(chunk: ChunkRecord) -> str:
+    return " | ".join(
+        [
+            chunk.note_title,
+            chunk.relative_path,
+            chunk.section_label,
+            chunk.paragraph_text,
+        ]
+    )
+
+
+def _note_node_id(note_id: str) -> str:
+    return f"note::{note_id}"
+
+
+def _chunk_node_id(chunk_id: str) -> str:
+    return f"chunk::{chunk_id}"
+
+
+def _tag_node_id(tag_value: str) -> str:
+    return f"tag::{_normalize_note_reference(tag_value)}"
+
+
+def _unresolved_reference_node_id(target_label: str) -> str:
+    return f"unresolved::{_normalize_note_reference(target_label)}"
+
+
+def _normalize_note_reference(value: str) -> str:
+    return _normalize_inline_whitespace(value).replace("_", " ").lower()
+
+
+def _edge_id(edge_type: str, source_node_id: str, target_node_id: str, salt: str | None = None) -> str:
+    payload = {"edge_type": edge_type, "source": source_node_id, "target": target_node_id, "salt": salt}
+    return f"edge-{sha256_json(payload)[:16]}"
+
+
 def _build_manifest(
     *,
     run_id: str,
@@ -896,6 +1267,8 @@ def _build_manifest(
                 "note_title": note_record.note_title,
                 "note_hash": note_record.note_hash,
                 "frontmatter": note_record.frontmatter,
+                "tag_values": list(note_record.tag_values),
+                "wikilink_targets": list(note_record.wikilink_targets),
                 "chunk_ids": [chunk.chunk_id for chunk in note_record.chunks],
             }
             for note_record in note_records

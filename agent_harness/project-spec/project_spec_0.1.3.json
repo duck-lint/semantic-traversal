@@ -1137,6 +1137,7 @@
         "thread_id",
         "data_root",
         "repo_root",
+        "config_path",
         "llm_model_if_needed"
       ],
       "disallowed_user_controls": [
@@ -1158,6 +1159,15 @@
       "limits": [
         "Diagnostic probes must not be described as successful runtime turns.",
         "Diagnostic probe success must not imply thesis-runtime success."
+      ]
+    },
+    "runtime_config_authority": {
+      "description": "Checked-in YAML config is the non-secret runtime authority; .env.local is an untracked secret authority.",
+      "rules": [
+        "The checked-in YAML config may define runtime paths, providers, models, thresholds, and required surfaces.",
+        "The checked-in YAML config must not contain API keys, bearer tokens, or other credentials.",
+        ".env.local may supply secrets such as OPENAI_API_KEY.",
+        ".env.local must not redefine runtime architecture, activation surfaces, or blocked-vs-completed ontology."
       ]
     }
   },
