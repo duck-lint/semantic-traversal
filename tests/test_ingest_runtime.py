@@ -485,6 +485,15 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(default_config.coverage_require_surface_contributions["vector_index_surface"])
             self.assertNotIn("OPENAI_API_KEY", explicit_config_path.read_text(encoding="utf-8"))
 
+    def test_readme_and_dependency_manifest_document_runtime_authority_dependencies(self) -> None:
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        requirements_text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("[`semantic_traversal.runtime.yaml`](semantic_traversal.runtime.yaml)", readme_text)
+        self.assertNotIn("/F:/PROJECT-REPOS", readme_text)
+        self.assertIn("PyYAML", requirements_text)
+        self.assertIn("sentence-transformers", requirements_text)
+
     def test_default_config_has_valid_sql_identifiers(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE))
         self.assertEqual(config.vector_table, "chunk_vectors")
@@ -1722,6 +1731,30 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
             self.assertTrue(result.semantic_traversal_manifest["surface_contributions"]["graph_layer"])
             self.assertIsNotNone(result.synthesis_context_packet["approved_retrieval_packet"])
+
+            graph_candidates = result.semantic_traversal_manifest["candidate_regions"]["graph_layer"]
+            graph_candidate = next((candidate for candidate in graph_candidates if candidate.get("graph_path")), None)
+            self.assertIsNotNone(graph_candidate)
+            self.assertEqual(graph_candidate["hop_count"], 1)
+            self.assertTrue(graph_candidate["edge_types"])
+            self.assertTrue(set(graph_candidate["edge_types"]).intersection({"sibling", "wikilink"}))
+            self.assertTrue(graph_candidate["graph_path"])
+
+            graph_selected_chunk = next(
+                (chunk for chunk in result.retrieval_packet["selected_chunks"] if "graph_layer" in chunk["surface_contributions"]),
+                None,
+            )
+            self.assertIsNotNone(graph_selected_chunk)
+            self.assertEqual(graph_selected_chunk["hop_count"], 1)
+            self.assertTrue(graph_selected_chunk["edge_types"])
+            self.assertTrue(set(graph_selected_chunk["edge_types"]).intersection({"sibling", "wikilink"}))
+            self.assertTrue(graph_selected_chunk["graph_path"])
+
+            for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface", "synthetic_nodes"):
+                for candidate in result.semantic_traversal_manifest["candidate_regions"][surface_name]:
+                    self.assertNotIn("graph_path", candidate)
+                    self.assertNotIn("hop_count", candidate)
+                    self.assertNotIn("edge_types", candidate)
 
     def test_semantic_target_coverage_blocks_when_must_preserve_evidence_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

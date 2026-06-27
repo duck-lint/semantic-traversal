@@ -798,9 +798,12 @@ def _base_candidate_from_row(
     source_fields: list[str],
     score: float,
     reason: str,
+    graph_path: list[str] | None = None,
+    hop_count: int | None = None,
+    edge_types: list[str] | None = None,
 ) -> dict[str, Any]:
     section_path = json.loads(row["section_path_json"]) if row["section_path_json"] else []
-    return {
+    candidate = {
         "chunk_id": row["chunk_id"],
         "note_id": row["note_id"],
         "note_title": row["note_title"],
@@ -818,6 +821,13 @@ def _base_candidate_from_row(
         "source_fields_matched": source_fields,
         "selection_reason": reason,
     }
+    if graph_path is not None:
+        candidate["graph_path"] = graph_path
+    if hop_count is not None:
+        candidate["hop_count"] = hop_count
+    if edge_types is not None:
+        candidate["edge_types"] = edge_types
+    return candidate
 
 
 def _query_lexical_candidates(connection: sqlite3.Connection, *, query_terms: list[str]) -> list[dict[str, Any]]:
@@ -996,7 +1006,13 @@ def _query_graph_candidates(
         f"SELECT chunk_id, note_id FROM chunks WHERE chunk_id IN ({placeholders})",
         tuple(seed_chunk_ids),
     ).fetchall()
+    seed_chunk_to_note_id = {str(row["chunk_id"]): str(row["note_id"]) for row in seed_rows}
     seed_note_ids = {str(row["note_id"]) for row in seed_rows}
+    seed_note_to_chunk_id: dict[str, str] = {}
+    for chunk_id in seed_chunk_ids:
+        note_id = seed_chunk_to_note_id.get(chunk_id)
+        if note_id is not None and note_id not in seed_note_to_chunk_id:
+            seed_note_to_chunk_id[note_id] = chunk_id
     candidates_by_chunk: dict[str, dict[str, Any]] = {}
 
     if seed_note_ids:
@@ -1025,6 +1041,7 @@ def _query_graph_candidates(
             chunk_id = str(row["chunk_id"])
             if chunk_id in seed_chunk_ids:
                 continue
+            seed_chunk_id = seed_note_to_chunk_id.get(str(row["note_id"]))
             candidates_by_chunk[chunk_id] = _base_candidate_from_row(
                 row,
                 surface="graph_layer",
@@ -1032,6 +1049,9 @@ def _query_graph_candidates(
                 source_fields=["note_contains_chunk"],
                 score=2.0,
                 reason="graph expansion reached sibling chunk through note_contains_chunk",
+                graph_path=[seed_chunk_id, chunk_id] if seed_chunk_id else None,
+                hop_count=1,
+                edge_types=["sibling"],
             )
 
     if hop_limit >= 2 and seed_note_ids:
@@ -1051,6 +1071,15 @@ def _query_graph_candidates(
             if str(row["target_node_id"]).startswith("note::")
         }
         if target_note_ids:
+            source_note_to_target_note_ids: dict[str, set[str]] = {}
+            for row in wikilink_edges:
+                source_node_id = str(row["source_node_id"])
+                target_node_id = str(row["target_node_id"])
+                if not source_node_id.startswith("note::") or not target_node_id.startswith("note::"):
+                    continue
+                source_note_id = source_node_id.split("note::", 1)[1]
+                target_note_id = target_node_id.split("note::", 1)[1]
+                source_note_to_target_note_ids.setdefault(source_note_id, set()).add(target_note_id)
             target_placeholders = ",".join("?" for _ in target_note_ids)
             linked_rows = connection.execute(
                 f"""
@@ -1074,6 +1103,12 @@ def _query_graph_candidates(
             ).fetchall()
             for row in linked_rows:
                 chunk_id = str(row["chunk_id"])
+                source_note_id = None
+                for candidate_source_note_id, target_ids in source_note_to_target_note_ids.items():
+                    if str(row["note_id"]) in target_ids:
+                        source_note_id = candidate_source_note_id
+                        break
+                seed_chunk_id = seed_note_to_chunk_id.get(source_note_id or "")
                 candidates_by_chunk.setdefault(
                     chunk_id,
                     _base_candidate_from_row(
@@ -1083,6 +1118,9 @@ def _query_graph_candidates(
                         source_fields=["wikilink"],
                         score=1.5,
                         reason="graph expansion reached chunk through wikilink edge",
+                        graph_path=[seed_chunk_id, f"note::{row['note_id']}", chunk_id] if seed_chunk_id else None,
+                        hop_count=1,
+                        edge_types=["wikilink"],
                     ),
                 )
 
@@ -1301,6 +1339,13 @@ def _build_semantic_traversal_manifest(
             for term in list(candidate.get("matched_terms") or []):
                 if term not in entry["matched_terms"]:
                     entry["matched_terms"].append(term)
+            if surface_name == "graph_layer":
+                if candidate.get("graph_path") is not None and "graph_path" not in entry:
+                    entry["graph_path"] = list(candidate.get("graph_path") or [])
+                if candidate.get("hop_count") is not None and "hop_count" not in entry:
+                    entry["hop_count"] = int(candidate.get("hop_count"))
+                if candidate.get("edge_types") is not None and "edge_types" not in entry:
+                    entry["edge_types"] = list(candidate.get("edge_types") or [])
 
     ranked_candidates = sorted(
         aggregate.values(),
@@ -1450,6 +1495,9 @@ def _assemble_retrieval_packet(
                 "frontmatter": json.loads(str(row["frontmatter_json"])) if row["frontmatter_json"] else {},
                 "surface_contributions": list(selected_candidate.get("surface_contributions") or []),
                 "selection_reasons": list(selected_candidate.get("selection_reasons") or []),
+                "graph_path": list(selected_candidate.get("graph_path") or []) if selected_candidate.get("graph_path") is not None else None,
+                "hop_count": selected_candidate.get("hop_count"),
+                "edge_types": list(selected_candidate.get("edge_types") or []) if selected_candidate.get("edge_types") is not None else None,
                 "vector_score": next(
                     (
                         candidate["surface_score"]

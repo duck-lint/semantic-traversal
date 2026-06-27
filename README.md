@@ -29,7 +29,7 @@ Synthetic node promotion is still deferred.
 
 ## Config And Secrets
 
-Checked-in runtime authority lives in [`semantic_traversal.runtime.yaml`](/F:/PROJECT-REPOS/semantic-traversal/semantic_traversal.runtime.yaml).
+Checked-in runtime authority lives in [`semantic_traversal.runtime.yaml`](semantic_traversal.runtime.yaml).
 
 Use that YAML for:
 
@@ -47,6 +47,8 @@ Install the declared dependencies before running vector-enabled runtime paths:
 ```powershell
 pip install -r requirements.txt
 ```
+
+`requirements.txt` declares the runtime/test dependencies used by the checked-in config and embedding stack, including `PyYAML` and `sentence-transformers`.
 
 Normal turn execution does not expose semantic extractor mode selection on the CLI. Disabled and stub semantic extractors remain test-only or probe-only.
 
