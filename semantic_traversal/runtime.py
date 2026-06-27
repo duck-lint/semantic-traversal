@@ -507,7 +507,9 @@ def _run_semantic_extraction(
 
 
 def _database_path(config: RuntimeConfig, data_root: Path) -> Path:
-    return (data_root / "ingestion" / "latent_space.sqlite3").resolve()
+    raw_root = config.storage_ingestion_root
+    ingest_root = raw_root if raw_root.is_absolute() else (data_root / raw_root)
+    return (ingest_root / config.storage_ingestion_database_filename).resolve()
 
 
 def _load_chunk_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1444,7 +1446,7 @@ def run_thread_turn(
 ) -> TurnExecutionResult:
     resolved_config = config or load_runtime_config(repo_root=repo_root)
     timestamp = _utc_now()
-    paths = create_thread_paths(data_root=data_root, thread_id=thread_id)
+    paths = create_thread_paths(data_root=data_root, config=resolved_config, thread_id=thread_id)
 
     thread_document = load_json(paths.conversation_thread_path) or _default_thread_document(paths.thread_id, timestamp)
     prior_thread_state = load_json(paths.thread_state_path) or _default_thread_state(paths.thread_id, timestamp)

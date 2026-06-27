@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -111,21 +110,23 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def default_data_root() -> Path:
-    return Path(tempfile.gettempdir()) / "semantic-traversal"
+def _resolve_runtime_storage_path(data_root: Path, raw_path: Path) -> Path:
+    if raw_path.is_absolute():
+        return raw_path.resolve()
+    return (data_root / raw_path).resolve()
 
 
-def create_ingest_paths(data_root: Path) -> IngestPaths:
-    ingest_root = data_root / "ingestion"
-    manifests_root = ingest_root / "manifests"
+def create_ingest_paths(data_root: Path, *, config: RuntimeConfig) -> IngestPaths:
+    ingest_root = _resolve_runtime_storage_path(data_root, config.storage_ingestion_root)
+    manifests_root = _resolve_runtime_storage_path(data_root, config.storage_ingestion_manifests_root)
     ingest_root.mkdir(parents=True, exist_ok=True)
     manifests_root.mkdir(parents=True, exist_ok=True)
     return IngestPaths(
         data_root=data_root,
         ingest_root=ingest_root,
-        database_path=ingest_root / "latent_space.sqlite3",
+        database_path=ingest_root / config.storage_ingestion_database_filename,
         manifests_root=manifests_root,
-        latest_manifest_path=manifests_root / "latest.json",
+        latest_manifest_path=manifests_root / config.storage_latest_ingest_manifest_filename,
     )
 
 
@@ -168,7 +169,7 @@ def run_ingest(
 
     generated_at = _utc_now()
     run_id = f"ingest-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
-    ingest_paths = create_ingest_paths(resolved_data_root)
+    ingest_paths = create_ingest_paths(resolved_data_root, config=resolved_config)
     note_records = tuple(_discover_and_parse_notes(resolved_source_roots))
     resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 

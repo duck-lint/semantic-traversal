@@ -32,11 +32,13 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "max_output_tokens": int,
     },
     "semantic_extraction": {
+        "provider": str,
         "model": (str, type(None)),
         "base_url": str,
         "request_timeout_seconds": int,
     },
     "embeddings": {
+        "provider": str,
         "model": (str, type(None)),
         "base_url": str,
         "request_timeout_seconds": int,
@@ -54,6 +56,18 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "vector_table": str,
         "graph_nodes_table": str,
         "graph_edges_table": str,
+    },
+    "storage": {
+        "threads_root": str,
+        "turns_root": str,
+        "turn_directory_prefix": str,
+        "conversation_thread_filename": str,
+        "thread_state_filename": str,
+        "thread_ledger_filename": str,
+        "ingestion_root": str,
+        "ingestion_database_filename": str,
+        "ingestion_manifests_root": str,
+        "latest_ingest_manifest_filename": str,
     },
     "coverage": {
         "min_selected_chunks": int,
@@ -109,6 +123,10 @@ class RuntimeConfig:
         return None if value is None else str(value)
 
     @property
+    def semantic_extraction_provider(self) -> str:
+        return str(self.raw["semantic_extraction"]["provider"])
+
+    @property
     def semantic_extraction_base_url(self) -> str:
         return str(self.raw["semantic_extraction"]["base_url"])
 
@@ -120,6 +138,10 @@ class RuntimeConfig:
     def embedding_model(self) -> str | None:
         value = self.raw["embeddings"]["model"]
         return None if value is None else str(value)
+
+    @property
+    def embedding_provider(self) -> str:
+        return str(self.raw["embeddings"]["provider"])
 
     @property
     def embedding_base_url(self) -> str:
@@ -158,6 +180,46 @@ class RuntimeConfig:
         return str(self.raw["indexes"]["graph_edges_table"])
 
     @property
+    def storage_threads_root(self) -> Path:
+        return Path(self.raw["storage"]["threads_root"])
+
+    @property
+    def storage_turns_root(self) -> Path:
+        return Path(self.raw["storage"]["turns_root"])
+
+    @property
+    def storage_turn_directory_prefix(self) -> str:
+        return str(self.raw["storage"]["turn_directory_prefix"])
+
+    @property
+    def storage_conversation_thread_filename(self) -> str:
+        return str(self.raw["storage"]["conversation_thread_filename"])
+
+    @property
+    def storage_thread_state_filename(self) -> str:
+        return str(self.raw["storage"]["thread_state_filename"])
+
+    @property
+    def storage_thread_ledger_filename(self) -> str:
+        return str(self.raw["storage"]["thread_ledger_filename"])
+
+    @property
+    def storage_ingestion_root(self) -> Path:
+        return Path(self.raw["storage"]["ingestion_root"])
+
+    @property
+    def storage_ingestion_database_filename(self) -> str:
+        return str(self.raw["storage"]["ingestion_database_filename"])
+
+    @property
+    def storage_ingestion_manifests_root(self) -> Path:
+        return Path(self.raw["storage"]["ingestion_manifests_root"])
+
+    @property
+    def storage_latest_ingest_manifest_filename(self) -> str:
+        return str(self.raw["storage"]["latest_ingest_manifest_filename"])
+
+    @property
     def coverage_min_selected_chunks(self) -> int:
         return int(self.raw["coverage"]["min_selected_chunks"])
 
@@ -184,6 +246,7 @@ class RuntimeConfig:
         else:
             candidate = candidate.resolve()
         return candidate
+
 
 
 def _resolve_config_path(repo_root: Path, explicit_config_path: str | None = None) -> Path:

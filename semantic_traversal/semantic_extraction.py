@@ -386,34 +386,37 @@ def resolve_semantic_extractor_backend(
     base_url_override: str | None = None,
     allow_test_backends: bool = False,
 ) -> SemanticExtractorBackend:
-    configured_mode = (extractor_mode or "ollama").strip().lower()
+    configured_mode = extractor_mode.strip().lower() if isinstance(extractor_mode, str) and extractor_mode.strip() else None
+    configured_provider = config.semantic_extraction_provider.strip().lower()
     configured_model = model_override or config.semantic_extraction_model
     configured_base_url = base_url_override or config.semantic_extraction_base_url
     timeout_seconds = config.semantic_extraction_request_timeout_seconds
 
-    if configured_mode == "disabled":
+    if configured_mode in {"disabled", "stub"}:
         if allow_test_backends:
-            return DisabledSemanticExtractorBackend()
+            return DisabledSemanticExtractorBackend() if configured_mode == "disabled" else StubSemanticExtractorBackend()
         return UnavailableSemanticExtractorBackend(
-            reason="disabled semantic extraction is test-only and not valid for the normal runtime",
+            reason=f"{configured_mode} semantic extraction is test-only and not valid for the normal runtime",
             configured_mode=configured_mode,
         )
-    if configured_mode == "stub":
-        if allow_test_backends:
-            return StubSemanticExtractorBackend()
-        return UnavailableSemanticExtractorBackend(
-            reason="stub semantic extraction is test-only and not valid for the normal runtime",
-            configured_mode=configured_mode,
-        )
-    if configured_mode == "ollama":
+    if configured_mode and configured_mode != configured_provider:
+        if configured_mode != "ollama":
+            return UnavailableSemanticExtractorBackend(
+                reason=f"unsupported semantic extractor mode: {configured_mode}",
+                configured_mode=configured_mode,
+            )
+    if configured_provider == "ollama":
         if not isinstance(configured_model, str) or not configured_model.strip():
             return UnavailableSemanticExtractorBackend(
                 reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
-                configured_mode=configured_mode,
+                configured_mode=configured_provider,
             )
         return OllamaSemanticExtractorBackend(
             model=configured_model,
             base_url=configured_base_url,
             timeout_seconds=timeout_seconds,
         )
-    raise ValueError(f"Unsupported semantic extractor mode: {configured_mode}")
+    return UnavailableSemanticExtractorBackend(
+        reason=f"unsupported semantic extraction provider: {configured_provider}",
+        configured_mode=configured_provider,
+    )

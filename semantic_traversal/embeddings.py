@@ -94,9 +94,12 @@ class OllamaEmbeddingBackend:
 
 
 def resolve_embedding_backend(config: RuntimeConfig) -> EmbeddingBackend:
+    provider = config.embedding_provider.strip().lower()
     model = config.embedding_model
     base_url = config.embedding_base_url
     timeout_seconds = config.embedding_request_timeout_seconds
+    if provider != "ollama":
+        return UnavailableEmbeddingBackend(reason=f"unsupported embedding provider: {provider}")
     if not isinstance(model, str) or not model.strip():
         return UnavailableEmbeddingBackend(reason="embedding model is not configured")
     return OllamaEmbeddingBackend(model=model.strip(), base_url=base_url, timeout_seconds=timeout_seconds)

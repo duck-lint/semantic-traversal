@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .hashing import sha256_json
-from .ingest import build_default_source_roots, default_data_root, run_ingest
+from .ingest import build_default_source_roots, run_ingest
 from .llm import StubLLMBackend, resolve_llm_backend
 from .runtime import run_thread_turn
 from .semantic_extraction import DisabledSemanticExtractorBackend, StubSemanticExtractorBackend

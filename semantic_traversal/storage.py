@@ -6,15 +6,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .config import RuntimeConfig
+
 
 @dataclass(frozen=True)
 class ThreadPaths:
     data_root: Path
     thread_id: str
+    config: RuntimeConfig
 
     @property
     def threads_root(self) -> Path:
-        return self.data_root / "threads"
+        return _resolve_runtime_storage_path(self.data_root, self.config.storage_threads_root)
 
     @property
     def thread_root(self) -> Path:
@@ -22,34 +25,40 @@ class ThreadPaths:
 
     @property
     def turns_root(self) -> Path:
-        return self.thread_root / "turns"
+        return self.thread_root / self.config.storage_turns_root
 
     @property
     def conversation_thread_path(self) -> Path:
-        return self.thread_root / "conversation_thread.json"
+        return self.thread_root / self.config.storage_conversation_thread_filename
 
     @property
     def thread_state_path(self) -> Path:
-        return self.thread_root / "thread_state.json"
+        return self.thread_root / self.config.storage_thread_state_filename
 
     @property
     def thread_ledger_path(self) -> Path:
-        return self.thread_root / "thread_ledger.jsonl"
+        return self.thread_root / self.config.storage_thread_ledger_filename
 
     def turn_root(self, turn_id: int) -> Path:
-        return self.turns_root / f"turn-{turn_id:06d}"
+        return self.turns_root / f"{self.config.storage_turn_directory_prefix}{turn_id:06d}"
 
 
-def ensure_data_root(data_root: Path) -> Path:
+def _resolve_runtime_storage_path(data_root: Path, raw_path: Path) -> Path:
+    if raw_path.is_absolute():
+        return raw_path.resolve()
+    return (data_root / raw_path).resolve()
+
+
+def ensure_data_root(data_root: Path, *, config: RuntimeConfig) -> Path:
     data_root.mkdir(parents=True, exist_ok=True)
-    (data_root / "threads").mkdir(parents=True, exist_ok=True)
+    _resolve_runtime_storage_path(data_root, config.storage_threads_root).mkdir(parents=True, exist_ok=True)
     return data_root
 
 
-def create_thread_paths(data_root: Path, thread_id: str | None = None) -> ThreadPaths:
-    ensure_data_root(data_root)
+def create_thread_paths(data_root: Path, *, config: RuntimeConfig, thread_id: str | None = None) -> ThreadPaths:
+    ensure_data_root(data_root, config=config)
     resolved_thread_id = thread_id or f"thread-{uuid.uuid4().hex[:12]}"
-    paths = ThreadPaths(data_root=data_root, thread_id=resolved_thread_id)
+    paths = ThreadPaths(data_root=data_root, thread_id=resolved_thread_id, config=config)
     paths.thread_root.mkdir(parents=True, exist_ok=True)
     paths.turns_root.mkdir(parents=True, exist_ok=True)
     return paths

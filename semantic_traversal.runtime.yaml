@@ -1,17 +1,19 @@
 runtime:
   data_root: ".semantic-traversal-data"
-  max_retrieval_chunks: 6
+  max_retrieval_chunks: 18
 
 llm:
   model: "gpt-5.4-mini"
-  max_output_tokens: 400
+  max_output_tokens: 6000
 
 semantic_extraction:
+  provider: "ollama"
   model: null
   base_url: "http://localhost:11434"
   request_timeout_seconds: 20
 
 embeddings:
+  provider: "ollama"
   model: null
   base_url: "http://localhost:11434"
   request_timeout_seconds: 20
@@ -24,6 +26,18 @@ paths:
       path: "tests/fixtures"
   synthetic_nodes_root: "corpus/SYNTHETIC_NODES"
 
+storage:
+  threads_root: "threads"
+  turns_root: "turns"
+  turn_directory_prefix: "turn-"
+  conversation_thread_filename: "conversation_thread.json"
+  thread_state_filename: "thread_state.json"
+  thread_ledger_filename: "thread_ledger.jsonl"
+  ingestion_root: "ingestion"
+  ingestion_database_filename: "latent_space.sqlite3"
+  ingestion_manifests_root: "ingestion/manifests"
+  latest_ingest_manifest_filename: "latest.json"
+
 indexes:
   vector_table: "chunk_vectors"
   graph_nodes_table: "graph_nodes"
@@ -34,7 +48,7 @@ coverage:
   max_selected_chunks: 6
   require_surface_contributions:
     lexical_index_surface: true
-    vector_index_surface: false
+    vector_index_surface: true
     graph_layer: true
     primary_corpus: true
     synthetic_nodes: false

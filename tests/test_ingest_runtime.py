@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from semantic_traversal.config import ConfigError, load_runtime_config
+from semantic_traversal.embeddings import resolve_embedding_backend
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
 from semantic_traversal.cli import build_turn_parser
@@ -364,6 +365,99 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(model, "fixture-llm-model")
             self.assertEqual(config.max_retrieval_chunks, 6)
 
+    def test_env_local_does_not_redefine_provider_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {
+                    "semantic_extraction": {"model": "fixture-semantic"},
+                    "embeddings": {"model": "fixture-embed"},
+                },
+            )
+            (repo_root / ".env.local").write_text(
+                "OPENAI_API_KEY=test-secret-key\nSEMANTIC_EXTRACTION_PROVIDER=disabled\nEMBEDDING_PROVIDER=disabled\n",
+                encoding="utf-8",
+            )
+            config = load_runtime_config(repo_root=repo_root)
+            semantic_backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=config)
+            embedding_backend = resolve_embedding_backend(config)
+
+            self.assertEqual(config.semantic_extraction_provider, "ollama")
+            self.assertEqual(config.embedding_provider, "ollama")
+            self.assertEqual(semantic_backend.mode_name, "ollama")
+            self.assertEqual(embedding_backend.mode_name, "ollama")
+
+    def test_unsupported_provider_configuration_fails_closed_for_semantic_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {"semantic_extraction": {"provider": "unsupported", "model": "fixture-semantic"}},
+            )
+            config = load_runtime_config(repo_root=repo_root)
+            backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=config)
+
+            response = backend.extract_contextual({"raw_user_input": "hello", "instruction": "test"})
+            self.assertEqual(response.status, "unavailable")
+            self.assertIn("unsupported semantic extraction provider", response.metadata.get("reason", ""))
+
+    def test_unsupported_provider_configuration_fails_closed_for_embeddings(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {
+                    "embeddings": {"provider": "unsupported", "model": "fixture-embed"},
+                },
+            )
+            config = load_runtime_config(repo_root=repo_root)
+            backend = resolve_embedding_backend(config)
+
+            response = backend.embed_texts(["hello"])
+            self.assertEqual(response.status, "unavailable")
+            self.assertIn("unsupported embedding provider", response.metadata.get("reason", ""))
+
+    def test_missing_semantic_extraction_provider_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["semantic_extraction"].pop("provider")
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.semantic_extraction\.provider"):
+                load_runtime_config(repo_root=repo_root)
+
+    def test_missing_embeddings_provider_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["embeddings"].pop("provider")
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.embeddings\.provider"):
+                load_runtime_config(repo_root=repo_root)
+
+    def test_missing_storage_field_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["storage"].pop("ingestion_root")
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.storage\.ingestion_root"):
+                load_runtime_config(repo_root=repo_root)
+
+    def test_unknown_storage_field_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["storage"]["unexpected_layout_field"] = "nope"
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Unknown runtime config field: root\.storage\.unexpected_layout_field"):
+                load_runtime_config(repo_root=repo_root)
+
     def test_yaml_max_retrieval_chunks_controls_manifest_limit(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir, {"runtime": {"max_retrieval_chunks": 2}})
@@ -383,6 +477,67 @@ class IngestRuntimeTests(unittest.TestCase):
             manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
             self.assertEqual(manifest["limits"]["max_selected_chunks"], 2)
             self.assertLessEqual(len(manifest["selected_chunk_ids"]), 2)
+
+    def test_storage_config_controls_ingest_artifact_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {
+                    "storage": {
+                        "ingestion_root": "custom-ingestion",
+                        "ingestion_database_filename": "custom-latent.sqlite3",
+                        "ingestion_manifests_root": "custom-ingestion/manifests-v2",
+                        "latest_ingest_manifest_filename": "latest-ingest.json",
+                    },
+                },
+            )
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            config = load_runtime_config(repo_root=repo_root)
+            result = run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=build_default_source_roots(repo_root, config=config),
+                config=config,
+            )
+
+            self.assertEqual(result.database_path, (Path(data_dir) / "custom-ingestion" / "custom-latent.sqlite3").resolve())
+            self.assertEqual(result.manifest_path, (Path(data_dir) / "custom-ingestion" / "manifests-v2" / f"{result.run_id}.json").resolve())
+            self.assertTrue((Path(data_dir) / "custom-ingestion" / "manifests-v2" / "latest-ingest.json").exists())
+
+    def test_storage_config_controls_thread_artifact_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {
+                    "storage": {
+                        "threads_root": "thread-store",
+                        "turns_root": "turn-batches",
+                        "turn_directory_prefix": "phase-",
+                        "conversation_thread_filename": "conversation.json",
+                        "thread_state_filename": "state.json",
+                        "thread_ledger_filename": "ledger.jsonl",
+                    },
+                },
+            )
+            config = load_runtime_config(repo_root=repo_root)
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                config=config,
+            )
+
+            self.assertEqual(result.thread_root.name, result.thread_id)
+            self.assertEqual(result.conversation_thread_path.name, "conversation.json")
+            self.assertEqual(result.thread_state_path.name, "state.json")
+            self.assertEqual(result.thread_ledger_path.name, "ledger.jsonl")
+            self.assertTrue(result.turn_root.name.startswith("phase-"))
 
     def test_cli_ingest_uses_authorized_default_roots(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as temp_dir:
