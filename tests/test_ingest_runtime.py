@@ -387,6 +387,20 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
         prior_thread_state = packet.get("prior_thread_state") or {}
         recent_messages = list(prior_thread_state.get("recent_messages") or [])
         terms = ["candy", "snack", "food", "bed"]
+        if self.response_mode == "malformed" and packet.get("mode") == "contextual":
+            response_payload = {
+                "raw_user_input": raw_user_input,
+                "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
+                "contextual_salt_nodes": [],
+                "perturbation_semantic_graph": {
+                    "nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
+                    "edges": [{"source": "term:candy", "target": "term:bed", "kind": "association"}],
+                },
+                "semantic_coverage_target": "candy snack food before bed",
+                "activation_hints": ["candy", "snack", "food", "bed"],
+                "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+            }
+            return {"response": json.dumps(response_payload)}
         response_payload = {
             "raw_user_input": raw_user_input,
             "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
@@ -1406,46 +1420,40 @@ class IngestRuntimeTests(unittest.TestCase):
     def test_malformed_activation_hints_blocks_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
-            parsed_backend = _ParsedSemanticExtractorBackend(
-                contextual_payload={
-                    "raw_user_input": "What do I think about candy snack food before bed?",
-                    "contextual_user_intent": "malformed activation hints fixture",
-                    "thread_relevant_context": [],
-                    "semantic_pressure": None,
-                    "perturbation_nodes": [{"id": "term:candy", "label": "candy", "kind": "lexical_term"}],
-                    "contextual_salt_nodes": [],
-                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "candidate_targets": ["candy"],
-                    "candidate_relations": [],
-                    "semantic_coverage_target": {
-                        "must_preserve": ["candy snack food before bed"],
-                        "should_include": [],
-                        "avoid_satisfying_with": [],
-                        "query_text": "What do I think about candy snack food before bed?",
-                        "allow_no_retrieval_needed": False,
+            with _ollama_fixture_server(response_mode="malformed") as base_url:
+                _write_runtime_config(
+                    repo_root,
+                    {
+                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
                     },
-                    "activation_hints": ["candy snack food before bed"],
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
-                }
-            )
+                )
+                _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+                _write_synthetic_corpus_journal_note(repo_root)
+                run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
 
-            result = run_thread_turn(
-                repo_root=repo_root,
-                data_root=Path(data_dir),
-                user_input="What do I think about candy snack food before bed?",
-                llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
-            )
+                result = run_thread_turn(
+                    repo_root=repo_root,
+                    data_root=Path(data_dir),
+                    user_input="What do I think about candy snack food before bed?",
+                    llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                )
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertIsInstance(result.semantic_context_packet["activation_hints"], dict)
             self.assertEqual(result.semantic_context_packet["activation_hints"], {})
+            self.assertIsNone(result.semantic_context_packet["semantic_coverage_target"])
             self.assertFalse(result.semantic_context_packet["semantic_contract_validation"]["valid"])
             self.assertIn(
                 "activation_hints expected dict, got list",
                 result.semantic_context_packet["semantic_contract_validation"]["reasons"],
             )
+            self.assertIn(
+                "semantic_coverage_target expected dict, got str",
+                result.semantic_context_packet["semantic_contract_validation"]["reasons"],
+            )
             self.assertIn("activation_hints expected dict, got list", result.coverage_report["blocking_reasons"])
+            self.assertIn("semantic_coverage_target missing or invalid", result.coverage_report["blocking_reasons"])
             self.assertIn("semantic extraction parsed but failed contract validation", result.coverage_report["blocking_reasons"])
             self.assertEqual(result.llm_metadata["mode"], "not_called")
 
@@ -1795,6 +1803,16 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(graph_selected_chunk["edge_types"])
             self.assertTrue(set(graph_selected_chunk["edge_types"]).intersection({"sibling", "wikilink"}))
             self.assertTrue(graph_selected_chunk["graph_path"])
+
+            selected_surface_contributions = {
+                surface_name
+                for candidate in result.semantic_traversal_manifest["selected_candidates"]
+                for surface_name in list(candidate.get("surface_contributions") or [])
+            }
+            self.assertIn("lexical_index_surface", selected_surface_contributions)
+            self.assertIn("vector_index_surface", selected_surface_contributions)
+            self.assertIn("primary_corpus", selected_surface_contributions)
+            self.assertIn("graph_layer", selected_surface_contributions)
 
             for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface", "synthetic_nodes"):
                 for candidate in result.semantic_traversal_manifest["candidate_regions"][surface_name]:
@@ -2298,7 +2316,7 @@ class IngestRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = _prepared_repo_root(repo_dir)
             backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=load_runtime_config(repo_root=repo_root))
-            self.assertEqual(backend.mode_name, "unavailable")
+            self.assertEqual(backend.mode_name, "ollama")
 
     def test_blocked_runtime_does_not_call_llm_backend(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

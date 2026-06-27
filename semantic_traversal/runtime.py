@@ -510,7 +510,7 @@ def _build_retrieval_preparation(
         extraction_mode="contextual",
     )
     coverage_target_terms: list[str] = []
-    if semantic_coverage_target:
+    if isinstance(semantic_coverage_target, dict):
         for key in ("must_preserve", "should_include"):
             for term in _collect_string_terms(semantic_coverage_target.get(key)):
                 if term not in coverage_target_terms:
@@ -1364,8 +1364,42 @@ def _build_semantic_traversal_manifest(
         aggregate.values(),
         key=lambda item: (-float(item["total_score"]), str(item["chunk_id"])),
     )
-    selected = ranked_candidates[: config.max_retrieval_chunks]
-    selected_chunk_ids = [str(item["chunk_id"]) for item in selected]
+    selected: list[dict[str, Any]] = []
+    selected_chunk_ids: list[str] = []
+    covered_required_surfaces: set[str] = set()
+
+    def _append_selected_candidate(candidate: dict[str, Any]) -> None:
+        chunk_id = str(candidate["chunk_id"])
+        if chunk_id in selected_chunk_ids:
+            return
+        selected.append(candidate)
+        selected_chunk_ids.append(chunk_id)
+        for surface_name in list(candidate.get("surface_contributions") or []):
+            covered_required_surfaces.add(str(surface_name))
+
+    required_surface_contributions = config.coverage_require_surface_contributions
+    for surface_name, required in required_surface_contributions.items():
+        if len(selected) >= config.max_retrieval_chunks:
+            break
+        if not required or surface_name in covered_required_surfaces:
+            continue
+        required_candidate = next(
+            (
+                candidate
+                for candidate in ranked_candidates
+                if surface_name in list(candidate.get("surface_contributions") or [])
+                and str(candidate["chunk_id"]) not in selected_chunk_ids
+            ),
+            None,
+        )
+        if required_candidate is not None:
+            _append_selected_candidate(required_candidate)
+
+    for candidate in ranked_candidates:
+        if len(selected) >= config.max_retrieval_chunks:
+            break
+        _append_selected_candidate(candidate)
+
     selection_reasons = [reason for item in selected for reason in item["selection_reasons"]]
     if not selection_reasons:
         if not list(activated_semantic_regions.get("query_terms") or []):

@@ -81,6 +81,83 @@ def _default_limitations() -> list[str]:
     ]
 
 
+def _isolated_json_skeleton() -> dict[str, Any]:
+    return {
+        "raw_user_input": "",
+        "probable_user_intent": "",
+        "candidate_targets": [],
+        "candidate_relations": [],
+        "question_shape": None,
+        "explicit_user_constraints": [],
+        "implicit_needs_or_pressures": [],
+        "terms_or_phrases_not_to_discard": [],
+        "ambiguities": [],
+        "extraction_confidence": "low",
+        "limitations": _default_limitations(),
+    }
+
+
+def _contextual_json_skeleton() -> dict[str, Any]:
+    return {
+        "raw_user_input": "",
+        "contextual_user_intent": "",
+        "thread_relevant_context": [],
+        "semantic_pressure": None,
+        "perturbation_nodes": [{"id": "", "label": "", "kind": ""}],
+        "contextual_salt_nodes": [{"id": "", "label": "", "kind": ""}],
+        "perturbation_semantic_graph": {
+            "nodes": [{"id": "", "label": "", "kind": ""}],
+            "edges": [{"source": "", "target": "", "kind": ""}],
+        },
+        "semantic_coverage_target": {
+            "must_preserve": [],
+            "should_include": [],
+            "avoid_satisfying_with": [],
+            "query_text": "",
+            "allow_no_retrieval_needed": False,
+        },
+        "activation_hints": {
+            "lexical_terms": [],
+            "phrases": [],
+            "conceptual_neighbors": [],
+            "relation_hints": [],
+            "temporal_hints": [],
+            "entity_hints": [],
+        },
+        "candidate_targets": [],
+        "candidate_relations": [],
+        "limitations": _default_limitations(),
+    }
+
+
+def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
+    mode = str(packet.get("mode") or "contextual").strip().lower()
+    if mode == "isolated":
+        skeleton = _isolated_json_skeleton()
+        mode_instruction = (
+            "This is isolated extraction. Return a JSON object that matches the isolated schema exactly. "
+            "Do not include contextual-only fields. Keep every field type correct."
+        )
+    else:
+        skeleton = _contextual_json_skeleton()
+        mode_instruction = (
+            "This is contextual extraction. Return a JSON object that matches the contextual schema exactly. "
+            "semantic_coverage_target must be an object, activation_hints must be an object, "
+            "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
+            "perturbation_semantic_graph must be an object with nodes and edges arrays."
+        )
+    return (
+        "Return JSON only.\n"
+        f"{mode_instruction}\n"
+        "Do not answer the user.\n"
+        "Preserve the raw_user_input field exactly.\n"
+        "Use this exact JSON skeleton as the target shape:\n"
+        f"{json.dumps(skeleton, ensure_ascii=True, indent=2)}\n"
+        "Packet:\n"
+        f"{json.dumps(packet, ensure_ascii=True, indent=2)}"
+    )
+
+
 def _normalize_raw_user_input(
     payload: dict[str, Any],
     raw_user_input: str,
@@ -278,16 +355,7 @@ class OllamaSemanticExtractorBackend:
                 diagnostics={},
                 status="unavailable",
             )
-        prompt = (
-            "Return JSON only.\n"
-            f"{packet.get('instruction', '')}\n"
-            "Do not answer the user.\n"
-            "Preserve the raw_user_input field exactly.\n"
-            "For contextual mode, produce these required fields: raw_user_input, perturbation_nodes, contextual_salt_nodes, "
-            "perturbation_semantic_graph, semantic_coverage_target, activation_hints, limitations.\n"
-            "Packet:\n"
-            f"{json.dumps(packet, ensure_ascii=True, indent=2)}"
-        )
+        prompt = _build_ollama_prompt(packet=packet)
         payload = {
             "model": self._model,
             "prompt": prompt,
