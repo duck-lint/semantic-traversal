@@ -98,9 +98,9 @@ def probe_fixture_journal_section_paragraph_chunking(data_root: Path, repo_root:
     ]
     assert chunks, "expected fixture journal chunks"
     labels = {chunk["section_label"] for chunk in chunks}
-    assert "Dream Recall" in labels
-    assert "Y-Day Review" in labels
-    assert "Daily Intent" in labels
+    assert "Fixture Alpha Section" in labels
+    assert "Fixture Beta Section" in labels
+    assert "Fixture Multi Paragraph Section" in labels
     assert "September 01, 2025" not in labels
     return {
         "probe": "probe_fixture_journal_section_paragraph_chunking",

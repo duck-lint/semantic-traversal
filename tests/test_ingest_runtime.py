@@ -99,7 +99,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 connection.close()
             self.assertEqual({row[0] for row in rows}, {"corpus", "tests-fixtures"})
 
-    def test_fixture_journal_inline_labels_become_paragraph_chunks(self) -> None:
+    def test_markdown_headings_become_section_labels_for_paragraph_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -115,7 +115,15 @@ class IngestRuntimeTests(unittest.TestCase):
             chunks = _chunks_for_note(manifest, "tests-fixtures", "JOURNAL/2025-09/01_Monday.md")
 
             self.assertEqual(len(chunks), 4)
-            self.assertEqual([chunk["section_label"] for chunk in chunks], ["Dream Recall", "Y-Day Review", "Daily Intent", "Daily Intent"])
+            self.assertEqual(
+                [chunk["section_label"] for chunk in chunks],
+                [
+                    "Fixture Alpha Section",
+                    "Fixture Beta Section",
+                    "Fixture Multi Paragraph Section",
+                    "Fixture Multi Paragraph Section",
+                ],
+            )
             self.assertEqual([chunk["paragraph_ordinal"] for chunk in chunks], [1, 1, 1, 2])
             self.assertEqual(chunks[2]["section_id"], chunks[3]["section_id"])
             self.assertNotIn("September 01, 2025", {chunk["section_label"] for chunk in chunks})
@@ -204,8 +212,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
             original_text = fixture_copy.read_text(encoding="utf-8")
             updated_text = original_text.replace(
-                "We're making a good choice in reduction of candy/snack food before bed :)",
-                "We're making a good choice in reduction of candy/snack food before bed and keeping the evening quieter :)",
+                "This is the second paragraph under the shared synthetic section. The important retrieval phrase for tests is candy snack food before bed, and that phrase should be easy to find through the lexical SQLite path.",
+                "This is the second paragraph under the shared synthetic section. The important retrieval phrase for tests is candy snack food before bed, and that phrase should be easy to find through the lexical SQLite path while keeping the evening quieter.",
                 1,
             )
             fixture_copy.write_text(updated_text, encoding="utf-8")
@@ -222,7 +230,7 @@ class IngestRuntimeTests(unittest.TestCase):
             ]
             self.assertEqual(len(changed_chunk_ids), 1)
             changed_chunk = second_chunks[changed_chunk_ids[0]]
-            self.assertEqual(changed_chunk["section_label"], "Daily Intent")
+            self.assertEqual(changed_chunk["section_label"], "Fixture Multi Paragraph Section")
             self.assertEqual(changed_chunk["paragraph_ordinal"], 2)
             self.assertEqual(second_result.updated_chunks, 1)
             self.assertEqual(second_result.deleted_chunks, 0)
