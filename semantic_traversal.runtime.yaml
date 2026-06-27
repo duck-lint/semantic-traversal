@@ -13,9 +13,12 @@ semantic_extraction:
   request_timeout_seconds: 20
 
 embeddings:
-  provider: "ollama"
-  model: null
-  base_url: "http://localhost:11434"
+  provider: "sentence_transformers"
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  base_url: null
+  batch_size: 32
+  normalize_embeddings: true
+  device: null
   request_timeout_seconds: 20
 
 paths:
@@ -45,7 +48,7 @@ indexes:
 
 coverage:
   min_selected_chunks: 1
-  max_selected_chunks: 6
+  max_selected_chunks: 18
   require_surface_contributions:
     lexical_index_surface: true
     vector_index_surface: true

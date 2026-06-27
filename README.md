@@ -42,6 +42,12 @@ Use `.env.local` only for secrets such as `OPENAI_API_KEY`.
 
 The YAML must not contain API keys or credentials.
 
+Install the declared dependencies before running vector-enabled runtime paths:
+
+```powershell
+pip install -r requirements.txt
+```
+
 Normal turn execution does not expose semantic extractor mode selection on the CLI. Disabled and stub semantic extractors remain test-only or probe-only.
 
 ## Artifact Layout
@@ -157,5 +163,7 @@ Good break attempts:
 ## Notes
 
 - Live final-answer mode still requires `OPENAI_API_KEY`.
-- Ollama-backed semantic extraction and embeddings are required for a fully completed live runtime path.
+- Semantic extraction currently uses the configured Ollama backend.
+- Vector activation uses the configured Sentence Transformers backend by default.
+- Missing embeddings block the runtime rather than falling back to a softer completion mode.
 - Completed implementation bundles live under `agent_harness/implementation-projects/archive/`.

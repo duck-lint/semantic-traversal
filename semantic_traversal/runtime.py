@@ -677,7 +677,11 @@ def _query_vector_candidates(
 ) -> tuple[list[dict[str, Any]], str]:
     if not query_text:
         return [], "no_query_text"
-    response = embedding_backend.embed_texts([query_text])
+    query_embedder = getattr(embedding_backend, "embed_query_text", None)
+    if callable(query_embedder):
+        response = query_embedder(query_text)
+    else:
+        response = embedding_backend.embed_texts([query_text])
     if response.status != "embedded" or not response.vectors:
         return [], response.status
     vector_table = config.vector_table

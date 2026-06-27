@@ -39,8 +39,11 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     },
     "embeddings": {
         "provider": str,
-        "model": (str, type(None)),
-        "base_url": str,
+        "model": str,
+        "base_url": (str, type(None)),
+        "batch_size": int,
+        "normalize_embeddings": bool,
+        "device": (str, type(None)),
         "request_timeout_seconds": int,
     },
     "paths": {
@@ -135,17 +138,30 @@ class RuntimeConfig:
         return int(self.raw["semantic_extraction"]["request_timeout_seconds"])
 
     @property
-    def embedding_model(self) -> str | None:
-        value = self.raw["embeddings"]["model"]
-        return None if value is None else str(value)
+    def embedding_model(self) -> str:
+        return str(self.raw["embeddings"]["model"])
 
     @property
     def embedding_provider(self) -> str:
         return str(self.raw["embeddings"]["provider"])
 
     @property
-    def embedding_base_url(self) -> str:
-        return str(self.raw["embeddings"]["base_url"])
+    def embedding_base_url(self) -> str | None:
+        value = self.raw["embeddings"]["base_url"]
+        return None if value is None else str(value)
+
+    @property
+    def embedding_batch_size(self) -> int:
+        return int(self.raw["embeddings"]["batch_size"])
+
+    @property
+    def embedding_normalize_embeddings(self) -> bool:
+        return bool(self.raw["embeddings"]["normalize_embeddings"])
+
+    @property
+    def embedding_device(self) -> str | None:
+        value = self.raw["embeddings"]["device"]
+        return None if value is None else str(value)
 
     @property
     def embedding_request_timeout_seconds(self) -> int:

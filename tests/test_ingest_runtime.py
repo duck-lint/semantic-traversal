@@ -11,9 +11,11 @@ import tempfile
 import threading
 import unittest
 import textwrap
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import yaml
 
@@ -173,6 +175,46 @@ def _load_turn_artifact(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+class _FakeSentenceTransformer:
+    def __init__(self, model_name: str, device: str | None = None) -> None:
+        self.model_name = model_name
+        self.device = device
+
+    def encode(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
+        if isinstance(texts, str):
+            texts = [texts]
+        return [[float(len(text)), float(sum(ord(char) for char in text) % 97 + 1)] for text in texts]
+
+    def encode_document(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
+        return self.encode(texts, **kwargs)
+
+    def encode_query(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
+        return self.encode(texts, **kwargs)
+
+
+class _InvalidSentenceTransformer:
+    def __init__(self, model_name: str, device: str | None = None, **kwargs: Any) -> None:
+        self.model_name = model_name
+        self.device = device
+
+    def encode(self, texts: list[str] | str, **kwargs: Any) -> list[str]:
+        if isinstance(texts, str):
+            texts = [texts]
+        return ["not-a-vector" for _ in texts]
+
+
+def _fake_sentence_transformers_import_module(name: str):
+    if name == "sentence_transformers":
+        return types.SimpleNamespace(SentenceTransformer=_FakeSentenceTransformer)
+    raise ModuleNotFoundError(name)
+
+
+def _invalid_sentence_transformers_import_module(name: str):
+    if name == "sentence_transformers":
+        return types.SimpleNamespace(SentenceTransformer=_InvalidSentenceTransformer)
+    raise ModuleNotFoundError(name)
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
@@ -318,6 +360,12 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(default_config.data_root, (repo_root / ".custom-data").resolve())
             self.assertEqual(explicit_config.config_path, explicit_config_path.resolve())
             self.assertEqual(explicit_config.data_root, (repo_root / ".explicit-data").resolve())
+            self.assertEqual(default_config.embedding_provider, "sentence_transformers")
+            self.assertEqual(default_config.embedding_model, "sentence-transformers/all-MiniLM-L6-v2")
+            self.assertEqual(default_config.embedding_batch_size, 32)
+            self.assertTrue(default_config.embedding_normalize_embeddings)
+            self.assertIsNone(default_config.embedding_device)
+            self.assertTrue(default_config.coverage_require_surface_contributions["vector_index_surface"])
             self.assertNotIn("OPENAI_API_KEY", explicit_config_path.read_text(encoding="utf-8"))
 
     def test_missing_runtime_config_field_raises_config_error_without_code_default_fallback(self) -> None:
@@ -363,7 +411,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(api_key, "test-secret-key")
             self.assertEqual(model, "fixture-llm-model")
-            self.assertEqual(config.max_retrieval_chunks, 6)
+            self.assertEqual(config.max_retrieval_chunks, 18)
 
     def test_env_local_does_not_redefine_provider_identity(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
@@ -372,7 +420,6 @@ class IngestRuntimeTests(unittest.TestCase):
                 repo_root,
                 {
                     "semantic_extraction": {"model": "fixture-semantic"},
-                    "embeddings": {"model": "fixture-embed"},
                 },
             )
             (repo_root / ".env.local").write_text(
@@ -381,12 +428,56 @@ class IngestRuntimeTests(unittest.TestCase):
             )
             config = load_runtime_config(repo_root=repo_root)
             semantic_backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=config)
-            embedding_backend = resolve_embedding_backend(config)
 
             self.assertEqual(config.semantic_extraction_provider, "ollama")
-            self.assertEqual(config.embedding_provider, "ollama")
+            self.assertEqual(config.embedding_provider, "sentence_transformers")
+            self.assertEqual(config.embedding_model, "sentence-transformers/all-MiniLM-L6-v2")
             self.assertEqual(semantic_backend.mode_name, "ollama")
-            self.assertEqual(embedding_backend.mode_name, "ollama")
+
+    def test_sentence_transformers_backend_returns_numeric_vectors(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            config = load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE))
+            with patch("semantic_traversal.embeddings.import_module", side_effect=_fake_sentence_transformers_import_module):
+                backend = resolve_embedding_backend(config)
+
+            response = backend.embed_texts(["alpha", "beta"])
+            query_response = backend.embed_query_text("gamma")
+
+            self.assertEqual(response.status, "embedded")
+            self.assertEqual(query_response.status, "embedded")
+            self.assertEqual(len(response.vectors or []), 2)
+            self.assertEqual(len(query_response.vectors or []), 1)
+            self.assertTrue(all(isinstance(vector, list) and vector for vector in response.vectors or []))
+            self.assertTrue(all(isinstance(value, float) for vector in response.vectors or [] for value in vector))
+            self.assertEqual(response.metadata["backend_mode"], "sentence_transformers")
+            self.assertEqual(response.metadata["vector_count"], 2)
+
+    def test_sentence_transformers_backend_rejects_invalid_vector_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {
+                    "embeddings": {
+                        "provider": "sentence_transformers",
+                        "model": "sentence-transformers/test-invalid-payload-model",
+                        "base_url": None,
+                        "batch_size": 32,
+                        "normalize_embeddings": True,
+                        "device": None,
+                        "request_timeout_seconds": 20,
+                    }
+                },
+            )
+            config = load_runtime_config(repo_root=repo_root)
+            with patch("semantic_traversal.embeddings.import_module", side_effect=_invalid_sentence_transformers_import_module):
+                backend = resolve_embedding_backend(config)
+
+            response = backend.embed_texts(["alpha"])
+
+            self.assertEqual(response.status, "invalid_payload")
+            self.assertIsNone(response.vectors)
 
     def test_unsupported_provider_configuration_fails_closed_for_semantic_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
@@ -436,6 +527,16 @@ class IngestRuntimeTests(unittest.TestCase):
             _write_runtime_config_document(repo_root, raw_config)
 
             with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.embeddings\.provider"):
+                load_runtime_config(repo_root=repo_root)
+
+    def test_missing_embeddings_model_raises_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
+            raw_config["embeddings"].pop("model")
+            _write_runtime_config_document(repo_root, raw_config)
+
+            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.embeddings\.model"):
                 load_runtime_config(repo_root=repo_root)
 
     def test_missing_storage_field_raises_config_error(self) -> None:
@@ -670,7 +771,6 @@ class IngestRuntimeTests(unittest.TestCase):
                     repo_root,
                     {
                         "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
-                        "embeddings": {"model": "fixture-embed", "base_url": base_url},
                     },
                 )
                 (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
@@ -1214,13 +1314,15 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             coverage_report = _load_turn_artifact(result.coverage_report_path)
+            semantic_traversal_manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
             retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
             ledger = read_ledger(result.thread_ledger_path)
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(coverage_report["decision"], "blocked")
-            self.assertEqual(retrieval_packet["selected_chunks"], [])
-            self.assertEqual(retrieval_packet["retrieval_observation"], "no_matches")
+            self.assertEqual(retrieval_packet["retrieval_observation"], "matched_chunks")
+            self.assertTrue(retrieval_packet["selected_chunks"])
+            self.assertTrue(semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
@@ -1250,9 +1352,9 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(result.semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertEqual(semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertFalse(semantic_traversal_manifest["query_terms_available"])
-            self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no lexical or additive extraction candidate terms were available"])
-            self.assertEqual(retrieval_packet["retrieval_observation"], "no_query_terms")
-            self.assertEqual(retrieval_packet["selected_chunks"], [])
+            self.assertEqual(retrieval_packet["retrieval_observation"], "matched_chunks")
+            self.assertTrue(retrieval_packet["selected_chunks"])
+            self.assertTrue(semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
             self.assertEqual(coverage_report["decision"], "blocked")
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
@@ -1295,7 +1397,6 @@ class IngestRuntimeTests(unittest.TestCase):
                     repo_root,
                     {
                         "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
-                        "embeddings": {"model": "fixture-embed", "base_url": base_url},
                         "coverage": {
                             "graph_expansion_hop_limit": 2,
                             "require_surface_contributions": {

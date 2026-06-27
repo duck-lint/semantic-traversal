@@ -1147,7 +1147,7 @@ def _refresh_chunk_vectors(
 
     if embedding_backend is not None and rows_to_index:
         response = embedding_backend.embed_texts([_embedding_text_for_chunk(chunk) for chunk in rows_to_index])
-        if response.status == "embedded" and response.vectors is not None:
+        if response.status == "embedded" and response.vectors is not None and len(response.vectors) == len(rows_to_index):
             model_name = str(response.metadata.get("model") or "unknown")
             provider_name = str(response.metadata.get("backend_mode") or getattr(embedding_backend, "mode_name", "unknown"))
             connection.executemany(
@@ -1184,6 +1184,12 @@ def _refresh_chunk_vectors(
                     )
                     for chunk, vector in zip(rows_to_index, response.vectors, strict=True)
                 ],
+            )
+        else:
+            placeholders = ",".join("?" for _ in rows_to_index)
+            connection.execute(
+                f"DELETE FROM {vector_table} WHERE chunk_id IN ({placeholders})",
+                tuple(chunk.chunk_id for chunk in rows_to_index),
             )
 
     connection.execute(
