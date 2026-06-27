@@ -25,7 +25,12 @@ from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roots, run_ingest
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
-from semantic_traversal.runtime import _evaluate_semantic_target_coverage, _query_vector_candidates, run_thread_turn
+from semantic_traversal.runtime import (
+    _evaluate_retrieval_coverage,
+    _evaluate_semantic_target_coverage,
+    _query_vector_candidates,
+    run_thread_turn,
+)
 from semantic_traversal.semantic_extraction import (
     DisabledSemanticExtractorBackend,
     SemanticExtractionResponse,
@@ -174,6 +179,54 @@ def _chunks_for_note(manifest: dict[str, object], source_root_label: str, relati
 
 def _load_turn_artifact(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _minimal_retrieval_coverage_inputs(selected_chunk_ids: list[str], retrieved_chunk_ids: list[str]) -> dict[str, Any]:
+    return {
+        "semantic_context_packet": {
+            "semantic_extraction": {
+                "statuses": {
+                    "backend_mode": "parsed",
+                    "isolated_status": "parsed",
+                    "contextual_status": "parsed",
+                }
+            },
+            "semantic_contract_validation": {"valid": True, "reasons": []},
+            "semantic_coverage_target": {
+                "must_preserve": [],
+                "should_include": [],
+                "avoid_satisfying_with": [],
+                "query_text": "retrieval equality check",
+                "allow_no_retrieval_needed": False,
+            },
+        },
+        "activated_semantic_regions": {
+            "activation_surfaces": [
+                {"surface": "lexical_index_surface", "status": "activated"},
+                {"surface": "primary_corpus", "status": "activated"},
+                {"surface": "vector_index_surface", "status": "activated"},
+                {"surface": "graph_layer", "status": "activated"},
+            ]
+        },
+        "semantic_traversal_manifest": {
+            "selected_chunk_ids": selected_chunk_ids,
+            "manifest_validity": {"valid": True, "reasons": []},
+            "surface_contributions": {
+                "lexical_index_surface": True,
+                "primary_corpus": True,
+                "vector_index_surface": True,
+                "graph_layer": True,
+            },
+        },
+        "retrieval_packet": {
+            "assembled_from_traversal_manifest": True,
+            "retrieval_observation": "matched_chunks",
+            "selected_chunks": [{"chunk_id": chunk_id} for chunk_id in retrieved_chunk_ids],
+        },
+        "config": load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)),
+        "semantic_traversal_manifest_hash": "manifest-hash",
+        "retrieval_packet_hash": "retrieval-hash",
+    }
 
 
 class _FakeSentenceTransformer:
@@ -1938,6 +1991,53 @@ class IngestRuntimeTests(unittest.TestCase):
                 )
                 self.assertFalse(report["target_valid"])
                 self.assertFalse(report["covered"])
+
+    def test_retrieval_coverage_blocks_when_selected_chunk_ids_are_truncated(self) -> None:
+        inputs = _minimal_retrieval_coverage_inputs(
+            selected_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+            retrieved_chunk_ids=["chunk-1", "chunk-2"],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn(
+            "retrieval_packet selected chunks do not exactly match traversal selected IDs",
+            report["blocking_reasons"],
+        )
+
+    def test_retrieval_coverage_blocks_when_selected_chunk_ids_have_extras(self) -> None:
+        inputs = _minimal_retrieval_coverage_inputs(
+            selected_chunk_ids=["chunk-1", "chunk-2"],
+            retrieved_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn(
+            "retrieval_packet selected chunks do not exactly match traversal selected IDs",
+            report["blocking_reasons"],
+        )
+
+    def test_retrieval_coverage_blocks_when_selected_chunk_ids_are_reordered(self) -> None:
+        inputs = _minimal_retrieval_coverage_inputs(
+            selected_chunk_ids=["chunk-1", "chunk-2"],
+            retrieved_chunk_ids=["chunk-2", "chunk-1"],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn(
+            "retrieval_packet selected chunks do not exactly match traversal selected IDs",
+            report["blocking_reasons"],
+        )
+
+    def test_retrieval_coverage_exact_match_does_not_emit_id_mismatch_reason(self) -> None:
+        inputs = _minimal_retrieval_coverage_inputs(
+            selected_chunk_ids=["chunk-1", "chunk-2"],
+            retrieved_chunk_ids=["chunk-1", "chunk-2"],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertNotIn(
+            "retrieval_packet selected chunks do not exactly match traversal selected IDs",
+            report["blocking_reasons"],
+        )
 
     def test_runtime_blocks_when_semantic_coverage_target_shape_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

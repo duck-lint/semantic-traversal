@@ -1529,8 +1529,8 @@ def _evaluate_retrieval_coverage(
     selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
     if not retrieval_packet.get("assembled_from_traversal_manifest"):
         reasons.append("retrieval_packet was not assembled from traversal manifest")
-    if [str(chunk["chunk_id"]) for chunk in selected_chunks] != selected_chunk_ids[: len(selected_chunks)]:
-        reasons.append("retrieval_packet selected chunks do not match traversal selected IDs")
+    if [str(chunk["chunk_id"]) for chunk in selected_chunks] != selected_chunk_ids:
+        reasons.append("retrieval_packet selected chunks do not exactly match traversal selected IDs")
 
     selected_chunk_count = len(selected_chunks)
     min_selected_chunks = config.coverage_min_selected_chunks
