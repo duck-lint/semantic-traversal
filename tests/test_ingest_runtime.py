@@ -1816,6 +1816,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "must_preserve": ["candy snack food before bed"],
                     "should_include": ["dream"],
                     "avoid_satisfying_with": ["avoid this"],
+                    "query_text": "candy snack food before bed",
+                    "allow_no_retrieval_needed": False,
                 }
             },
             semantic_traversal_manifest={},
@@ -1824,6 +1826,183 @@ class IngestRuntimeTests(unittest.TestCase):
         self.assertFalse(report["covered"])
         self.assertEqual(report["missing_must_preserve"], ["candy snack food before bed"])
         self.assertEqual(report["missing_should_include"], ["dream"])
+
+    def test_semantic_target_coverage_does_not_count_runtime_annotations_as_evidence(self) -> None:
+        report = _evaluate_semantic_target_coverage(
+            semantic_context_packet={
+                "semantic_coverage_target": {
+                    "must_preserve": ["unseen phrase alpha"],
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "unseen phrase alpha",
+                    "allow_no_retrieval_needed": False,
+                }
+            },
+            semantic_traversal_manifest={},
+            retrieval_packet={
+                "selected_chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "paragraph_text": "This chunk does not contain the required phrase.",
+                        "note_title": "Fixture",
+                        "section_label": "Section",
+                        "relative_path": "fixture.md",
+                        "note_path": "fixture.md",
+                        "section_path": [],
+                        "frontmatter": {},
+                        "selection_reasons": ["runtime annotation says unseen phrase alpha"],
+                        "matched_terms": ["unseen", "phrase", "alpha"],
+                        "surface_contributions": ["lexical_index_surface"],
+                    }
+                ]
+            },
+        )
+        self.assertFalse(report["covered"])
+        self.assertIn("unseen phrase alpha", report["missing_must_preserve"])
+        self.assertFalse(report["must_preserve"][0]["covered"])
+
+    def test_semantic_target_coverage_does_not_count_query_text_as_evidence(self) -> None:
+        report = _evaluate_semantic_target_coverage(
+            semantic_context_packet={
+                "semantic_coverage_target": {
+                    "must_preserve": ["query text only target"],
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "query text only target",
+                    "allow_no_retrieval_needed": False,
+                }
+            },
+            semantic_traversal_manifest={},
+            retrieval_packet={
+                "selected_chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "paragraph_text": "This chunk contains unrelated retrieved evidence.",
+                        "note_title": "Fixture",
+                        "section_label": "Section",
+                        "relative_path": "fixture.md",
+                        "note_path": "fixture.md",
+                        "section_path": [],
+                        "frontmatter": {},
+                    }
+                ]
+            },
+        )
+        self.assertFalse(report["covered"])
+        self.assertIn("query text only target", report["missing_must_preserve"])
+
+    def test_semantic_target_coverage_rejects_invalid_target_shape(self) -> None:
+        invalid_targets = [
+            {
+                "semantic_coverage_target": {
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "alpha",
+                    "allow_no_retrieval_needed": False,
+                }
+            },
+            {
+                "semantic_coverage_target": {
+                    "must_preserve": "alpha",
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "alpha",
+                    "allow_no_retrieval_needed": False,
+                }
+            },
+            {
+                "semantic_coverage_target": {
+                    "must_preserve": [],
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": 123,
+                    "allow_no_retrieval_needed": False,
+                }
+            },
+            {
+                "semantic_coverage_target": {
+                    "must_preserve": [],
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "alpha",
+                    "allow_no_retrieval_needed": "no",
+                }
+            },
+        ]
+        for semantic_context_packet in invalid_targets:
+            with self.subTest(semantic_context_packet=semantic_context_packet):
+                report = _evaluate_semantic_target_coverage(
+                    semantic_context_packet=semantic_context_packet,
+                    semantic_traversal_manifest={},
+                    retrieval_packet={"selected_chunks": []},
+                )
+                self.assertFalse(report["target_valid"])
+                self.assertFalse(report["covered"])
+
+    def test_runtime_blocks_when_semantic_coverage_target_shape_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            _write_markdown_fixture(
+                repo_root / "corpus",
+                "coverage/invalid_target_fixture.md",
+                """
+                ---
+                note_type: coverage_fixture
+                ---
+
+                # Invalid Target Fixture
+
+                ## Fixture Section
+
+                This paragraph exists so the runtime has selected retrieval evidence.
+                """,
+            )
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "Please retrieve the invalid target fixture.",
+                    "contextual_user_intent": "invalid target",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "perturbation_nodes": [{"id": "node:invalid", "label": "invalid", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "candidate_targets": ["invalid"],
+                    "candidate_relations": [],
+                    "semantic_coverage_target": {
+                        "must_preserve": ["invalid target fixture"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["invalid", "target", "fixture"],
+                        "phrases": ["invalid target fixture"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the invalid target fixture.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertFalse(result.coverage_report["semantic_target_coverage"]["target_valid"])
+            self.assertIn("semantic_coverage_target missing or invalid", result.coverage_report["blocking_reasons"])
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
 
     def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

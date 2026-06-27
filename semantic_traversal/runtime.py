@@ -262,19 +262,7 @@ def _chunk_evidence_fields(chunk: dict[str, Any]) -> list[tuple[str, str]]:
         ("relative_path", str(chunk.get("relative_path") or "")),
         ("note_path", str(chunk.get("note_path") or "")),
         ("section_path", " / ".join(str(item) for item in list(chunk.get("section_path") or []))),
-        (
-            "frontmatter",
-            json.dumps(chunk.get("frontmatter") or {}, sort_keys=True, ensure_ascii=True),
-        ),
-        (
-            "selection_reasons",
-            " ".join(str(item) for item in list(chunk.get("selection_reasons") or [])),
-        ),
-        (
-            "surface_contributions",
-            " ".join(str(item) for item in list(chunk.get("surface_contributions") or [])),
-        ),
-        ("matched_terms", " ".join(str(item) for item in list(chunk.get("matched_terms") or []))),
+        ("frontmatter", json.dumps(chunk.get("frontmatter") or {}, sort_keys=True, ensure_ascii=True)),
     ]
 
 
@@ -365,6 +353,14 @@ def _evaluate_semantic_target_coverage(
     if not isinstance(semantic_coverage_target.get("should_include"), list):
         target_valid = False
     if not isinstance(semantic_coverage_target.get("avoid_satisfying_with"), list):
+        target_valid = False
+    if "query_text" not in semantic_coverage_target or semantic_coverage_target.get("query_text") is None:
+        target_valid = False
+    elif not isinstance(semantic_coverage_target.get("query_text"), str):
+        target_valid = False
+    if "allow_no_retrieval_needed" not in semantic_coverage_target or semantic_coverage_target.get("allow_no_retrieval_needed") is None:
+        target_valid = False
+    elif not isinstance(semantic_coverage_target.get("allow_no_retrieval_needed"), bool):
         target_valid = False
 
     for target_value in list(semantic_coverage_target.get("must_preserve") or []):
