@@ -333,6 +333,19 @@ class OllamaSemanticExtractorBackend:
                 diagnostics={},
                 status="invalid_json",
             )
+        if not isinstance(parsed_payload, dict):
+            return SemanticExtractionResponse(
+                parsed_payload=None,
+                raw_response=raw_response_text,
+                metadata={
+                    "backend_mode": self.mode_name,
+                    "base_url": self._base_url,
+                    "model": self._model,
+                    "error": f"semantic extractor returned JSON {type(parsed_payload).__name__}; expected object",
+                },
+                diagnostics={},
+                status="invalid_json",
+            )
 
         normalized_payload, diagnostics = _normalize_raw_user_input(parsed_payload, str(packet.get("raw_user_input", "")))
         return SemanticExtractionResponse(

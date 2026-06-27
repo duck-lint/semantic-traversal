@@ -218,6 +218,18 @@ def _extract_semantic_outputs(
     )
 
 
+def _expected_type_name(expected_type: type[Any]) -> str:
+    return getattr(expected_type, "__name__", str(expected_type))
+
+
+def _list_or_empty(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _validate_semantic_context_payload(payload: dict[str, Any], *, raw_user_input: str) -> list[str]:
     reasons: list[str] = []
     if payload.get("raw_user_input") != raw_user_input:
@@ -233,7 +245,8 @@ def _validate_semantic_context_payload(payload: dict[str, Any], *, raw_user_inpu
     for field_name, expected_type in required_fields.items():
         value = payload.get(field_name)
         if not isinstance(value, expected_type):
-            reasons.append(f"{field_name} missing")
+            actual_type = type(value).__name__ if value is not None else "missing"
+            reasons.append(f"{field_name} expected {_expected_type_name(expected_type)}, got {actual_type}")
     return reasons
 
 
@@ -572,12 +585,12 @@ def _build_semantic_context_packet(
         "turn_id": turn_id,
         "user_input": user_input,
         "raw_user_input": user_input,
-        "perturbation_nodes": list(semantic_payload.get("perturbation_nodes") or []),
-        "contextual_salt_nodes": list(semantic_payload.get("contextual_salt_nodes") or []),
-        "perturbation_semantic_graph": semantic_payload.get("perturbation_semantic_graph"),
+        "perturbation_nodes": _list_or_empty(semantic_payload.get("perturbation_nodes")),
+        "contextual_salt_nodes": _list_or_empty(semantic_payload.get("contextual_salt_nodes")),
+        "perturbation_semantic_graph": _dict_or_empty(semantic_payload.get("perturbation_semantic_graph")),
         "semantic_coverage_target": semantic_coverage_target,
-        "activation_hints": dict(semantic_payload.get("activation_hints") or {}),
-        "limitations": list(semantic_payload.get("limitations") or []),
+        "activation_hints": _dict_or_empty(semantic_payload.get("activation_hints")),
+        "limitations": _list_or_empty(semantic_payload.get("limitations")),
         "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
         "retrieval_preparation": retrieval_preparation,
         "semantic_contract_validation": {

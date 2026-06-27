@@ -1403,6 +1403,52 @@ class IngestRuntimeTests(unittest.TestCase):
                 ["contextual.activation_hints.lexical_terms"],
             )
 
+    def test_malformed_activation_hints_blocks_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "What do I think about candy snack food before bed?",
+                    "contextual_user_intent": "malformed activation hints fixture",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "perturbation_nodes": [{"id": "term:candy", "label": "candy", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "candidate_targets": ["candy"],
+                    "candidate_relations": [],
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "What do I think about candy snack food before bed?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": ["candy snack food before bed"],
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertEqual(result.semantic_context_packet["activation_hints"], {})
+            self.assertFalse(result.semantic_context_packet["semantic_contract_validation"]["valid"])
+            self.assertIn(
+                "activation_hints expected dict, got list",
+                result.semantic_context_packet["semantic_contract_validation"]["reasons"],
+            )
+            self.assertIn("activation_hints expected dict, got list", result.coverage_report["blocking_reasons"])
+            self.assertIn("semantic extraction parsed but failed contract validation", result.coverage_report["blocking_reasons"])
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
+
     def test_stub_semantic_extractor_artifacts_are_persisted_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)

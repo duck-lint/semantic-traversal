@@ -8,7 +8,7 @@ llm:
 
 semantic_extraction:
   provider: "ollama"
-  model: null
+  model: qwen3:1.7b
   base_url: "http://localhost:11434"
   request_timeout_seconds: 20
 
