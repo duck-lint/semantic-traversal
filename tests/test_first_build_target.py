@@ -16,6 +16,7 @@ class FirstBuildTargetTests(unittest.TestCase):
             result = probe_new_thread_minimal_turn(Path(temp_dir), llm_backend=StubLLMBackend())
             self.assertEqual(result["status"], "pass")
             self.assertEqual(result["ledger_count"], 1)
+            self.assertEqual(result["runtime_outcome"], "blocked")
 
     def test_probe_same_thread_continuation_turn(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -24,6 +25,7 @@ class FirstBuildTargetTests(unittest.TestCase):
             self.assertEqual(result["ledger_count_before"], 1)
             self.assertEqual(result["ledger_count_after"], 2)
             self.assertEqual(result["parent_hash"], result["previous_hash"])
+            self.assertEqual(result["runtime_outcome"], "blocked")
 
     def test_cli_runtime_contract_uses_same_shared_runner_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -39,6 +41,8 @@ class FirstBuildTargetTests(unittest.TestCase):
             self.assertEqual(turn.turn_id, 1)
             self.assertEqual(len(ledger), 1)
             self.assertEqual(thread_document["thread_id"], turn.thread_id)
+            self.assertEqual(turn.runtime_outcome, "blocked")
+            self.assertIsNone(turn.assistant_response)
 
 
 if __name__ == "__main__":

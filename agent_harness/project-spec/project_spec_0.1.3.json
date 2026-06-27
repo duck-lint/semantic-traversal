@@ -277,7 +277,7 @@
         "rules": [
           "semantic_context_extraction is not optional in the normal runtime route.",
           "semantic_context_extraction must produce a parsed semantic_context_packet containing perturbation_semantic_graph and semantic_coverage_target before retrieval can be approved for synthesis.",
-          "If semantic_context_extraction is unavailable, invalid, disabled, or fixture-backed, the normal runtime route must fail closed or emit a blocked diagnostic artifact; it must not emit coverage_report.status=minimal_pass."
+          "If semantic_context_extraction is unavailable, invalid, disabled, or fixture-backed, the normal runtime route must fail closed or emit a blocked diagnostic artifact; it must not emit decision=approved or any soft-success coverage label."
         ]
       },
       "no_runtime_stubs_for_integral_operations": {
@@ -1187,15 +1187,15 @@
         "semantic extraction invalid_json",
         "semantic_coverage_target missing",
         "retrieval attempted without traversal manifest",
-        "coverage marked minimal_pass without required semantic extraction"
+        "coverage marked approved without required semantic extraction"
       ]
     },
     "staged_surface_policy": {
       "description": "Some activation surfaces may be incomplete during development, but missing surfaces must be recorded as coverage limitations rather than silently converted into a successful full runtime.",
       "rules": [
-        "Lexical-only activation is a partial implementation state, not the thesis runtime.",
+        "Lexical-only activation is an incomplete implementation state, not the thesis runtime.",
         "Vector and graph activation may be initially shallow, but the traversal manifest must represent them as explicit surfaces.",
-        "If a required surface is not implemented, the coverage report must state partial_implementation or blocked, not minimal_pass."
+        "If a required surface is not implemented, the coverage report must state blocked rather than any soft-success label."
       ]
     },
     "deferred_questions": [
@@ -1237,7 +1237,7 @@
         "Required runtime processes must not emit success-like status labels when they have not satisfied the project spec.",
         "Lexical retrieval success is a component observation, not a runtime success condition.",
         "Fixture-backed or stubbed execution is a component-test condition, not runtime evidence.",
-        "Disabled semantic extraction is a blocked runtime condition, not a fallback runtime mode.",
+        "Disabled semantic extraction is a blocked runtime condition, not an alternate runtime mode.",
         "Missing vector activation, graph activation, semantic traversal, semantic coverage evaluation, or required retrieval surfaces must block runtime completion unless the active project spec explicitly narrows the target before implementation begins.",
         "Runtime artifacts may record diagnostic reasons for blockage, but diagnostic survival is not runtime success."
       ]

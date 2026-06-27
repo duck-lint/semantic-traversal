@@ -22,10 +22,10 @@
 ## Verification Evidence
 
 - `python -m unittest discover -s tests -v` -> pass (`Ran 19 tests`, `OK`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root %TEMP%\semantic-traversal-probes-hit` -> pass (`status: pass`, `coverage_status: minimal_pass`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root %TEMP%\semantic-traversal-probes-noindex` -> pass (`status: pass`, `coverage_status: no_index`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root %TEMP%\semantic-traversal-probes-nomatch` -> pass (`status: pass`, `coverage_status: no_matches`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_no_query_terms --repo-root . --data-root %TEMP%\semantic-traversal-probes-noquery` -> pass (`status: pass`, `coverage_status: no_query_terms`, `query_terms: []`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root %TEMP%\semantic-traversal-probes-hit` -> pass (`status: pass`, `coverage_decision: blocked`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root %TEMP%\semantic-traversal-probes-noindex` -> pass (`status: pass`, `coverage_decision: blocked`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root %TEMP%\semantic-traversal-probes-nomatch` -> pass (`status: pass`, `coverage_decision: blocked`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_no_query_terms --repo-root . --data-root %TEMP%\semantic-traversal-probes-noquery` -> pass (`status: pass`, `coverage_decision: blocked`, `query_terms: []`)
 - `python -m semantic_traversal.probes probe_ledger_hash_artifact_integrity --repo-root . --data-root %TEMP%\semantic-traversal-probes-integrity` -> pass, with ledger hashes matching persisted artifact contents
 - `python -m semantic_traversal.probes probe_turn_cli_artifact_paths --repo-root . --data-root %TEMP%\semantic-traversal-probes-cli` -> pass, with CLI-reported artifact paths existing on disk
 - `python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub --data-root %TEMP%\semantic-traversal-thread-continuity` -> pass (`ledger_count_before: 1`, `ledger_count_after: 2`, parent hash preserved)
@@ -33,7 +33,7 @@
 ## User-Facing Acceptance Result
 
 - Acceptance result: pass
-- The runtime now distinguishes `minimal_pass`, `no_index`, `no_query_terms`, and `no_matches`
+- The runtime now records blocked diagnostic retrieval observations without approving synthesis
 - Ledger hashes are verified against persisted artifact contents, including the persisted `state_delta.json`
 - CLI and probe output expose inspectable turn artifact paths
 - Same-thread parent perturbation hash continuity still holds
@@ -57,4 +57,3 @@
 ## Next End Goal
 
 - Human user acceptance testing, or “try to break it”
-

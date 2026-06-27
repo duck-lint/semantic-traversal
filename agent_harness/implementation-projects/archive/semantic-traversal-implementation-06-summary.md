@@ -32,7 +32,7 @@
   - contextual `activation_hints.relation_hints`
 - Added more specific source labels in `candidate_term_sources`.
 - Added `.github/workflows/tests.yml` for push and pull request unittest coverage.
-- Added `probe_full_route_stub_turn` and documented `--llm-mode stub --semantic-extractor-mode stub` as the explicit full local route.
+- Added a stub-backed diagnostic probe for artifact persistence and local blocked-runtime verification.
 
 ## Verification Evidence
 
@@ -45,10 +45,10 @@
 - `python -m semantic_traversal.probes probe_turn_cli_artifact_paths --repo-root . --data-root $env:TEMP\semantic-traversal-probes-cli` -> pass
 - `python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub --data-root $env:TEMP\semantic-traversal-thread-continuity` -> pass
 - `python -m semantic_traversal.probes probe_semantic_extraction_stub_packets --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-stub` -> pass
-- `python -m semantic_traversal.probes probe_semantic_extraction_disabled_fallback --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled` -> pass
+- `python -m semantic_traversal.probes probe_blocked_runtime_with_disabled_extraction --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled` -> pass
 - `python -m semantic_traversal.probes probe_semantic_extraction_contextual_thread_state --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-context` -> pass
 - `python -m semantic_traversal.probes probe_semantic_extraction_hash_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-integrity` -> pass
-- `python -m semantic_traversal.probes probe_full_route_stub_turn --repo-root . --data-root $env:TEMP\semantic-traversal-probes-full-stub` -> pass (`llm_mode: stub`, extraction statuses `stub`, `coverage_status: minimal_pass`)
+- `python -m semantic_traversal.probes probe_blocked_runtime_with_stub_extraction --repo-root . --data-root $env:TEMP\semantic-traversal-probes-full-stub` -> pass (`llm_mode: not_called`, extraction statuses `stub`, `coverage_decision: blocked`)
 
 ## User-Facing Acceptance Result
 
@@ -56,7 +56,7 @@
 - Raw-input mismatch or omission is no longer silently repaired without an explicit packet-visible diagnostic.
 - Retrieval hint harvesting is smaller, cleaner, and limited to approved additive hint fields.
 - A boring CI workflow now exists for unittests.
-- The repo has an explicit full-route local stub command and a dedicated full-route stub probe.
+- The repo has dedicated blocked-runtime diagnostic probes for stub and disabled semantic extraction.
 
 ## Known Limitations
 

@@ -1,6 +1,6 @@
 # semantic-traversal
 
-`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, runs bounded additive semantic extraction, prepares lexical retrieval from SQLite, calls the final LLM, updates thread state, and appends a hash-chained ledger record.
+`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, persists semantic-extraction and retrieval diagnostics, updates thread state, and appends a hash-chained ledger record. The current checked-in runtime fails closed before synthesis because the thesis-valid semantic activation and traversal chain is not yet implemented.
 
 The current runtime keeps three practical layers visible:
 
@@ -17,29 +17,24 @@ For each user message, the runtime:
 3. Runs isolated semantic extraction from the raw message.
 4. Runs contextual semantic extraction using the raw message, prior thread state, and the isolated extraction.
 5. Builds additive retrieval preparation from raw lexical terms plus semantic extraction hints.
-6. Retrieves matching chunks from the ingestion SQLite database when available.
-7. Builds a synthesis context packet that keeps the raw user input authoritative.
-8. Calls the LLM backend.
+6. Records lexical SQLite observations from the ingestion database when available.
+7. Builds a blocked-or-approved synthesis context packet that keeps the raw user input authoritative.
+8. Calls the LLM backend only when the runtime outcome is `completed`.
 9. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
 
 The runtime still does not use embeddings, vector search, graph traversal, or synthetic node promotion.
 
-## Semantic Extraction Modes
+## Semantic Extraction
 
-Turn execution supports these semantic extractor modes:
+Normal turn execution does not expose semantic extractor mode selection on the CLI. The normal runtime resolves a real extractor from configuration and blocks if the extractor is unavailable, invalid, disabled, or fixture-backed.
 
-- `disabled`: persist explicit disabled extraction artifacts and continue through the lexical path
-- `stub`: deterministic local extractor for tests and probes
-- `ollama`: optional local Ollama JSON extractor
-- `auto`: use Ollama only when a semantic extractor model is configured, otherwise behave like `disabled`
+Environment variables:
 
-Environment variables and matching CLI overrides:
-
-- `SEMANTIC_EXTRACTOR_MODE=disabled|stub|ollama|auto`
+- `SEMANTIC_EXTRACTOR_MODE=ollama|auto`
 - `SEMANTIC_EXTRACTOR_MODEL=<model name>`
 - `SEMANTIC_EXTRACTOR_BASE_URL=http://localhost:11434`
 
-Semantic extraction is additive only. It does not rewrite or replace the raw user input, and it does not become the retrieval gatekeeper.
+Stub and disabled semantic extractors are reserved for tests and diagnostic probes only.
 
 ## Artifact Layout
 
@@ -63,17 +58,16 @@ Per turn, the runtime writes:
 
 The ledger records hashes for all of those persisted turn artifacts, plus the next thread state.
 
-## Status Meanings
+## Runtime Decisions
 
-Retrieval coverage still uses clear lexical statuses:
+Normal runtime execution is binary:
 
-- `minimal_pass`: retrieval found matching chunks
-- `no_index`: the ingestion SQLite database is not present
-- `no_query_terms`: neither raw lexical extraction nor additive extraction hints produced candidate retrieval terms
-- `no_matches`: candidate terms existed but nothing matched
-- `not_attempted`: reserved for future intentional skips
+- `completed`
+- `blocked`
 
-Semantic extraction uses explicit statuses per pass:
+Coverage uses `decision=approved` or `decision=blocked`. Diagnostic lexical observations may still record index-missing, no-query-term, no-match, or matched-chunk component results, but those observations do not approve synthesis.
+
+Semantic extraction still uses explicit per-pass statuses:
 
 - `parsed`
 - `stub`
@@ -89,33 +83,19 @@ Run the test suite:
 python -m unittest discover -s tests -v
 ```
 
-Run a stub turn with stub semantic extraction:
+Run the test suite:
 
 ```powershell
-python -m semantic_traversal --message "Hello from stub mode." --llm-mode stub --semantic-extractor-mode stub
+python -m unittest discover -s tests -v
 ```
 
-Run a stub turn with lexical retrieval and additive extraction:
+Run a normal CLI turn:
 
 ```powershell
-python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --semantic-extractor-mode stub
+python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub
 ```
 
-That command is the explicit full local route:
-
-- stub isolated semantic extraction
-- stub contextual semantic extraction
-- lexical retrieval when the SQLite index exists
-- stub final LLM synthesis
-- thread-state update, artifact persistence, and ledger hashing
-
-No OpenAI call and no Ollama call are required.
-
-Run a disabled-extraction turn that still uses lexical fallback:
-
-```powershell
-python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --semantic-extractor-mode disabled
-```
+Without a configured real semantic extractor, that command emits blocked diagnostic artifacts and exits non-zero.
 
 ## Ingest The Notes
 
@@ -138,10 +118,10 @@ python -m semantic_traversal.probes probe_ledger_hash_artifact_integrity --repo-
 python -m semantic_traversal.probes probe_turn_cli_artifact_paths --repo-root . --data-root $env:TEMP\semantic-traversal-probes-cli
 python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub --data-root $env:TEMP\semantic-traversal-thread-continuity
 python -m semantic_traversal.probes probe_semantic_extraction_stub_packets --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-stub
-python -m semantic_traversal.probes probe_semantic_extraction_disabled_fallback --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled
+python -m semantic_traversal.probes probe_blocked_runtime_with_disabled_extraction --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled
 python -m semantic_traversal.probes probe_semantic_extraction_contextual_thread_state --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-context
 python -m semantic_traversal.probes probe_semantic_extraction_hash_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-integrity
-python -m semantic_traversal.probes probe_full_route_stub_turn --repo-root . --data-root $env:TEMP\semantic-traversal-probes-full-stub
+python -m semantic_traversal.probes probe_blocked_runtime_with_stub_extraction --repo-root . --data-root $env:TEMP\semantic-traversal-probes-full-stub
 ```
 
 ## How To Inspect A Turn
@@ -151,22 +131,22 @@ Useful files after a turn:
 - `isolated_semantic_extraction_packet.json` for the isolated extraction request, status, metadata, and parsed payload
 - `contextual_semantic_extraction_packet.json` for the contextual extraction request, including prior thread state
 - `semantic_context_packet.json` for additive retrieval preparation and semantic extraction status
-- `semantic_traversal_manifest.json` for retrieval mode and selected chunk IDs
+- `semantic_traversal_manifest.json` for diagnostic activation surfaces and selected chunk IDs
 - `retrieval_packet.json` for raw lexical terms, extraction hint terms, candidate term sources, and returned chunks
-- `coverage_report.json` for retrieval and semantic extraction status
-- `synthesis_context_packet.json` for the exact context sent to the final LLM
+- `coverage_report.json` for binary approval-vs-blocked gating plus blocking reasons
+- `synthesis_context_packet.json` for the exact context that would reach the final LLM when the runtime is approved
 - `state_delta.json` for the persisted state transition
 - `thread_ledger.jsonl` for the hash chain across turns
 
 ## Human UAT Focus
 
-The current next end goal is human UAT over additive semantic extraction and retrieval interaction.
+The current next end goal is implementing the missing thesis-valid activation and traversal chain so blocked diagnostic turns can become completed runtime turns.
 
 Good break attempts:
 
 - confirm the raw user message is unchanged across extraction and synthesis artifacts
-- run with `--semantic-extractor-mode disabled` and confirm lexical retrieval still works
-- run `python -m semantic_traversal --message "..." --llm-mode stub --semantic-extractor-mode stub` and confirm the full local route completes without non-local calls
+- confirm the normal CLI blocks when no real semantic extractor is configured
+- run the stub and disabled diagnostic probes and confirm they stay blocked while still persisting extraction and retrieval artifacts
 - inspect `candidate_term_sources` and verify raw lexical terms are not dropped when extraction is sparse
 - run two turns on the same thread and confirm the contextual extraction request includes prior thread state
 - compare ledger hashes to the persisted artifact contents on disk

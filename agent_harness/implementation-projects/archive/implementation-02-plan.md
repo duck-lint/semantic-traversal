@@ -298,7 +298,7 @@ Gate notes:
   - open-decision edits
   - retrieval, traversal, graph activation, or synthetic-node implementation
   - durable non-tmp storage expansion
-  - compatibility or fallback shims that create a longer-lived support path
+  - compatibility or bridging shims that create a longer-lived support path
 
 ## Evidence And Assumptions
 
@@ -340,4 +340,3 @@ Acceptance criteria achieved, or the implementer reports a blocker that would re
 ## Closeout Note
 
 - When this bundle completes, move it from `active/` to `archive/`.
-

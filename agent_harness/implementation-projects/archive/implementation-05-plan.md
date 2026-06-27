@@ -10,7 +10,7 @@ Add an additive semantic extraction boundary ahead of retrieval and traversal pr
   - preserve the raw user input unchanged across extraction, semantic context, synthesis context, and state updates
   - keep semantic extraction additive and non-authoritative
   - preserve implementation-04 hash-truthfulness guarantees for persisted turn artifacts
-  - keep the existing lexical SQLite path available as fallback and instrumentation
+  - keep the existing lexical SQLite path available as diagnostic instrumentation
 - Task constraints:
   - add a semantic extractor backend interface with `stub`, `disabled`, and optional `ollama` backends
   - run isolated and contextual extraction passes using bounded packets
@@ -58,7 +58,7 @@ Add an additive semantic extraction boundary ahead of retrieval and traversal pr
 4. Persist extraction packet and raw-response artifacts and extend the ledger hash surface.
 5. Feed extraction hints additively into retrieval preparation while preserving the raw lexical channel.
 6. Expose extraction mode, statuses, and artifact paths in the CLI.
-7. Add deterministic tests and probes for additive extraction, disabled fallback, contextual thread-state input, and hash integrity.
+7. Add deterministic tests and probes for additive extraction, blocked disabled-extraction diagnostics, contextual thread-state input, and hash integrity.
 8. Run the requested validation commands and archive only if acceptance criteria pass.
 
 ## Non-Goals
@@ -79,7 +79,7 @@ Add an additive semantic extraction boundary ahead of retrieval and traversal pr
 - extraction statuses are explicit and inspectable
 - extraction artifacts appear in semantic context and synthesis context
 - extraction hints are used additively and do not remove raw lexical terms
-- lexical fallback still works when extraction is disabled or unavailable
+- lexical diagnostic observations still persist when extraction is disabled or unavailable
 - contextual extraction receives prior thread state
 - new extraction artifact hashes are recorded in the ledger and verified against persisted contents
 - existing implementation-04 tests and probes still pass
@@ -89,7 +89,7 @@ Add an additive semantic extraction boundary ahead of retrieval and traversal pr
 ## Current Repo Runtime State
 
 - `implementation-04` was archived complete before this bundle opened
-- the runtime now preserves raw input, performs two additive semantic extraction passes, and keeps lexical SQLite retrieval as fallback and instrumentation
+- the runtime now preserves raw input, performs two additive semantic extraction passes, and keeps lexical SQLite retrieval as diagnostic instrumentation
 - the reverted `fe146c7` role-weighted lexical ranking bundle remains absent from the final working tree
 
 ## Assumptions And Unknowns

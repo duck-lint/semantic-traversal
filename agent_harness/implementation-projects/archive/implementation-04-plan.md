@@ -59,7 +59,7 @@ This bundle is a review/cleanup and truthfulness-hardening pass, not a new archi
   - broad product/runtime redesign
 - Admissibility checks:
   - ledger hashes can be compared to persisted JSON artifact contents
-  - `no_query_terms` is distinct from `no_index`, `no_matches`, and `minimal_pass`
+  - `no_query_terms` is distinct from index-missing, no-match, and blocked matched-chunk diagnostics
   - CLI output contains inspectable paths for the turn artifacts
   - the repo is left ready for human “try to break it” testing
 - Stop conditions:
@@ -96,7 +96,7 @@ This bundle is a review/cleanup and truthfulness-hardening pass, not a new archi
 - implementation-03 doc/archive state is truthful
 - `semantic_context_packet_hash`, `semantic_traversal_manifest_hash`, `retrieval_packet_hash`, `coverage_report_hash`, `synthesis_context_packet_hash`, `next_thread_state_hash`, and `state_delta_hash` are verified against persisted artifact contents where applicable
 - `no_query_terms` is explicit and non-crashing
-- `minimal_pass`, `no_index`, `no_query_terms`, and `no_matches` are distinct and observable
+- blocked diagnostic retrieval observations remain distinct and observable
 - CLI/probe output exposes enough artifact paths for a human to inspect the turn
 - existing tests pass
 - new tests/probes pass
@@ -123,4 +123,3 @@ This bundle is a review/cleanup and truthfulness-hardening pass, not a new archi
 ## Handoff Note
 
 - The next human step after this bundle is user acceptance testing, or “try to break it”
-

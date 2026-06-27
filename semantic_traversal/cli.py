@@ -18,7 +18,10 @@ from .runtime import run_thread_turn
 
 
 def build_turn_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Local CLI runner for the semantic-traversal first build target.")
+    parser = argparse.ArgumentParser(
+        description="Local CLI runner for the semantic-traversal first build target.",
+        allow_abbrev=False,
+    )
     parser.add_argument("--message", required=True, help="The user input for the turn.")
     parser.add_argument("--thread-id", help="Existing thread id to continue. Omit to create a new thread.")
     parser.add_argument(
@@ -34,13 +37,10 @@ def build_turn_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model", help="Override the OpenAI model for live mode.")
     parser.add_argument(
-        "--semantic-extractor-mode",
-        choices=("auto", "disabled", "stub", "ollama"),
-        default="disabled",
-        help="Use a disabled, stub, or local Ollama semantic extractor before retrieval.",
+        "--semantic-extractor-model",
+        help="Override the configured semantic extractor model when the normal runtime is using a real backend.",
     )
-    parser.add_argument("--semantic-extractor-model", help="Override the semantic extractor model.")
-    parser.add_argument("--semantic-extractor-base-url", help="Override the semantic extractor base URL.")
+    parser.add_argument("--semantic-extractor-base-url", help="Override the configured semantic extractor base URL.")
     parser.add_argument("--repo-root", default=".", help="Repo root used to resolve .env.local.")
     return parser
 
@@ -69,7 +69,6 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     llm_backend = resolve_llm_backend(repo_root=repo_root, llm_mode=args.llm_mode, model_override=args.model)
     semantic_extractor_backend = resolve_semantic_extractor_backend(
         repo_root=repo_root,
-        extractor_mode=args.semantic_extractor_mode,
         model_override=args.semantic_extractor_model,
         base_url_override=args.semantic_extractor_base_url,
     )
@@ -85,8 +84,9 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         "thread_id": result.thread_id,
         "turn_id": result.turn_id,
         "assistant_response": result.assistant_response,
+        "runtime_outcome": result.runtime_outcome,
+        "blocking_reasons": result.blocking_reasons,
         "llm_mode": result.llm_metadata.get("mode"),
-        "semantic_extractor_mode": result.semantic_context_packet["semantic_extraction"]["statuses"]["backend_mode"],
         "isolated_extraction_status": result.isolated_semantic_extraction_packet["status"],
         "contextual_extraction_status": result.contextual_semantic_extraction_packet["status"],
         "conversation_thread_path": str(result.conversation_thread_path),
@@ -103,12 +103,12 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         "coverage_report_path": str(result.coverage_report_path),
         "synthesis_context_packet_path": str(result.synthesis_context_packet_path),
         "state_delta_path": str(result.state_delta_path),
-        "coverage_status": result.coverage_report.get("status"),
+        "coverage_decision": result.coverage_report.get("decision"),
         "latest_thread_state_hash": result.next_thread_state["latest_thread_state_hash"],
         "latest_perturbation_hash": result.ledger_record["state_perturbation_hash"],
     }
     print(json.dumps(payload, indent=2, ensure_ascii=True))
-    return 0
+    return 0 if result.runtime_outcome == "completed" else 1
 
 
 def run_ingest_cli(argv: Sequence[str] | None = None) -> int:

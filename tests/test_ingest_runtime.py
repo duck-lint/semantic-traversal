@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import sqlite3
@@ -12,9 +14,14 @@ from pathlib import Path
 
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import build_default_source_roots, run_ingest
+from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend
 from semantic_traversal.runtime import run_thread_turn
-from semantic_traversal.semantic_extraction import DisabledSemanticExtractorBackend, StubSemanticExtractorBackend
+from semantic_traversal.semantic_extraction import (
+    DisabledSemanticExtractorBackend,
+    StubSemanticExtractorBackend,
+    resolve_semantic_extractor_backend,
+)
 from semantic_traversal.storage import read_ledger
 
 
@@ -120,6 +127,11 @@ def _chunks_for_note(manifest: dict[str, object], source_root_label: str, relati
 
 def _load_turn_artifact(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+class FailingLLMBackend:
+    def generate(self, synthesis_context_packet: dict[str, object]) -> object:
+        raise AssertionError("LLM backend should not be called for blocked runtime execution")
 
 
 class IngestRuntimeTests(unittest.TestCase):
@@ -589,12 +601,13 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(result.isolated_semantic_extraction_raw_path.exists())
             self.assertTrue(result.contextual_semantic_extraction_packet_path.exists())
             self.assertTrue(result.contextual_semantic_extraction_raw_path.exists())
+            self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(ledger[-1]["isolated_semantic_extraction_packet_hash"], sha256_json(isolated_packet))
             self.assertEqual(ledger[-1]["isolated_semantic_extraction_raw_hash"], sha256_json(isolated_raw))
             self.assertEqual(ledger[-1]["contextual_semantic_extraction_packet_hash"], sha256_json(contextual_packet))
             self.assertEqual(ledger[-1]["contextual_semantic_extraction_raw_hash"], sha256_json(contextual_raw))
 
-    def test_extractor_disabled_falls_back_to_lexical_retrieval(self) -> None:
+    def test_disabled_semantic_extraction_blocks_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -613,8 +626,13 @@ class IngestRuntimeTests(unittest.TestCase):
             contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
             self.assertEqual(isolated_packet["status"], "disabled")
             self.assertEqual(contextual_packet["status"], "disabled")
-            self.assertEqual(result.coverage_report["status"], "minimal_pass")
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
+            self.assertIsNone(result.assistant_response)
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
             self.assertTrue(result.retrieval_packet["selected_chunks"])
+            self.assertTrue(any("disabled" in reason for reason in result.blocking_reasons))
 
     def test_contextual_extraction_receives_prior_thread_state(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -640,7 +658,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(prior_thread_state["latest_turn_id"], 1)
             self.assertEqual(prior_thread_state["latest_user_input"], "First turn to seed thread state.")
 
-    def test_full_route_stub_turn_uses_stub_extractor_and_stub_llm(self) -> None:
+    def test_stub_semantic_extraction_blocks_normal_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -657,11 +675,14 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.isolated_semantic_extraction_packet["status"], "stub")
             self.assertEqual(result.contextual_semantic_extraction_packet["status"], "stub")
-            self.assertEqual(result.llm_metadata["mode"], "stub")
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
             self.assertTrue(result.isolated_semantic_extraction_packet_path.exists())
             self.assertTrue(result.contextual_semantic_extraction_packet_path.exists())
             self.assertTrue(result.synthesis_context_packet_path.exists())
-            self.assertEqual(result.coverage_report["status"], "minimal_pass")
+            self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
+            self.assertTrue(any("stub" in reason for reason in result.blocking_reasons))
 
     def test_lexical_retrieval_fixture_hit_persists_artifacts_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -688,15 +709,17 @@ class IngestRuntimeTests(unittest.TestCase):
             thread_state = _load_turn_artifact(result.thread_state_path)
             ledger = read_ledger(result.thread_ledger_path)
 
-            self.assertEqual(coverage_report["status"], "minimal_pass")
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(coverage_report["decision"], "blocked")
             self.assertGreater(len(retrieval_packet["selected_chunks"]), 0)
-            self.assertTrue(synthesis_context_packet["approved_retrieval_packet"])
+            self.assertIsNone(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
             self.assertEqual(
                 synthesis_context_packet["semantic_context_packet"]["retrieval_preparation"]["raw_lexical_terms"],
                 semantic_context_packet["retrieval_preparation"]["raw_lexical_terms"],
             )
             self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
+            self.assertIn("matched_chunks", coverage_report["limits"]["diagnostic_retrieval_observation"])
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
@@ -724,8 +747,10 @@ class IngestRuntimeTests(unittest.TestCase):
             retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
             ledger = read_ledger(result.thread_ledger_path)
 
-            self.assertEqual(coverage_report["status"], "no_index")
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(coverage_report["decision"], "blocked")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
+            self.assertEqual(retrieval_packet["retrieval_observation"], "index_missing")
             self.assertEqual(result.semantic_traversal_manifest["selection_reasons"], ["ingestion SQLite database not found"])
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
@@ -750,8 +775,10 @@ class IngestRuntimeTests(unittest.TestCase):
             retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
             ledger = read_ledger(result.thread_ledger_path)
 
-            self.assertEqual(coverage_report["status"], "no_matches")
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(coverage_report["decision"], "blocked")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
+            self.assertEqual(retrieval_packet["retrieval_observation"], "no_matches")
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
@@ -782,9 +809,9 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(semantic_context_packet["extracted_lexical_query_terms"], [])
             self.assertFalse(semantic_traversal_manifest["query_terms_available"])
             self.assertEqual(semantic_traversal_manifest["selection_reasons"], ["no lexical or additive extraction candidate terms were available"])
-            self.assertEqual(retrieval_packet["retrieval_status"], "no_query_terms")
+            self.assertEqual(retrieval_packet["retrieval_observation"], "no_query_terms")
             self.assertEqual(retrieval_packet["selected_chunks"], [])
-            self.assertEqual(coverage_report["status"], "no_query_terms")
+            self.assertEqual(coverage_report["decision"], "blocked")
             self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
@@ -816,7 +843,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(len(after_records), len(before_records) + 1)
             self.assertEqual(after_records[-1]["parent_perturbation_hash"], before_records[-1]["state_perturbation_hash"])
-            self.assertEqual(second_turn.coverage_report["status"], "minimal_pass")
+            self.assertEqual(second_turn.coverage_report["decision"], "blocked")
 
     def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -834,18 +861,17 @@ class IngestRuntimeTests(unittest.TestCase):
                     "Please retrieve the candy snack food before bed note.",
                     "--llm-mode",
                     "stub",
-                    "--semantic-extractor-mode",
-                    "stub",
                     "--repo-root",
                     str(repo_root),
                     "--data-root",
                     data_dir,
                 ],
                 cwd=REPO_ROOT,
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
             )
+            self.assertEqual(process.returncode, 1)
             payload = json.loads(process.stdout)
             for key in (
                 "turn_root",
@@ -861,12 +887,95 @@ class IngestRuntimeTests(unittest.TestCase):
                 "state_delta_path",
             ):
                 self.assertTrue(Path(payload[key]).exists())
-            self.assertEqual(payload["semantic_extractor_mode"], "stub")
             self.assertIn(payload["isolated_extraction_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
             self.assertIn(payload["contextual_extraction_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
-            self.assertIn(payload["coverage_status"], {"minimal_pass", "no_index", "no_query_terms", "no_matches"})
+            self.assertEqual(payload["runtime_outcome"], "blocked")
+            self.assertEqual(payload["coverage_decision"], "blocked")
+            self.assertIsNone(payload["assistant_response"])
             self.assertTrue(payload["latest_perturbation_hash"])
             self.assertTrue(payload["latest_thread_state_hash"])
+
+    def test_turn_cli_parser_rejects_semantic_extractor_mode_flag(self) -> None:
+        parser = build_turn_parser()
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["--message", "hello", "--semantic-extractor-mode", "stub"])
+
+    def test_runtime_semantic_extractor_resolver_fails_closed_without_configured_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            backend = resolve_semantic_extractor_backend(repo_root=repo_root)
+            self.assertEqual(backend.mode_name, "unavailable")
+
+    def test_blocked_runtime_does_not_call_llm_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="This should block before the llm call boundary.",
+                llm_backend=FailingLLMBackend(),
+                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+            )
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
+            self.assertIsNone(result.assistant_response)
+
+    def test_stub_semantic_extraction_cannot_produce_thesis_valid_state_perturbation(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=FailingLLMBackend(),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+
+            self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertTrue(any("stub" in reason for reason in result.blocking_reasons))
+            self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
+
+    def test_forbidden_runtime_vocabulary_is_absent_from_runtime_outputs(self) -> None:
+        forbidden_terms = {
+            "minimal_pass",
+            "partial_pass",
+            "partial_implementation",
+            "degraded_success",
+            "fallback_success",
+            "best_effort_success",
+            "lexical_success",
+            "stub_success",
+        }
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the candy snack food before bed note.",
+                llm_backend=FailingLLMBackend(),
+                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+            )
+
+            serialized = json.dumps(
+                {
+                    "coverage_report": result.coverage_report,
+                    "synthesis_context_packet": result.synthesis_context_packet,
+                    "runtime_outcome": result.runtime_outcome,
+                    "blocking_reasons": result.blocking_reasons,
+                },
+                ensure_ascii=True,
+            )
+            for forbidden_term in forbidden_terms:
+                self.assertNotIn(forbidden_term, serialized)
 
 
 if __name__ == "__main__":

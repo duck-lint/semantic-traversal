@@ -22,7 +22,7 @@
 | Add semantic extractor backend module | implementer | complete | `semantic_traversal/semantic_extraction.py`, unit tests, probe runs | supports `disabled`, `stub`, `ollama`, and `auto` |
 | Integrate isolated and contextual extraction into the turn runtime | implementer | complete | runtime tests and probe inspection | raw user input remains authoritative |
 | Persist extraction artifacts and ledger hashes | implementer | complete | hash-integrity tests and probes | includes packet and raw-response artifact hashes |
-| Add CLI/probe/test coverage | implementer | complete | unittest suite and named probes passed | includes disabled fallback and prior-thread-state context |
+| Add CLI/probe/test coverage | implementer | complete | unittest suite and named probes passed | includes blocked disabled-extraction diagnostics and prior-thread-state context |
 | Archive bundle and write summary | archivist | complete | archived plan, tracker, and summary exist | next end goal recorded for human UAT |
 
 ## Blockers

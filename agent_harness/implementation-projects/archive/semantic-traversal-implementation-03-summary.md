@@ -20,9 +20,9 @@
 ## Verification Evidence
 
 - `python -m unittest discover -s tests -v` -> pass (`Ran 17 tests`, `OK`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root %TEMP%\semantic-traversal-probes-hit` -> pass (`status: pass`, `coverage_status: minimal_pass`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root %TEMP%\semantic-traversal-probes-noindex` -> pass (`status: pass`, `coverage_status: no_index`)
-- `python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root %TEMP%\semantic-traversal-probes-nomatch` -> pass (`status: pass`, `coverage_status: no_matches`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root %TEMP%\semantic-traversal-probes-hit` -> pass (`status: pass`, `coverage_decision: blocked`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root %TEMP%\semantic-traversal-probes-noindex` -> pass (`status: pass`, `coverage_decision: blocked`)
+- `python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root %TEMP%\semantic-traversal-probes-nomatch` -> pass (`status: pass`, `coverage_decision: blocked`)
 - `python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub --data-root %TEMP%\semantic-traversal-thread-continuity` -> pass (`ledger_count_before: 1`, `ledger_count_after: 2`, parent hash preserved)
 
 ## User-Facing Acceptance Result
@@ -52,4 +52,3 @@
 ## Next End Goal
 
 - No next end goal was provided during this closeout
-

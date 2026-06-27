@@ -9,7 +9,7 @@ Harden the additive semantic extraction bundle before human UAT by tightening di
 - Invariant constraints:
   - preserve raw user input as the authoritative value everywhere
   - keep semantic extraction additive and non-authoritative
-  - preserve lexical retrieval fallback and implementation-05 hash truthfulness
+  - preserve lexical retrieval diagnostics and implementation-05 hash truthfulness
   - keep the patch small and local to the existing route
 - Task constraints:
   - record explicit diagnostics when extractor payloads omit or mismatch `raw_user_input`
@@ -40,11 +40,11 @@ Harden the additive semantic extraction bundle before human UAT by tightening di
 - Admissibility checks:
   - raw-input repairs are visible in persisted extraction packets
   - noisy model fields do not become retrieval terms
-  - `--llm-mode stub --semantic-extractor-mode stub` exercises the full local route without non-local calls
+  - the stub-backed diagnostic probe exercises blocked artifact persistence without non-local calls
   - CI requires no secrets and no live model backends
 - Stop conditions:
   - stop if diagnostics would require breaking raw-input preservation
-  - stop if pruning hint harvesting breaks raw lexical fallback
+  - stop if pruning hint harvesting breaks raw lexical diagnostic observations
   - stop if full-route stub coverage requires a broad runtime redesign
 
 ## Planned Work

@@ -335,19 +335,49 @@ class OllamaSemanticExtractorBackend:
         )
 
 
+class UnavailableSemanticExtractorBackend:
+    mode_name = "unavailable"
+
+    def __init__(self, *, reason: str, configured_mode: str | None = None) -> None:
+        self._reason = reason
+        self._configured_mode = configured_mode
+
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+        return self._response()
+
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+        return self._response()
+
+    def _response(self) -> SemanticExtractionResponse:
+        metadata = {
+            "backend_mode": self.mode_name,
+            "reason": self._reason,
+        }
+        if self._configured_mode is not None:
+            metadata["configured_mode"] = self._configured_mode
+        return SemanticExtractionResponse(
+            parsed_payload=None,
+            raw_response=None,
+            metadata=metadata,
+            diagnostics={},
+            status="unavailable",
+        )
+
+
 def resolve_semantic_extractor_backend(
     *,
     repo_root: Path,
     extractor_mode: str | None = None,
     model_override: str | None = None,
     base_url_override: str | None = None,
+    allow_test_backends: bool = False,
 ) -> SemanticExtractorBackend:
     dotenv_values = load_dotenv_local(repo_root)
     configured_mode = (
         extractor_mode
         or os.environ.get("SEMANTIC_EXTRACTOR_MODE")
         or dotenv_values.get("SEMANTIC_EXTRACTOR_MODE")
-        or "disabled"
+        or "auto"
     ).strip().lower()
     configured_model = (
         model_override
@@ -362,13 +392,26 @@ def resolve_semantic_extractor_backend(
     )
 
     if configured_mode == "disabled":
-        return DisabledSemanticExtractorBackend()
+        if allow_test_backends:
+            return DisabledSemanticExtractorBackend()
+        return UnavailableSemanticExtractorBackend(
+            reason="disabled semantic extraction is test-only and not valid for the normal runtime",
+            configured_mode=configured_mode,
+        )
     if configured_mode == "stub":
-        return StubSemanticExtractorBackend()
+        if allow_test_backends:
+            return StubSemanticExtractorBackend()
+        return UnavailableSemanticExtractorBackend(
+            reason="stub semantic extraction is test-only and not valid for the normal runtime",
+            configured_mode=configured_mode,
+        )
     if configured_mode == "ollama":
         return OllamaSemanticExtractorBackend(model=configured_model, base_url=configured_base_url)
     if configured_mode == "auto":
         if configured_model:
             return OllamaSemanticExtractorBackend(model=configured_model, base_url=configured_base_url)
-        return DisabledSemanticExtractorBackend()
+        return UnavailableSemanticExtractorBackend(
+            reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
+            configured_mode=configured_mode,
+        )
     raise ValueError(f"Unsupported semantic extractor mode: {configured_mode}")

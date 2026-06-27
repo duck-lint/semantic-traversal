@@ -12,7 +12,7 @@ from .hashing import sha256_json
 from .ingest import build_default_source_roots, default_data_root, run_ingest
 from .llm import StubLLMBackend, resolve_llm_backend
 from .runtime import run_thread_turn
-from .semantic_extraction import DisabledSemanticExtractorBackend, StubSemanticExtractorBackend, resolve_semantic_extractor_backend
+from .semantic_extraction import DisabledSemanticExtractorBackend, StubSemanticExtractorBackend
 from .storage import load_json, read_ledger
 
 
@@ -47,6 +47,7 @@ def probe_new_thread_minimal_turn(data_root: Path, llm_backend: Any | None = Non
     return {
         "probe": "probe_new_thread_minimal_turn",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "thread_id": result.thread_id,
         "ledger_count": len(ledger_records),
         "llm_mode": result.llm_metadata.get("mode"),
@@ -78,6 +79,7 @@ def probe_same_thread_continuation_turn(data_root: Path, llm_backend: Any | None
     return {
         "probe": "probe_same_thread_continuation_turn",
         "status": "pass",
+        "runtime_outcome": second_turn.runtime_outcome,
         "thread_id": first_turn.thread_id,
         "ledger_count_before": len(before_records),
         "ledger_count_after": len(after_records),
@@ -160,15 +162,16 @@ def probe_lexical_retrieval_fixture_hit(data_root: Path, repo_root: Path | None 
         user_input="Please retrieve the candy snack food before bed note.",
         llm_backend=StubLLMBackend(prefix="Probe stub response"),
     )
-    assert result.coverage_report["status"] == "minimal_pass", "expected retrieval to succeed"
+    assert result.coverage_report["decision"] == "blocked", "expected blocked runtime coverage decision"
     assert result.retrieval_packet["selected_chunks"], "expected at least one retrieval hit"
     assert any(chunk["source_root_label"] == "tests-fixtures" for chunk in result.retrieval_packet["selected_chunks"])
-    assert result.synthesis_context_packet["approved_retrieval_packet"] is not None
+    assert result.synthesis_context_packet["approved_retrieval_packet"] is None
     return {
         "probe": "probe_lexical_retrieval_fixture_hit",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "turn_id": result.turn_id,
-        "coverage_status": result.coverage_report["status"],
+        "coverage_decision": result.coverage_report["decision"],
         "selected_chunk_ids": [chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]],
     }
 
@@ -181,13 +184,14 @@ def probe_lexical_retrieval_no_index(data_root: Path, repo_root: Path | None = N
         user_input="Dream Recall with no ingestion index present.",
         llm_backend=StubLLMBackend(prefix="Probe stub response"),
     )
-    assert result.coverage_report["status"] == "no_index", "expected no_index coverage status"
+    assert result.coverage_report["decision"] == "blocked", "expected blocked coverage decision"
     assert result.retrieval_packet["selected_chunks"] == [], "expected an empty retrieval packet"
     return {
         "probe": "probe_lexical_retrieval_no_index",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "turn_id": result.turn_id,
-        "coverage_status": result.coverage_report["status"],
+        "coverage_decision": result.coverage_report["decision"],
     }
 
 
@@ -200,13 +204,14 @@ def probe_lexical_retrieval_no_match(data_root: Path, repo_root: Path | None = N
         user_input="qzxyv qzxyv qzxyv",
         llm_backend=StubLLMBackend(prefix="Probe stub response"),
     )
-    assert result.coverage_report["status"] == "no_matches", "expected no_matches coverage status"
+    assert result.coverage_report["decision"] == "blocked", "expected blocked coverage decision"
     assert result.retrieval_packet["selected_chunks"] == [], "expected an empty retrieval packet"
     return {
         "probe": "probe_lexical_retrieval_no_match",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "turn_id": result.turn_id,
-        "coverage_status": result.coverage_report["status"],
+        "coverage_decision": result.coverage_report["decision"],
     }
 
 
@@ -220,14 +225,15 @@ def probe_lexical_retrieval_no_query_terms(data_root: Path, repo_root: Path | No
         llm_backend=StubLLMBackend(prefix="Probe stub response"),
         semantic_extractor_backend=DisabledSemanticExtractorBackend(),
     )
-    assert result.coverage_report["status"] == "no_query_terms", "expected no_query_terms coverage status"
-    assert result.retrieval_packet["retrieval_status"] == "no_query_terms"
+    assert result.coverage_report["decision"] == "blocked", "expected blocked coverage decision"
+    assert result.retrieval_packet["retrieval_observation"] == "no_query_terms"
     assert result.retrieval_packet["selected_chunks"] == [], "expected an empty retrieval packet"
     return {
         "probe": "probe_lexical_retrieval_no_query_terms",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "turn_id": result.turn_id,
-        "coverage_status": result.coverage_report["status"],
+        "coverage_decision": result.coverage_report["decision"],
         "query_terms": result.semantic_context_packet["extracted_lexical_query_terms"],
     }
 
@@ -270,8 +276,9 @@ def probe_ledger_hash_artifact_integrity(data_root: Path, repo_root: Path | None
     return {
         "probe": "probe_ledger_hash_artifact_integrity",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "turn_id": result.turn_id,
-        "coverage_status": result.coverage_report["status"],
+        "coverage_decision": result.coverage_report["decision"],
         "ledger_hashes": {
             "isolated_semantic_extraction_packet_hash": ledger_record["isolated_semantic_extraction_packet_hash"],
             "isolated_semantic_extraction_raw_hash": ledger_record["isolated_semantic_extraction_raw_hash"],
@@ -300,18 +307,17 @@ def probe_turn_cli_artifact_paths(data_root: Path, repo_root: Path | None = None
             "Please retrieve the candy snack food before bed note.",
             "--llm-mode",
             "stub",
-            "--semantic-extractor-mode",
-            "stub",
             "--repo-root",
             str(resolved_repo_root),
             "--data-root",
             str(data_root),
         ],
         cwd=workspace_root,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert completed.returncode == 1, "expected blocked normal CLI exit"
     payload = json.loads(completed.stdout)
     artifact_paths = {
         key: Path(payload[key])
@@ -334,7 +340,8 @@ def probe_turn_cli_artifact_paths(data_root: Path, repo_root: Path | None = None
     return {
         "probe": "probe_turn_cli_artifact_paths",
         "status": "pass",
-        "coverage_status": payload["coverage_status"],
+        "runtime_outcome": payload["runtime_outcome"],
+        "coverage_decision": payload["coverage_decision"],
         "isolated_extraction_status": payload["isolated_extraction_status"],
         "contextual_extraction_status": payload["contextual_extraction_status"],
         "artifact_paths": {key: str(path) for key, path in artifact_paths.items()},
@@ -367,7 +374,7 @@ def probe_semantic_extraction_stub_packets(data_root: Path, repo_root: Path | No
     }
 
 
-def probe_semantic_extraction_disabled_fallback(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+def probe_blocked_runtime_with_disabled_extraction(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     resolved_repo_root = (repo_root or Path(".")).resolve()
     run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
     result = run_thread_turn(
@@ -379,12 +386,13 @@ def probe_semantic_extraction_disabled_fallback(data_root: Path, repo_root: Path
     )
     assert result.isolated_semantic_extraction_packet["status"] == "disabled"
     assert result.contextual_semantic_extraction_packet["status"] == "disabled"
-    assert result.coverage_report["status"] == "minimal_pass"
+    assert result.coverage_report["decision"] == "blocked"
     assert result.retrieval_packet["selected_chunks"]
     return {
-        "probe": "probe_semantic_extraction_disabled_fallback",
+        "probe": "probe_blocked_runtime_with_disabled_extraction",
         "status": "pass",
-        "coverage_status": result.coverage_report["status"],
+        "runtime_outcome": result.runtime_outcome,
+        "coverage_decision": result.coverage_report["decision"],
         "isolated_status": result.isolated_semantic_extraction_packet["status"],
         "contextual_status": result.contextual_semantic_extraction_packet["status"],
     }
@@ -437,12 +445,13 @@ def probe_semantic_extraction_hash_integrity(data_root: Path, repo_root: Path | 
     return {
         "probe": "probe_semantic_extraction_hash_integrity",
         "status": "pass",
+        "runtime_outcome": result.runtime_outcome,
         "isolated_packet_hash": ledger_record["isolated_semantic_extraction_packet_hash"],
         "contextual_packet_hash": ledger_record["contextual_semantic_extraction_packet_hash"],
     }
 
 
-def probe_full_route_stub_turn(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+def probe_blocked_runtime_with_stub_extraction(data_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     resolved_repo_root = (repo_root or Path(".")).resolve()
     run_ingest(repo_root=resolved_repo_root, data_root=data_root, source_roots=build_default_source_roots(resolved_repo_root))
     result = run_thread_turn(
@@ -454,7 +463,7 @@ def probe_full_route_stub_turn(data_root: Path, repo_root: Path | None = None) -
     )
     assert result.isolated_semantic_extraction_packet["status"] == "stub"
     assert result.contextual_semantic_extraction_packet["status"] == "stub"
-    assert result.llm_metadata["mode"] == "stub"
+    assert result.llm_metadata["mode"] == "not_called"
     for path in (
         result.isolated_semantic_extraction_packet_path,
         result.contextual_semantic_extraction_packet_path,
@@ -464,16 +473,17 @@ def probe_full_route_stub_turn(data_root: Path, repo_root: Path | None = None) -
         result.state_delta_path,
     ):
         assert path.exists(), f"expected full-route stub artifact to exist: {path}"
-    assert result.coverage_report["status"] == "minimal_pass"
+    assert result.coverage_report["decision"] == "blocked"
     assert result.ledger_record["isolated_semantic_extraction_packet_hash"]
     assert result.ledger_record["contextual_semantic_extraction_packet_hash"]
     return {
-        "probe": "probe_full_route_stub_turn",
+        "probe": "probe_blocked_runtime_with_stub_extraction",
         "status": "pass",
         "llm_mode": result.llm_metadata["mode"],
+        "runtime_outcome": result.runtime_outcome,
         "isolated_status": result.isolated_semantic_extraction_packet["status"],
         "contextual_status": result.contextual_semantic_extraction_packet["status"],
-        "coverage_status": result.coverage_report["status"],
+        "coverage_decision": result.coverage_report["decision"],
         "turn_root": str(result.turn_root),
     }
 
@@ -495,19 +505,16 @@ def main() -> int:
             "probe_ledger_hash_artifact_integrity",
             "probe_turn_cli_artifact_paths",
             "probe_semantic_extraction_stub_packets",
-            "probe_semantic_extraction_disabled_fallback",
+            "probe_blocked_runtime_with_disabled_extraction",
             "probe_semantic_extraction_contextual_thread_state",
             "probe_semantic_extraction_hash_integrity",
-            "probe_full_route_stub_turn",
+            "probe_blocked_runtime_with_stub_extraction",
         ),
     )
     parser.add_argument("--data-root", default=str(_default_probe_root()))
     parser.add_argument("--llm-mode", choices=("auto", "live", "stub"), default="stub")
     parser.add_argument("--model")
     parser.add_argument("--repo-root", default=".")
-    parser.add_argument("--semantic-extractor-mode", choices=("auto", "disabled", "stub", "ollama"), default="stub")
-    parser.add_argument("--semantic-extractor-model")
-    parser.add_argument("--semantic-extractor-base-url")
     args = parser.parse_args()
 
     data_root = Path(args.data_root).resolve()
@@ -516,12 +523,6 @@ def main() -> int:
         backend = StubLLMBackend(prefix="Probe stub response")
     else:
         backend = resolve_llm_backend(repo_root=resolved_repo_root, llm_mode=args.llm_mode, model_override=args.model)
-    _ = resolve_semantic_extractor_backend(
-        repo_root=resolved_repo_root,
-        extractor_mode=args.semantic_extractor_mode,
-        model_override=args.semantic_extractor_model,
-        base_url_override=args.semantic_extractor_base_url,
-    )
 
     if args.probe == "probe_new_thread_minimal_turn":
         payload = probe_new_thread_minimal_turn(data_root=data_root, llm_backend=backend)
@@ -547,12 +548,12 @@ def main() -> int:
         payload = probe_turn_cli_artifact_paths(data_root=data_root, repo_root=resolved_repo_root)
     elif args.probe == "probe_semantic_extraction_stub_packets":
         payload = probe_semantic_extraction_stub_packets(data_root=data_root, repo_root=resolved_repo_root)
-    elif args.probe == "probe_semantic_extraction_disabled_fallback":
-        payload = probe_semantic_extraction_disabled_fallback(data_root=data_root, repo_root=resolved_repo_root)
+    elif args.probe == "probe_blocked_runtime_with_disabled_extraction":
+        payload = probe_blocked_runtime_with_disabled_extraction(data_root=data_root, repo_root=resolved_repo_root)
     elif args.probe == "probe_semantic_extraction_contextual_thread_state":
         payload = probe_semantic_extraction_contextual_thread_state(data_root=data_root, repo_root=resolved_repo_root)
-    elif args.probe == "probe_full_route_stub_turn":
-        payload = probe_full_route_stub_turn(data_root=data_root, repo_root=resolved_repo_root)
+    elif args.probe == "probe_blocked_runtime_with_stub_extraction":
+        payload = probe_blocked_runtime_with_stub_extraction(data_root=data_root, repo_root=resolved_repo_root)
     else:
         payload = probe_semantic_extraction_hash_integrity(data_root=data_root, repo_root=resolved_repo_root)
     print(json.dumps(payload, indent=2, ensure_ascii=True))

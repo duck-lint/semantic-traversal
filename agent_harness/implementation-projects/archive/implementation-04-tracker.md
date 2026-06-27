@@ -19,7 +19,7 @@
 | --- | --- | --- | --- | --- |
 | Create active `implementation-04` bundle | planner | complete | plan and tracker exist under `agent_harness/implementation-projects/active/` | small hardening pass only |
 | Resolve implementation-03 doc-state mismatch truthfully | implementer | complete | implementation-03 is archived complete and active copies were cleared | no fabricated validation needed |
-| Add explicit `no_query_terms` behavior | implementer | complete | `test_lexical_retrieval_no_query_terms_is_explicit_and_non_crashing` and `probe_lexical_retrieval_no_query_terms` | distinct from `no_index`, `no_matches`, and `minimal_pass` |
+| Add explicit `no_query_terms` behavior | implementer | complete | `test_lexical_retrieval_no_query_terms_is_explicit_and_non_crashing` and `probe_lexical_retrieval_no_query_terms` | distinct from other blocked diagnostic retrieval observations |
 | Verify ledger hashes against persisted artifact contents | implementer | complete | `test_lexical_retrieval_fixture_hit_persists_artifacts_and_hashes` and `probe_ledger_hash_artifact_integrity` | `state_delta.json` is persisted to make the check inspectable |
 | Improve CLI/probe artifact-path observability | implementer | complete | `test_turn_cli_reports_artifact_paths_and_hashes` and `probe_turn_cli_artifact_paths` | CLI output now exposes the turn artifact paths |
 | Add/update tests and probes | implementer | complete | full test suite and named probe runs passed | existing retrieval behavior remains stable |
@@ -31,4 +31,3 @@ No blockers remain.
 ## Closeout Note
 
 - When this bundle completes, archive the plan, tracker, and summary, and set the next end goal to human user acceptance testing
-

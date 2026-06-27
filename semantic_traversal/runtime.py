@@ -11,10 +11,10 @@ from typing import Any
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .semantic_extraction import (
-    DisabledSemanticExtractorBackend,
     SemanticExtractionResponse,
     SemanticExtractorBackend,
     extract_terms as extract_semantic_terms,
+    resolve_semantic_extractor_backend,
 )
 from .storage import append_ledger_record, create_thread_paths, load_json, read_ledger, write_json
 
@@ -38,8 +38,10 @@ class TurnExecutionResult:
     isolated_semantic_extraction_raw_path: Path
     contextual_semantic_extraction_packet_path: Path
     contextual_semantic_extraction_raw_path: Path
-    assistant_response: str
+    assistant_response: str | None
     llm_metadata: dict[str, Any]
+    runtime_outcome: str
+    blocking_reasons: list[str]
     prior_thread_state: dict[str, Any]
     next_thread_state: dict[str, Any]
     ledger_record: dict[str, Any]
@@ -139,6 +141,7 @@ def _build_synthesis_context_packet(
     retrieval_packet: dict[str, Any],
     coverage_report: dict[str, Any],
 ) -> dict[str, Any]:
+    coverage_decision = str(coverage_report.get("decision") or "blocked")
     return {
         "thread_id": thread_document["thread_id"],
         "turn_id": turn_id,
@@ -150,18 +153,38 @@ def _build_synthesis_context_packet(
         "semantic_context_packet": semantic_context_packet,
         "semantic_traversal_manifest": semantic_traversal_manifest,
         "retrieval_packet": retrieval_packet,
-        "approved_retrieval_packet": retrieval_packet if coverage_report.get("retrieval_approved_for_synthesis") else None,
+        "approved_retrieval_packet": retrieval_packet if coverage_decision == "approved" else None,
         "coverage_report": coverage_report,
+        "runtime_outcome": "completed" if coverage_decision == "approved" else "blocked",
+        "blocking_reasons": list(coverage_report.get("blocking_reasons") or []),
         "output_requirements": [
             "Respond directly to the latest raw user input.",
             "Preserve continuity with the prior thread state.",
-            "Use semantic extraction as non-authoritative additive context only.",
-            "Use retrieved material only when present and relevant.",
-            "Do not invent retrieval results.",
-            "Preserve the raw user intent where extraction is uncertain.",
-            "State retrieval limits if the retrieval packet is empty or partial.",
+            "Do not emit a user-facing answer when the runtime outcome is blocked.",
+            "Use retrieved material only when it has been approved for synthesis.",
+            "Do not invent retrieval results or claim thesis-valid traversal when blocked.",
         ],
     }
+
+
+def _extract_semantic_outputs(
+    *,
+    isolated_packet: dict[str, Any],
+    contextual_packet: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    isolated_payload = isolated_packet.get("parsed_payload") if isinstance(isolated_packet.get("parsed_payload"), dict) else {}
+    contextual_payload = contextual_packet.get("parsed_payload") if isinstance(contextual_packet.get("parsed_payload"), dict) else {}
+    perturbation_semantic_graph = contextual_payload.get("perturbation_semantic_graph") or isolated_payload.get("perturbation_semantic_graph")
+    semantic_coverage_target = (
+        contextual_payload.get("semantic_coverage_target")
+        or contextual_payload.get("coverage_target")
+        or isolated_payload.get("semantic_coverage_target")
+        or isolated_payload.get("coverage_target")
+    )
+    return (
+        perturbation_semantic_graph if isinstance(perturbation_semantic_graph, dict) else None,
+        semantic_coverage_target if isinstance(semantic_coverage_target, dict) else None,
+    )
 
 
 def _build_semantic_context_packet(
@@ -172,6 +195,10 @@ def _build_semantic_context_packet(
     turn_id: int,
     semantic_extraction: SemanticExtractionArtifacts,
 ) -> dict[str, Any]:
+    perturbation_semantic_graph, semantic_coverage_target = _extract_semantic_outputs(
+        isolated_packet=semantic_extraction.isolated_packet,
+        contextual_packet=semantic_extraction.contextual_packet,
+    )
     retrieval_preparation = _build_retrieval_preparation(
         user_input=user_input,
         isolated_packet=semantic_extraction.isolated_packet,
@@ -182,6 +209,8 @@ def _build_semantic_context_packet(
         "turn_id": turn_id,
         "user_input": user_input,
         "raw_user_input": user_input,
+        "perturbation_semantic_graph": perturbation_semantic_graph,
+        "semantic_coverage_target": semantic_coverage_target,
         "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
         "retrieval_preparation": retrieval_preparation,
         "semantic_extraction": {
@@ -297,12 +326,12 @@ def _collect_extraction_hint_terms(
     return terms, sources
 
 
-def _build_lexical_retrieval_artifacts(
+def _build_diagnostic_retrieval_artifacts(
     *,
     repo_root: Path,
     data_root: Path,
     semantic_context_packet: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     retrieval_preparation = dict(semantic_context_packet.get("retrieval_preparation") or {})
     raw_lexical_terms = list(retrieval_preparation.get("raw_lexical_terms") or [])
     extraction_hint_terms = list(retrieval_preparation.get("extraction_hint_terms") or [])
@@ -313,16 +342,19 @@ def _build_lexical_retrieval_artifacts(
         "turn_id": semantic_context_packet["turn_id"],
         "query_terms": query_terms,
         "query_terms_available": bool(query_terms),
-        "retrieval_mode": "lexical_sqlite",
+        "diagnostic_retrieval_mode": "lexical_sqlite_component_observation",
+        "evaluated_activation_surfaces": [
+            {"surface": "lexical_index_surface", "status": "diagnostic_only"},
+            {"surface": "vector_index_surface", "status": "not_implemented"},
+            {"surface": "graph_layer", "status": "not_implemented"},
+        ],
         "selected_chunk_ids": [],
         "candidate_count": 0,
         "selection_reasons": [],
         "limitations": [
-            "no vector search",
-            "no graph expansion",
-            "no coverage loop",
-            "lexical_sqlite only",
-            "semantic extraction is additive only and not authoritative",
+            "latent_space_activation is not thesis-valid in this runtime",
+            "semantic_traversal is not implemented for the normal runtime",
+            "lexical SQLite observations are diagnostic only",
         ],
         "database_path": str(database_path),
         "repo_root": str(repo_root),
@@ -338,53 +370,26 @@ def _build_lexical_retrieval_artifacts(
         "candidate_term_sources": dict(retrieval_preparation.get("candidate_term_sources") or {}),
         "model_proposed_only_terms": list(retrieval_preparation.get("model_proposed_only_terms") or []),
         "query_terms_available": bool(query_terms),
-        "retrieval_mode": "lexical_sqlite",
+        "retrieval_mode": "lexical_sqlite_component_observation",
         "selection_limit": RETRIEVAL_LIMIT,
         "candidate_count": 0,
         "matched_chunk_count": 0,
+        "diagnostic_only": True,
         "approved_for_synthesis": False,
-        "retrieval_status": "not_attempted",
+        "retrieval_observation": "not_attempted",
         "selected_chunks": [],
         "database_path": str(database_path),
-    }
-    coverage_report: dict[str, Any] = {
-        "status": "not_attempted",
-        "matched_chunk_count": 0,
-        "candidate_count": 0,
-        "query_terms_used": query_terms,
-        "raw_lexical_terms": raw_lexical_terms,
-        "extraction_hint_terms": extraction_hint_terms,
-        "limits": {
-            "selection_limit": RETRIEVAL_LIMIT,
-        },
-        "semantic_extraction": {
-            "backend_mode": semantic_context_packet["semantic_extraction"]["statuses"]["backend_mode"],
-            "isolated_status": semantic_context_packet["semantic_extraction"]["statuses"]["isolated_status"],
-            "contextual_status": semantic_context_packet["semantic_extraction"]["statuses"]["contextual_status"],
-            "used_additively_for_retrieval": True,
-            "limitations": [
-                "semantic extraction is additive only",
-                "semantic extraction is not authoritative",
-            ],
-        },
-        "retrieval_approved_for_synthesis": False,
     }
 
     if not database_path.exists():
         traversal_manifest["selection_reasons"].append("ingestion SQLite database not found")
-        coverage_report["status"] = "no_index"
-        retrieval_packet["retrieval_status"] = "no_index"
-        return traversal_manifest, retrieval_packet, coverage_report, _chunkless_retrieval_hashes(
-            traversal_manifest, retrieval_packet, coverage_report
-        )
+        retrieval_packet["retrieval_observation"] = "index_missing"
+        return traversal_manifest, retrieval_packet
 
     if not query_terms:
         traversal_manifest["selection_reasons"].append("no lexical or additive extraction candidate terms were available")
-        coverage_report["status"] = "no_query_terms"
-        retrieval_packet["retrieval_status"] = "no_query_terms"
-        return traversal_manifest, retrieval_packet, coverage_report, _chunkless_retrieval_hashes(
-            traversal_manifest, retrieval_packet, coverage_report
-        )
+        retrieval_packet["retrieval_observation"] = "no_query_terms"
+        return traversal_manifest, retrieval_packet
 
     connection = sqlite3.connect(database_path)
     try:
@@ -395,40 +400,115 @@ def _build_lexical_retrieval_artifacts(
 
     traversal_manifest["candidate_count"] = len(candidates)
     retrieval_packet["candidate_count"] = len(candidates)
-    coverage_report["candidate_count"] = len(candidates)
 
     if not candidates:
         traversal_manifest["selection_reasons"].append("no chunk text or metadata matched the lexical candidate terms")
-        coverage_report["status"] = "no_matches"
-        retrieval_packet["retrieval_status"] = "no_matches"
-        return traversal_manifest, retrieval_packet, coverage_report, _chunkless_retrieval_hashes(
-            traversal_manifest, retrieval_packet, coverage_report
-        )
+        retrieval_packet["retrieval_observation"] = "no_matches"
+        return traversal_manifest, retrieval_packet
 
     selected_chunks = candidates[:RETRIEVAL_LIMIT]
     traversal_manifest["selected_chunk_ids"] = [chunk["chunk_id"] for chunk in selected_chunks]
     traversal_manifest["selection_reasons"] = [chunk["selection_reason"] for chunk in selected_chunks]
-    coverage_report["status"] = "minimal_pass"
-    coverage_report["matched_chunk_count"] = len(selected_chunks)
-    coverage_report["retrieval_approved_for_synthesis"] = True
     retrieval_packet["matched_chunk_count"] = len(selected_chunks)
-    retrieval_packet["approved_for_synthesis"] = True
-    retrieval_packet["retrieval_status"] = "minimal_pass"
+    retrieval_packet["retrieval_observation"] = "matched_chunks"
     retrieval_packet["selected_chunks"] = selected_chunks
-    return traversal_manifest, retrieval_packet, coverage_report, _chunkless_retrieval_hashes(
-        traversal_manifest, retrieval_packet, coverage_report
-    )
+    return traversal_manifest, retrieval_packet
 
 
-def _chunkless_retrieval_hashes(
-    traversal_manifest: dict[str, Any],
+def _dedupe_reasons(reasons: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for reason in reasons:
+        if reason not in deduped:
+            deduped.append(reason)
+    return deduped
+
+
+def _build_blocking_reasons(
+    *,
+    semantic_context_packet: dict[str, Any],
+    semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
-    coverage_report: dict[str, Any],
-) -> dict[str, str]:
+) -> list[str]:
+    statuses = dict(semantic_context_packet.get("semantic_extraction", {}).get("statuses") or {})
+    backend_mode = str(statuses.get("backend_mode") or "unknown")
+    isolated_status = str(statuses.get("isolated_status") or "unknown")
+    contextual_status = str(statuses.get("contextual_status") or "unknown")
+    reasons: list[str] = []
+    if backend_mode in {"disabled", "stub", "unavailable"}:
+        reasons.append(f"semantic_context_extraction backend `{backend_mode}` is not valid for the normal runtime")
+    if isolated_status != "parsed":
+        reasons.append(f"isolated semantic extraction did not produce a valid parsed result: {isolated_status}")
+    if contextual_status != "parsed":
+        reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
+    if semantic_context_packet.get("perturbation_semantic_graph") is None:
+        reasons.append("perturbation_semantic_graph is missing")
+    if semantic_context_packet.get("semantic_coverage_target") is None:
+        reasons.append("semantic_coverage_target is missing")
+    reasons.append("latent_space_activation is not implemented for the thesis-valid normal runtime")
+    reasons.append("semantic_traversal is not implemented for the thesis-valid normal runtime")
+
+    retrieval_observation = str(retrieval_packet.get("retrieval_observation") or "not_attempted")
+    if retrieval_observation == "index_missing":
+        reasons.append("lexical index diagnostic database is unavailable")
+    elif retrieval_observation == "no_query_terms":
+        reasons.append("no lexical candidate terms were available for diagnostic retrieval")
+    elif retrieval_observation == "no_matches":
+        reasons.append("lexical diagnostic retrieval found no matching chunks")
+    elif retrieval_observation == "matched_chunks":
+        reasons.append(
+            "lexical SQLite diagnostic retrieval cannot approve synthesis without a semantic_traversal_manifest generated from latent_space_activation"
+        )
+
+    if not semantic_traversal_manifest.get("selected_chunk_ids"):
+        reasons.append("no thesis-valid semantic traversal candidates were produced")
+    return _dedupe_reasons(reasons)
+
+
+def _build_coverage_report(
+    *,
+    semantic_context_packet: dict[str, Any],
+    semantic_traversal_manifest: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+    semantic_traversal_manifest_hash: str,
+    retrieval_packet_hash: str,
+) -> dict[str, Any]:
+    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
+    semantic_coverage_target_hash = (
+        sha256_json(semantic_coverage_target)
+        if isinstance(semantic_coverage_target, dict)
+        else None
+    )
     return {
-        "semantic_traversal_manifest_hash": sha256_json(traversal_manifest),
-        "retrieval_packet_hash": sha256_json(retrieval_packet),
-        "coverage_report_hash": sha256_json(coverage_report),
+        "decision": "blocked",
+        "semantic_coverage_target_hash": semantic_coverage_target_hash,
+        "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
+        "retrieval_packet_hash": retrieval_packet_hash,
+        "evaluated_activation_surfaces": list(semantic_traversal_manifest.get("evaluated_activation_surfaces") or []),
+        "blocking_reasons": _build_blocking_reasons(
+            semantic_context_packet=semantic_context_packet,
+            semantic_traversal_manifest=semantic_traversal_manifest,
+            retrieval_packet=retrieval_packet,
+        ),
+        "limits": {
+            "selection_limit": RETRIEVAL_LIMIT,
+            "diagnostic_retrieval_observation": retrieval_packet.get("retrieval_observation"),
+        },
+        "semantic_extraction": {
+            "backend_mode": semantic_context_packet["semantic_extraction"]["statuses"]["backend_mode"],
+            "isolated_status": semantic_context_packet["semantic_extraction"]["statuses"]["isolated_status"],
+            "contextual_status": semantic_context_packet["semantic_extraction"]["statuses"]["contextual_status"],
+            "used_additively_for_retrieval": True,
+            "limitations": [
+                "semantic extraction does not satisfy the thesis-valid normal runtime unless required semantic outputs are present",
+                "diagnostic lexical retrieval observations are not approved retrieval",
+            ],
+        },
+        "diagnostic_retrieval_summary": {
+            "query_terms_used": list(retrieval_packet.get("query_terms") or []),
+            "candidate_count": int(retrieval_packet.get("candidate_count") or 0),
+            "matched_chunk_count": int(retrieval_packet.get("matched_chunk_count") or 0),
+            "selected_chunk_count": len(list(retrieval_packet.get("selected_chunks") or [])),
+        },
     }
 
 
@@ -689,22 +769,19 @@ def _project_next_thread_state(
     thread_id: str,
     prior_thread_state: dict[str, Any],
     user_input: str,
-    assistant_response: str,
+    assistant_response: str | None,
     turn_id: int,
     timestamp: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     prior_recent_messages = list(prior_thread_state.get("recent_messages") or [])
-    updated_recent_messages = (
-        prior_recent_messages
-        + [
-            {"role": "user", "content": user_input},
-            {"role": "assistant", "content": assistant_response},
-        ]
-    )[-6:]
+    updated_recent_messages = prior_recent_messages + [{"role": "user", "content": user_input}]
+    if assistant_response is not None:
+        updated_recent_messages.append({"role": "assistant", "content": assistant_response})
+    updated_recent_messages = updated_recent_messages[-6:]
     next_thread_state = {
         "thread_id": thread_id,
         "latest_turn_id": turn_id,
-        "conversation_summary": assistant_response,
+        "conversation_summary": assistant_response or str(prior_thread_state.get("conversation_summary") or ""),
         "recent_messages": updated_recent_messages,
         "current_user_goals": [user_input],
         "open_questions": list(prior_thread_state.get("open_questions") or []),
@@ -745,7 +822,7 @@ def run_thread_turn(
     parent_perturbation_hash = ledger_records[-1]["state_perturbation_hash"] if ledger_records else None
     prior_thread_state_hash = prior_thread_state.get("latest_thread_state_hash")
     turn_root = paths.turn_root(turn_id)
-    extractor_backend = semantic_extractor_backend or DisabledSemanticExtractorBackend()
+    extractor_backend = semantic_extractor_backend or resolve_semantic_extractor_backend(repo_root=repo_root)
 
     semantic_extraction = _run_semantic_extraction(
         thread_id=paths.thread_id,
@@ -761,10 +838,19 @@ def run_thread_turn(
         turn_id=turn_id,
         semantic_extraction=semantic_extraction,
     )
-    semantic_traversal_manifest, retrieval_packet, coverage_report, retrieval_hashes = _build_lexical_retrieval_artifacts(
+    semantic_traversal_manifest, retrieval_packet = _build_diagnostic_retrieval_artifacts(
         repo_root=repo_root,
         data_root=data_root,
         semantic_context_packet=semantic_context_packet,
+    )
+    semantic_traversal_manifest_hash = sha256_json(semantic_traversal_manifest)
+    retrieval_packet_hash = sha256_json(retrieval_packet)
+    coverage_report = _build_coverage_report(
+        semantic_context_packet=semantic_context_packet,
+        semantic_traversal_manifest=semantic_traversal_manifest,
+        retrieval_packet=retrieval_packet,
+        semantic_traversal_manifest_hash=semantic_traversal_manifest_hash,
+        retrieval_packet_hash=retrieval_packet_hash,
     )
 
     synthesis_context_packet = _build_synthesis_context_packet(
@@ -778,24 +864,36 @@ def run_thread_turn(
         coverage_report=coverage_report,
     )
     semantic_context_packet_hash = sha256_json(semantic_context_packet)
-    semantic_traversal_manifest_hash = retrieval_hashes["semantic_traversal_manifest_hash"]
-    retrieval_packet_hash = retrieval_hashes["retrieval_packet_hash"]
-    coverage_report_hash = retrieval_hashes["coverage_report_hash"]
+    coverage_report_hash = sha256_json(coverage_report)
     synthesis_context_packet_hash = sha256_json(synthesis_context_packet)
     isolated_semantic_extraction_packet_hash = sha256_json(semantic_extraction.isolated_packet)
     isolated_semantic_extraction_raw_hash = sha256_json(semantic_extraction.isolated_raw_artifact)
     contextual_semantic_extraction_packet_hash = sha256_json(semantic_extraction.contextual_packet)
     contextual_semantic_extraction_raw_hash = sha256_json(semantic_extraction.contextual_raw_artifact)
-    llm_response = llm_backend.generate(synthesis_context_packet)
+    coverage_decision = str(coverage_report.get("decision") or "blocked")
+    runtime_outcome = "completed" if coverage_decision == "approved" else "blocked"
+    blocking_reasons = list(coverage_report.get("blocking_reasons") or [])
+    assistant_response: str | None = None
+    llm_metadata: dict[str, Any] = {
+        "mode": "not_called",
+        "blocked": True,
+        "reason": "runtime blocked before llm_call_boundary",
+    }
+    if runtime_outcome == "completed":
+        llm_response = llm_backend.generate(synthesis_context_packet)
+        assistant_response = llm_response.assistant_response
+        llm_metadata = llm_response.metadata
 
     next_thread_state, state_delta = _project_next_thread_state(
         thread_id=paths.thread_id,
         prior_thread_state=prior_thread_state,
         user_input=user_input,
-        assistant_response=llm_response.assistant_response,
+        assistant_response=assistant_response,
         turn_id=turn_id,
         timestamp=timestamp,
     )
+    state_delta["runtime_outcome"] = runtime_outcome
+    state_delta["blocking_reasons"] = blocking_reasons
 
     artifact_paths = _persist_turn_artifacts(
         turn_root=turn_root,
@@ -809,13 +907,15 @@ def run_thread_turn(
     )
 
     user_message = {"role": "user", "content": user_input, "turn_id": turn_id, "timestamp": timestamp}
-    assistant_message = {
-        "role": "assistant",
-        "content": llm_response.assistant_response,
-        "turn_id": turn_id,
-        "timestamp": timestamp,
-    }
-    thread_document["messages"] = list(thread_document.get("messages") or []) + [user_message, assistant_message]
+    thread_document["messages"] = list(thread_document.get("messages") or []) + [user_message]
+    if assistant_response is not None:
+        assistant_message = {
+            "role": "assistant",
+            "content": assistant_response,
+            "turn_id": turn_id,
+            "timestamp": timestamp,
+        }
+        thread_document["messages"].append(assistant_message)
     thread_document["turn_count"] = turn_id
     thread_document["updated_at"] = timestamp
     thread_document["latest_thread_state_hash"] = next_thread_state["latest_thread_state_hash"]
@@ -836,10 +936,12 @@ def run_thread_turn(
         "retrieval_packet_hash": retrieval_packet_hash,
         "coverage_report_hash": coverage_report_hash,
         "synthesis_context_packet_hash": synthesis_context_packet_hash,
-        "assistant_response_hash": sha256_text(llm_response.assistant_response),
+        "assistant_response_hash": sha256_text(assistant_response) if assistant_response is not None else None,
         "state_delta_hash": sha256_json(state_delta),
         "next_thread_state_hash": next_thread_state["latest_thread_state_hash"],
-        "llm_call_metadata": llm_response.metadata,
+        "llm_call_metadata": llm_metadata,
+        "runtime_outcome": runtime_outcome,
+        "blocking_reasons": blocking_reasons,
     }
     state_perturbation_hash = sha256_json(ledger_record_base)
     ledger_record = dict(ledger_record_base)
@@ -871,8 +973,10 @@ def run_thread_turn(
         isolated_semantic_extraction_raw_path=artifact_paths["isolated_semantic_extraction_raw_path"],
         contextual_semantic_extraction_packet_path=artifact_paths["contextual_semantic_extraction_packet_path"],
         contextual_semantic_extraction_raw_path=artifact_paths["contextual_semantic_extraction_raw_path"],
-        assistant_response=llm_response.assistant_response,
-        llm_metadata=llm_response.metadata,
+        assistant_response=assistant_response,
+        llm_metadata=llm_metadata,
+        runtime_outcome=runtime_outcome,
+        blocking_reasons=blocking_reasons,
         prior_thread_state=prior_thread_state,
         next_thread_state=next_thread_state,
         ledger_record=ledger_record,
