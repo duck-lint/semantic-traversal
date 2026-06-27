@@ -683,7 +683,7 @@ def _query_vector_candidates(
     else:
         response = embedding_backend.embed_texts([query_text])
     if response.status != "embedded" or not response.vectors:
-        return [], response.status
+        return [], response.status if response.status != "embedded" else "embedding_unavailable"
     vector_table = config.vector_table
     rows = connection.execute(
         f"""
@@ -705,13 +705,23 @@ def _query_vector_candidates(
         JOIN chunks ON chunks.chunk_id = {vector_table}.chunk_id
         """
     ).fetchall()
+    if not rows:
+        return [], "no_indexed_vectors"
     query_vector = response.vectors[0]
     candidates: list[dict[str, Any]] = []
+    valid_vector_rows = 0
     for row in rows:
-        stored_vector = json.loads(str(row["vector_json"]))
+        try:
+            stored_vector = json.loads(str(row["vector_json"]))
+        except json.JSONDecodeError:
+            continue
         if not isinstance(stored_vector, list) or not all(isinstance(value, (int, float)) for value in stored_vector):
             continue
-        score = _cosine_similarity(query_vector, [float(value) for value in stored_vector])
+        stored_vector_floats = [float(value) for value in stored_vector]
+        if len(stored_vector_floats) != len(query_vector):
+            continue
+        valid_vector_rows += 1
+        score = _cosine_similarity(query_vector, stored_vector_floats)
         if score <= 0:
             continue
         candidates.append(
@@ -725,7 +735,11 @@ def _query_vector_candidates(
             )
         )
     candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
-    return candidates[: config.max_retrieval_chunks], "ok"
+    if candidates:
+        return candidates[: config.max_retrieval_chunks], "activated"
+    if valid_vector_rows == 0:
+        return [], "no_valid_vectors"
+    return [], "no_vector_matches"
 
 
 def _query_graph_candidates(

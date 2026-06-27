@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from typing import Any
 from pathlib import Path
+from unittest.mock import patch
 
 from semantic_traversal.llm import StubLLMBackend
 from semantic_traversal.probes import probe_new_thread_minimal_turn, probe_same_thread_continuation_turn
@@ -10,7 +12,42 @@ from semantic_traversal.runtime import run_thread_turn
 from semantic_traversal.storage import load_json, read_ledger
 
 
+class _FakeSentenceTransformer:
+    def __init__(self, model_name: str, device: str | None = None, **kwargs: Any) -> None:
+        self.model_name = model_name
+        self.device = device
+
+    def encode(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
+        if isinstance(texts, str):
+            texts = [texts]
+        return [[1.0, float(len(text))] for text in texts]
+
+    def encode_document(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
+        return self.encode(texts, **kwargs)
+
+    def encode_query(self, texts: list[str] | str, **kwargs: Any) -> list[list[float]]:
+        return self.encode(texts, **kwargs)
+
+
+def _fake_sentence_transformers_import_module(name: str):
+    if name == "sentence_transformers":
+        return type("FakeSentenceTransformersModule", (), {"SentenceTransformer": _FakeSentenceTransformer})()
+    raise ModuleNotFoundError(name)
+
+
 class FirstBuildTargetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._sentence_transformers_patcher = patch(
+            "semantic_traversal.embeddings.import_module",
+            side_effect=_fake_sentence_transformers_import_module,
+        )
+        cls._sentence_transformers_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._sentence_transformers_patcher.stop()
+
     def test_probe_new_thread_minimal_turn(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = probe_new_thread_minimal_turn(Path(temp_dir), llm_backend=StubLLMBackend())

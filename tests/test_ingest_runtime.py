@@ -22,10 +22,10 @@ import yaml
 from semantic_traversal.config import ConfigError, load_runtime_config
 from semantic_traversal.embeddings import resolve_embedding_backend
 from semantic_traversal.hashing import sha256_json
-from semantic_traversal.ingest import build_default_source_roots, run_ingest
+from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roots, run_ingest
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
-from semantic_traversal.runtime import run_thread_turn
+from semantic_traversal.runtime import _query_vector_candidates, run_thread_turn
 from semantic_traversal.semantic_extraction import (
     DisabledSemanticExtractorBackend,
     StubSemanticExtractorBackend,
@@ -203,6 +203,24 @@ class _InvalidSentenceTransformer:
         return ["not-a-vector" for _ in texts]
 
 
+class _TestEmbeddingBackend:
+    mode_name = "sentence_transformers"
+
+    def embed_texts(self, texts: list[str]) -> Any:
+        return types.SimpleNamespace(
+            status="embedded",
+            vectors=[[1.0, 0.0] for _ in texts],
+            metadata={"backend_mode": self.mode_name, "model": "test-fake-sentence-transformer", "vector_count": len(texts)},
+        )
+
+    def embed_query_text(self, text: str) -> Any:
+        return types.SimpleNamespace(
+            status="embedded",
+            vectors=[[1.0, 0.0]],
+            metadata={"backend_mode": self.mode_name, "model": "test-fake-sentence-transformer", "vector_count": 1},
+        )
+
+
 def _fake_sentence_transformers_import_module(name: str):
     if name == "sentence_transformers":
         return types.SimpleNamespace(SentenceTransformer=_FakeSentenceTransformer)
@@ -344,6 +362,18 @@ class FailingLLMBackend:
 
 
 class IngestRuntimeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._sentence_transformers_patcher = patch(
+            "semantic_traversal.embeddings.import_module",
+            side_effect=_fake_sentence_transformers_import_module,
+        )
+        cls._sentence_transformers_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._sentence_transformers_patcher.stop()
+
     def test_runtime_config_loads_default_and_explicit_paths_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = Path(repo_dir)
@@ -478,6 +508,110 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(response.status, "invalid_payload")
             self.assertIsNone(response.vectors)
+
+    def test_vector_surface_reports_no_indexed_vectors_when_vectors_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            _write_synthetic_corpus_journal_note(repo_root)
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+            connection = sqlite3.connect(Path(data_dir) / "ingestion" / "latent_space.sqlite3")
+            try:
+                connection.execute("DELETE FROM chunk_vectors")
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="fixture corpus alpha",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                embedding_backend=_TestEmbeddingBackend(),
+            )
+
+            coverage_report = _load_turn_artifact(result.coverage_report_path)
+            semantic_traversal_manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(coverage_report["decision"], "blocked")
+            self.assertIn("vector_index_surface unavailable or missing configured embeddings", coverage_report["blocking_reasons"])
+            vector_surface = next(surface for surface in semantic_traversal_manifest["activation_surfaces"] if surface["surface"] == "vector_index_surface")
+            self.assertEqual(vector_surface["status"], "no_indexed_vectors")
+            self.assertEqual(vector_surface["reason"], "no_indexed_vectors")
+
+    def test_vector_surface_reports_no_valid_vectors_when_rows_are_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            config = load_runtime_config(repo_root=repo_root)
+            connection = sqlite3.connect(":memory:")
+            try:
+                connection.row_factory = sqlite3.Row
+                connection.execute(
+                    """
+                    CREATE TABLE chunks (
+                        chunk_id TEXT PRIMARY KEY,
+                        note_id TEXT NOT NULL,
+                        source_root_label TEXT NOT NULL,
+                        relative_path TEXT NOT NULL,
+                        note_path TEXT NOT NULL,
+                        note_title TEXT NOT NULL,
+                        section_id TEXT NOT NULL,
+                        section_label TEXT NOT NULL,
+                        section_path_json TEXT NOT NULL,
+                        paragraph_ordinal INTEGER NOT NULL,
+                        paragraph_text TEXT NOT NULL,
+                        chunk_hash TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE chunk_vectors (
+                        chunk_id TEXT PRIMARY KEY,
+                        vector_json TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "chunk-1",
+                        "note-1",
+                        "corpus",
+                        "fixture.md",
+                        str(repo_root / "corpus" / "fixture.md"),
+                        "Fixture Note",
+                        "section-1",
+                        "Fixture Section",
+                        json.dumps(["Fixture Section"]),
+                        1,
+                        "Fixture text",
+                        "hash-1",
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO chunk_vectors VALUES (?, ?)",
+                    ("chunk-1", json.dumps("invalid")),
+                )
+                connection.commit()
+
+                candidates, status = _query_vector_candidates(
+                    connection,
+                    query_text="fixture",
+                    embedding_backend=_TestEmbeddingBackend(),
+                    config=config,
+                )
+            finally:
+                connection.close()
+
+            self.assertEqual(candidates, [])
+            self.assertEqual(status, "no_valid_vectors")
 
     def test_unsupported_provider_configuration_fails_closed_for_semantic_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
