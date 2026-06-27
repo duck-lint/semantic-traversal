@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import textwrap
 from pathlib import Path
 
 from semantic_traversal.hashing import sha256_json
@@ -19,24 +20,6 @@ from semantic_traversal.storage import read_ledger
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_NOTE = REPO_ROOT / "tests" / "fixtures" / "JOURNAL" / "2025-09" / "01_Monday.md"
-CORPUS_JOURNAL_NOTE = (
-    REPO_ROOT
-    / "corpus"
-    / "LAYER-1 PILLARS"
-    / "PILLAR 2-DYNAMIC COHERENCE"
-    / "JOURNAL"
-    / "2025"
-    / "2025-08"
-    / "24_Sunday.md"
-)
-LONGFORM_NOTE = (
-    REPO_ROOT
-    / "corpus"
-    / "LAYER-1 PILLARS"
-    / "PILLAR 2-DYNAMIC COHERENCE"
-    / "JOURNAL"
-    / "Propositions & Models.md"
-)
 
 
 def _load_manifest(path: Path) -> dict[str, object]:
@@ -47,6 +30,77 @@ def _copy_note(source_path: Path, destination_root: Path, relative_path: str) ->
     destination_path = destination_root / Path(relative_path)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, destination_path)
+
+
+def _write_markdown_fixture(destination_root: Path, relative_path: str, content: str) -> Path:
+    destination_path = destination_root / Path(relative_path)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    destination_path.write_text(textwrap.dedent(content).strip() + "\n", encoding="utf-8")
+    return destination_path
+
+
+def _write_synthetic_corpus_journal_note(repo_root: Path) -> Path:
+    return _write_markdown_fixture(
+        repo_root / "corpus",
+        "SYNTHETIC/JOURNAL/fixture_corpus_journal.md",
+        """
+        ---
+        journal_entry_date: 2025-09-01
+        note_type: synthetic_corpus_fixture
+        ---
+
+        # September 01, 2025
+
+        ## Fixture Corpus Alpha
+
+        This synthetic corpus paragraph exists to test heading resolution.
+
+        ## Fixture Corpus Beta
+
+        This synthetic corpus paragraph contains Yesterday and Y-Day Review terms for lexical retrieval continuity tests, plus the candy snack food before bed phrase.
+
+        ## Fixture Corpus Gamma
+
+        Dream recall appears here as generic retrieval text, not as a required private journal schema.
+        """,
+    )
+
+
+def _write_synthetic_longform_note(repo_root: Path) -> Path:
+    return _write_markdown_fixture(
+        repo_root / "corpus",
+        "SYNTHETIC/LONGFORM/fixture_longform.md",
+        """
+        ---
+        journal_entry_date: 2025-09-01
+        note_type: synthetic_longform_fixture
+        ---
+
+        # September 01, 2025
+
+        ## Fixture Proposition Section
+
+        This paragraph covers Premise 1 for synthetic paragraph chunking.
+
+        This paragraph covers Premise 2 for synthetic paragraph chunking.
+
+        This paragraph covers Premise 3 for synthetic paragraph chunking.
+
+        This paragraph covers Premise 4 for synthetic paragraph chunking.
+
+        This paragraph covers Premise 5 for synthetic paragraph chunking.
+
+        ## Fixture Nested Section
+
+        This paragraph covers Premise 6 for synthetic nested paragraph chunking.
+
+        This paragraph covers Premise 7 for synthetic nested paragraph chunking.
+
+        This paragraph covers Premise 8 for synthetic nested paragraph chunking.
+
+        This paragraph covers Premise 9 for synthetic nested paragraph chunking.
+        """,
+    )
 
 
 def _chunk_map(manifest: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -70,7 +124,12 @@ def _load_turn_artifact(path: Path) -> dict[str, object]:
 
 class IngestRuntimeTests(unittest.TestCase):
     def test_cli_ingest_uses_authorized_default_roots(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(repo_dir)
+            (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            _write_synthetic_corpus_journal_note(repo_root)
+
             process = subprocess.run(
                 [
                     sys.executable,
@@ -78,7 +137,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "semantic_traversal",
                     "ingest",
                     "--repo-root",
-                    str(REPO_ROOT),
+                    str(repo_root),
                     "--data-root",
                     temp_dir,
                 ],
@@ -133,16 +192,8 @@ class IngestRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
             (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
-            _copy_note(
-                CORPUS_JOURNAL_NOTE,
-                repo_root / "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md",
-            )
-            _copy_note(
-                LONGFORM_NOTE,
-                repo_root / "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/Propositions & Models.md",
-            )
+            _write_synthetic_corpus_journal_note(repo_root)
+            _write_synthetic_longform_note(repo_root)
 
             result = run_ingest(
                 repo_root=repo_root,
@@ -154,23 +205,22 @@ class IngestRuntimeTests(unittest.TestCase):
             journal_chunks = _chunks_for_note(
                 manifest,
                 "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md",
+                "SYNTHETIC/JOURNAL/fixture_corpus_journal.md",
             )
-            self.assertIn("Dream Motif", {chunk["section_label"] for chunk in journal_chunks})
-            self.assertIn("Y-Day Review", {chunk["section_label"] for chunk in journal_chunks})
-            self.assertIn("Dream recall", {chunk["section_label"] for chunk in journal_chunks})
-            self.assertIn("Yesterday", {chunk["section_label"] for chunk in journal_chunks})
+            self.assertIn("Fixture Corpus Alpha", {chunk["section_label"] for chunk in journal_chunks})
+            self.assertIn("Fixture Corpus Beta", {chunk["section_label"] for chunk in journal_chunks})
+            self.assertIn("Fixture Corpus Gamma", {chunk["section_label"] for chunk in journal_chunks})
 
             longform_chunks = _chunks_for_note(
                 manifest,
                 "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/Propositions & Models.md",
+                "SYNTHETIC/LONGFORM/fixture_longform.md",
             )
             self.assertGreater(len(longform_chunks), 8)
             premise_chunks = [
                 chunk["paragraph_text"]
                 for chunk in longform_chunks
-                if chunk["section_label"] == "[[Compartmentalization]] is the Gateway Drug to Immorality"
+                if chunk["section_label"] == "Fixture Proposition Section"
             ]
             self.assertTrue(any("Premise 1" in text for text in premise_chunks))
             self.assertTrue(any("Premise 2" in text for text in premise_chunks))
@@ -180,11 +230,8 @@ class IngestRuntimeTests(unittest.TestCase):
             repo_root = Path(repo_dir)
             (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            _copy_note(
-                LONGFORM_NOTE,
-                repo_root / "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/Propositions & Models.md",
-            )
+            _write_synthetic_corpus_journal_note(repo_root)
+            _write_synthetic_longform_note(repo_root)
 
             first_result = run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
             second_result = run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
@@ -621,16 +668,8 @@ class IngestRuntimeTests(unittest.TestCase):
             repo_root = Path(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            _copy_note(
-                CORPUS_JOURNAL_NOTE,
-                repo_root / "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md",
-            )
-            _copy_note(
-                LONGFORM_NOTE,
-                repo_root / "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/Propositions & Models.md",
-            )
+            _write_synthetic_corpus_journal_note(repo_root)
+            _write_synthetic_longform_note(repo_root)
 
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
             result = run_thread_turn(
@@ -756,11 +795,7 @@ class IngestRuntimeTests(unittest.TestCase):
             repo_root = Path(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            _copy_note(
-                CORPUS_JOURNAL_NOTE,
-                repo_root / "corpus",
-                "LAYER-1 PILLARS/PILLAR 2-DYNAMIC COHERENCE/JOURNAL/2025/2025-08/24_Sunday.md",
-            )
+            _write_synthetic_corpus_journal_note(repo_root)
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
 
             first_turn = run_thread_turn(
