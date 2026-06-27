@@ -271,6 +271,40 @@
         ]
       }
     ],
+    "runtime_invariants": {
+      "semantic_extraction_required": {
+        "description": "A normal state_perturbation runtime must perform semantic_context_extraction before latent_space_activation.",
+        "rules": [
+          "semantic_context_extraction is not optional in the normal runtime route.",
+          "semantic_context_extraction must produce a parsed semantic_context_packet containing perturbation_semantic_graph and semantic_coverage_target before retrieval can be approved for synthesis.",
+          "If semantic_context_extraction is unavailable, invalid, disabled, or fixture-backed, the normal runtime route must fail closed or emit a blocked diagnostic artifact; it must not emit coverage_report.status=minimal_pass."
+        ]
+      },
+      "no_runtime_stubs_for_integral_operations": {
+        "description": "Integral runtime operations cannot be replaced by stubs in the normal runtime route.",
+        "rules": [
+          "Stub or fixture implementations may exist only inside tests or diagnostic probes.",
+          "Fixture-backed semantic extraction cannot count as evidence that semantic_context_extraction works.",
+          "Fixture-backed semantic extraction cannot produce a thesis-valid state_perturbation."
+        ]
+      },
+      "activation_surfaces_are_internal": {
+        "description": "Lexical, vector, graph, primary_corpus, and synthetic_node activation are internal surfaces of latent_space_activation, not user-facing runtime modes.",
+        "rules": [
+          "The CLI must not expose lexical retrieval as an alternate runtime route.",
+          "Lexical retrieval may be tested as an isolated component, but isolated lexical success does not constitute semantic traversal success.",
+          "The traversal manifest must record which activation surfaces were attempted, which were unavailable, and how missing surfaces limit coverage."
+        ]
+      },
+      "fail_closed_before_synthesis": {
+        "description": "The runtime must not synthesize from a retrieval packet that was produced without satisfying required upstream semantic operations.",
+        "rules": [
+          "retrieval_packet may be assembled only from a semantic_traversal_manifest.",
+          "approved_retrieval_packet may be emitted only after retrieval_coverage_evaluation against semantic_coverage_target.",
+          "If required upstream operations fail, synthesis_context_packet must either omit approved_retrieval_packet or mark the turn blocked before LLM synthesis."
+        ]
+      }
+    },
     "operational_boundaries": {
       "latent_space": {
         "description": "Present, potential, inactive data_representations available for activation into active_state",
@@ -781,7 +815,31 @@
           "synthetic_node_graph_edges",
           "latent_space_update_record"
         ]
-      }
+      },
+      "coverage_report_contract": {
+        "description": "coverage_report is a gatekeeping artifact, not a progress report. It determines whether retrieved material satisfies the semantic_coverage_target strongly enough to enter synthesis.",
+        "allowed_decisions": [
+          "approved",
+          "blocked"
+        ],
+        "required_fields": [
+          "decision",
+          "semantic_coverage_target_hash",
+          "semantic_traversal_manifest_hash",
+          "retrieval_packet_hash",
+          "evaluated_activation_surfaces",
+          "blocking_reasons",
+          "limits"
+        ],
+        "rules": [
+          "decision=approved is allowed only when semantic_context_extraction, latent_space_activation, semantic_traversal, retrieval_packet_assembly, and retrieval_coverage_evaluation all completed according to the active project spec.",
+          "decision=blocked is required when semantic_context_extraction is disabled, unavailable, invalid, fixture-backed, or missing required outputs.",
+          "decision=blocked is required when retrieval was produced from lexical terms alone without a valid semantic_traversal_manifest generated from latent_space_activation.",
+          "decision=blocked is required when required activation surfaces are absent or not implemented.",
+          "approved_retrieval_packet may be emitted only when decision=approved.",
+          "A blocked coverage_report may include diagnostic retrieval observations, but those observations must not be promoted into approved retrieval."
+        ]
+      }      
     }
   },
   "artifacts": {
@@ -1071,49 +1129,118 @@
       ]
     }
   },
+  "execution_surfaces": {
+    "normal_runtime_cli": {
+      "description": "Runs the thesis-faithful conversational state_perturbation route.",
+      "allowed_user_controls": [
+        "message",
+        "thread_id",
+        "data_root",
+        "repo_root",
+        "llm_model_if_needed"
+      ],
+      "disallowed_user_controls": [
+        "semantic_extractor_mode",
+        "lexical_only_retrieval",
+        "disabled_semantic_extraction",
+        "stub_semantic_extraction"
+      ]
+    },
+    "diagnostic_probe_runner": {
+      "description": "Runs isolated component checks outside the normal runtime route.",
+      "allowed_uses": [
+        "ingestion fixture tests",
+        "lexical index tests",
+        "artifact hashing tests",
+        "thread ledger tests",
+        "semantic extraction contract tests"
+      ],
+      "limits": [
+        "Diagnostic probes must not be described as successful runtime turns.",
+        "Diagnostic probe success must not imply thesis-runtime success."
+      ]
+    }
+  },
   "implementation_boundary": {
-    "first_build_target": [
-      {
-        "id": 1,
-        "process": "create conversation_thread"
-      },
-      {
-        "id": 2,
-        "process": "accept user_input"
-      },
-      {
-        "id": 3,
-        "process": "load prior_thread_state"
-      },
-      {
-        "id": 4,
-        "process": "assemble a basic synthesis_context_packet"
-      },
-      {
-        "id": 5,
-        "process": "call LLM"
-      },
-      {
-        "id": 6,
-        "process": "save assistant_response"
-      },
-      {
-        "id": 7,
-        "process": "materialize next_thread_state"
-      },
-      {
-        "id": 8,
-        "process": "append hash-chained thread_ledger record"
-      }
-    ],
-    "initial_graph_strategy": "Extract Obsidian wiki links, note nodes, chunk containment edges, path topology before attempting a richer ontology",
-    "initial_write_back_strategy": "Only promoted synthesis snippets become synthetic_nodes in latent_space",
+    "completed_bootstrap_target": {
+      "id": "conversation_loop_bootstrap",
+      "status": "completed",
+      "summary": "Conversational loop, thread_state, thread_ledger, and basic persistence are operational."
+    },
+    "active_build_target": {
+      "id": "full_thesis_runtime_target",
+      "status": "active",
+      "minimum_admissible_runtime": [
+        "semantic_context_extraction using a configured non-fixture backend",
+        "semantic_context_benchmark emission",
+        "latent_space_activation over lexical, vector, and graph surfaces when available",
+        "semantic_traversal_manifest assembled from activation results",
+        "retrieval_packet assembled from traversal manifest",
+        "coverage_report evaluated against semantic_coverage_target",
+        "synthesis_context_packet assembled only after coverage evaluation",
+        "hash-chained state_perturbation ledger record"
+      ],
+      "blocked_conditions": [
+        "semantic extractor unavailable",
+        "semantic extractor disabled",
+        "semantic extractor fixture-backed",
+        "semantic extraction invalid_json",
+        "semantic_coverage_target missing",
+        "retrieval attempted without traversal manifest",
+        "coverage marked minimal_pass without required semantic extraction"
+      ]
+    },
+    "staged_surface_policy": {
+      "description": "Some activation surfaces may be incomplete during development, but missing surfaces must be recorded as coverage limitations rather than silently converted into a successful full runtime.",
+      "rules": [
+        "Lexical-only activation is a partial implementation state, not the thesis runtime.",
+        "Vector and graph activation may be initially shallow, but the traversal manifest must represent them as explicit surfaces.",
+        "If a required surface is not implemented, the coverage report must state partial_implementation or blocked, not minimal_pass."
+      ]
+    },
     "deferred_questions": [
       "exact coverage_benchmark math",
-      "full graph ontology",
       "promotion criteria for synthetic_nodes",
       "long-term thread_state compression",
       "multi-thread state interaction"
     ]
+  },
+  "runtime_validity_policy": {
+    "description": "Normal runtime execution is binary: a state_perturbation either satisfies the project runtime contract and may proceed to synthesis, or it is blocked. Component-level success does not imply runtime validity.",
+    "valid_runtime_outcomes": [
+      "completed",
+      "blocked"
+    ],
+    "rules": [
+      "A normal state_perturbation must execute the required runtime processes in project_spec order.",
+      "semantic_context_extraction is required before latent_space_activation.",
+      "latent_space_activation is required before semantic_traversal.",
+      "semantic_traversal is required before retrieval_packet_assembly.",
+      "retrieval_coverage_evaluation is required before approved_retrieval_packet may be emitted.",
+      "synthesis_context_assembly must not receive an approved_retrieval_packet unless retrieval_coverage_evaluation has approved it against semantic_coverage_target.",
+      "If any required runtime process is unavailable, disabled, fixture-backed, invalid, missing required outputs, or not implemented, the normal runtime outcome is blocked.",
+      "Blocked runtime execution must preserve diagnostic artifacts where available, but those artifacts must not be described as successful traversal, successful coverage, or approved retrieval."
+    ],
+    "forbidden_runtime_status_vocabulary": {
+      "description": "The project spec rejects soft success language for required runtime processes. Status labels must not imply that incomplete execution is an acceptable runtime state.",
+      "forbidden_terms": [
+        "minimal_pass",
+        "partial_pass",
+        "partial_implementation",
+        "degraded_success",
+        "fallback_success",
+        "best_effort_success",
+        "lexical_success",
+        "stub_success"
+      ],
+      "rules": [
+        "Required runtime processes must not emit success-like status labels when they have not satisfied the project spec.",
+        "Lexical retrieval success is a component observation, not a runtime success condition.",
+        "Fixture-backed or stubbed execution is a component-test condition, not runtime evidence.",
+        "Disabled semantic extraction is a blocked runtime condition, not a fallback runtime mode.",
+        "Missing vector activation, graph activation, semantic traversal, semantic coverage evaluation, or required retrieval surfaces must block runtime completion unless the active project spec explicitly narrows the target before implementation begins.",
+        "Runtime artifacts may record diagnostic reasons for blockage, but diagnostic survival is not runtime success."
+      ]
+    }    
   }
 }
