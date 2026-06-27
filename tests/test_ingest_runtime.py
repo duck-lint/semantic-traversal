@@ -485,6 +485,61 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(default_config.coverage_require_surface_contributions["vector_index_surface"])
             self.assertNotIn("OPENAI_API_KEY", explicit_config_path.read_text(encoding="utf-8"))
 
+    def test_default_config_has_valid_sql_identifiers(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE))
+        self.assertEqual(config.vector_table, "chunk_vectors")
+        self.assertEqual(config.graph_nodes_table, "graph_nodes")
+        self.assertEqual(config.graph_edges_table, "graph_edges")
+
+    def test_custom_sql_identifiers_load_when_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(
+                repo_root,
+                {
+                    "indexes": {
+                        "vector_table": "_chunk_vectors",
+                        "graph_nodes_table": "graph_nodes_v2",
+                        "graph_edges_table": "graph_edges_2026",
+                    }
+                },
+            )
+            config = load_runtime_config(repo_root=repo_root)
+            self.assertEqual(config.vector_table, "_chunk_vectors")
+            self.assertEqual(config.graph_nodes_table, "graph_nodes_v2")
+            self.assertEqual(config.graph_edges_table, "graph_edges_2026")
+
+    def test_invalid_vector_table_sql_identifier_blocks_at_config_load(self) -> None:
+        for invalid_value in ("chunk-vectors", "chunk_vectors; DROP TABLE chunks", ""):
+            with self.subTest(invalid_value=invalid_value), tempfile.TemporaryDirectory() as repo_dir:
+                repo_root = Path(repo_dir)
+                _write_runtime_config(repo_root, {"indexes": {"vector_table": invalid_value}})
+                with self.assertRaisesRegex(ConfigError, r"Invalid SQL identifier for indexes\.vector_table"):
+                    load_runtime_config(repo_root=repo_root)
+
+    def test_invalid_graph_nodes_table_sql_identifier_blocks_at_config_load(self) -> None:
+        for invalid_value in ("graph nodes", "graph_nodes)", ""):
+            with self.subTest(invalid_value=invalid_value), tempfile.TemporaryDirectory() as repo_dir:
+                repo_root = Path(repo_dir)
+                _write_runtime_config(repo_root, {"indexes": {"graph_nodes_table": invalid_value}})
+                with self.assertRaisesRegex(ConfigError, r"Invalid SQL identifier for indexes\.graph_nodes_table"):
+                    load_runtime_config(repo_root=repo_root)
+
+    def test_invalid_graph_edges_table_sql_identifier_blocks_at_config_load(self) -> None:
+        for invalid_value in ("1_graph_edges", "graph-edges", ""):
+            with self.subTest(invalid_value=invalid_value), tempfile.TemporaryDirectory() as repo_dir:
+                repo_root = Path(repo_dir)
+                _write_runtime_config(repo_root, {"indexes": {"graph_edges_table": invalid_value}})
+                with self.assertRaisesRegex(ConfigError, r"Invalid SQL identifier for indexes\.graph_edges_table"):
+                    load_runtime_config(repo_root=repo_root)
+
+    def test_wrong_type_sql_identifier_field_still_uses_type_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            repo_root = Path(repo_dir)
+            _write_runtime_config(repo_root, {"indexes": {"vector_table": 123}})
+            with self.assertRaisesRegex(ConfigError, r"Invalid runtime config field type: root\.indexes\.vector_table expected str"):
+                load_runtime_config(repo_root=repo_root)
+
     def test_missing_runtime_config_field_raises_config_error_without_code_default_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = Path(repo_dir)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import yaml
 
 
 DEFAULT_CONFIG_FILENAME = "semantic_traversal.runtime.yaml"
+SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_KEY_EXACT = {
     "api_key",
     "apikey",
@@ -90,6 +92,12 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
 
 class ConfigError(ValueError):
     pass
+
+
+def validate_sql_identifier(value: str, field: str) -> str:
+    if not SQL_IDENTIFIER_RE.fullmatch(value):
+        raise ConfigError(f"Invalid SQL identifier for {field}: {value}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -360,4 +368,7 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError(f"Runtime config must parse to a mapping: {resolved_config_path}")
     _assert_no_secrets(parsed)
     _validate_mapping(parsed, _EXPECTED_CONFIG_SCHEMA, path="root")
+    validate_sql_identifier(str(parsed["indexes"]["vector_table"]), "indexes.vector_table")
+    validate_sql_identifier(str(parsed["indexes"]["graph_nodes_table"]), "indexes.graph_nodes_table")
+    validate_sql_identifier(str(parsed["indexes"]["graph_edges_table"]), "indexes.graph_edges_table")
     return RuntimeConfig(repo_root=resolved_repo_root, config_path=resolved_config_path, raw=parsed)
