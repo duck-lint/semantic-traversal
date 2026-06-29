@@ -32,6 +32,7 @@ from semantic_traversal.runtime import (
     run_thread_turn,
 )
 from semantic_traversal.semantic_extraction import (
+    _detect_followup_signals,
     DisabledSemanticExtractorBackend,
     SemanticExtractionResponse,
     StubSemanticExtractorBackend,
@@ -1535,6 +1536,35 @@ class IngestRuntimeTests(unittest.TestCase):
                 "follow-up semantic target missing resolved referent",
                 result.coverage_report["blocking_reasons"],
             )
+
+    def test_expletive_possible_question_does_not_require_referent_resolution(self) -> None:
+        detection = _detect_followup_signals(
+            "Is it possible to use qwen3:4b here?",
+            {"recent_messages": [{"role": "user", "content": "What do I think about candy snack food before bed?"}]},
+        )
+        self.assertTrue(detection["is_referential_followup"])
+        self.assertFalse(detection["requires_referent_resolution"])
+        self.assertIn("short_followup_question", detection["signals"])
+        self.assertNotIn("deictic:it", detection["referential_signals"])
+
+    def test_expletive_worth_question_does_not_require_referent_resolution(self) -> None:
+        detection = _detect_followup_signals(
+            "Is it worth changing the schema?",
+            {"recent_messages": [{"role": "user", "content": "What do I think about candy snack food before bed?"}]},
+        )
+        self.assertTrue(detection["is_referential_followup"])
+        self.assertFalse(detection["requires_referent_resolution"])
+        self.assertIn("short_followup_question", detection["signals"])
+        self.assertNotIn("deictic:it", detection["referential_signals"])
+
+    def test_referential_followup_still_requires_referent_resolution(self) -> None:
+        detection = _detect_followup_signals(
+            "I wonder if there's anything specific about how it makes me feel?",
+            {"recent_messages": [{"role": "user", "content": "What do I think about candy snack food before bed?"}]},
+        )
+        self.assertTrue(detection["is_referential_followup"])
+        self.assertTrue(detection["requires_referent_resolution"])
+        self.assertIn("how it makes me feel", detection["referential_signals"])
 
     def test_followup_semantic_target_contract_validation_passes_when_resolved_referent_is_anchored(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

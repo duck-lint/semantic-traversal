@@ -396,6 +396,7 @@ def _recent_user_messages(prior_thread_state: dict[str, Any]) -> list[str]:
 def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, Any]) -> dict[str, Any]:
     lowered = raw_user_input.lower()
     signals: list[str] = []
+    referential_signals: list[str] = []
     surface_forms: list[str] = []
     has_recent_context = bool(prior_thread_state.get("recent_messages") or prior_thread_state.get("recent_semantic_trajectory"))
     expletive_pattern_matched = any(pattern.search(lowered) for pattern in FOLLOWUP_EXPLETIVE_PATTERNS)
@@ -403,6 +404,7 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
     for pattern, label in FOLLOWUP_PHRASE_PATTERNS:
         if pattern.search(lowered):
             signals.append(label)
+            referential_signals.append(label)
             surface_forms.append(label)
 
     for surface_form in FOLLOWUP_SURFACE_FORMS:
@@ -412,17 +414,20 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
             surface_forms.append(surface_form)
             if has_recent_context:
                 signals.append(f"deictic:{surface_form}")
+                if surface_form in {"it", "that", "this", "those", "they", "them"}:
+                    referential_signals.append(f"deictic:{surface_form}")
 
     question_token_count = len(extract_terms(raw_user_input))
     if has_recent_context and "?" in raw_user_input and question_token_count <= 8:
         signals.append("short_followup_question")
 
     is_followup = bool(signals)
-    requires_resolution = is_followup and has_recent_context
+    requires_resolution = bool(referential_signals) and has_recent_context
     return {
         "is_referential_followup": is_followup,
         "requires_referent_resolution": requires_resolution,
         "signals": signals,
+        "referential_signals": referential_signals,
         "surface_forms": list(dict.fromkeys(surface_forms)),
     }
 
