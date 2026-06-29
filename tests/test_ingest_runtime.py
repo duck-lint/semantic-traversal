@@ -892,7 +892,11 @@ class IngestRuntimeTests(unittest.TestCase):
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             _write_synthetic_corpus_journal_note(repo_root)
-            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
 
             result = run_thread_turn(
                 repo_root=repo_root,
@@ -1168,7 +1172,11 @@ class IngestRuntimeTests(unittest.TestCase):
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
 
             user_input = "Please retrieve the candy snack food before bed note."
             result = run_thread_turn(
@@ -1309,7 +1317,11 @@ class IngestRuntimeTests(unittest.TestCase):
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
 
             stub_backend = StubSemanticExtractorBackend(
                 isolated_payload={
@@ -1490,7 +1502,11 @@ class IngestRuntimeTests(unittest.TestCase):
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
 
             first_turn = run_thread_turn(
                 repo_root=repo_root,
@@ -1685,7 +1701,11 @@ class IngestRuntimeTests(unittest.TestCase):
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             _write_synthetic_corpus_journal_note(repo_root)
-            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
 
             first_turn = run_thread_turn(
                 repo_root=repo_root,
@@ -1748,10 +1768,307 @@ class IngestRuntimeTests(unittest.TestCase):
             semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
             self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
             self.assertEqual(semantic_context_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
+            self.assertFalse(semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
             self.assertNotIn(
                 "semantic_coverage_target must_preserve does not include required resolved referent: candy snack food before bed",
                 result.coverage_report["blocking_reasons"],
             )
+
+    def test_non_referential_generic_semantic_target_is_repaired_with_concrete_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            _write_markdown_fixture(
+                repo_root / "tests" / "fixtures",
+                "JOURNAL/2025-09/02_anchor.md",
+                """
+                ---
+                note_type: primary_corpus_fixture
+                ---
+
+                # Anchor Note
+
+                ## Bedtime Candy
+
+                This primary corpus note directly mentions candy snack food before bed.
+                """,
+            )
+            _write_synthetic_corpus_journal_note(repo_root)
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "What do I think about candy snack food before bed?",
+                    "probable_user_intent": "first-turn generic shell target",
+                    "candidate_targets": ["candy snack food", "before bed"],
+                    "candidate_relations": ["consumption timing", "personal opinion"],
+                    "question_shape": "reflective question",
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["candy snack food", "before bed"],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "raw_user_input": "What do I think about candy snack food before bed?",
+                    "perturbation_nodes": [{"id": "node:opinion", "label": "opinion", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["opinion about", "consumption timing"],
+                        "should_include": ["thoughts", "candy snack food", "bedtime"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "What do I think about candy snack food before bed?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["candy", "snack", "food", "bed"],
+                        "phrases": ["candy snack food before bed"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": ["consumption timing"],
+                        "temporal_hints": ["before bed"],
+                        "entity_hints": ["candy snack food"],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            diagnostics = semantic_context_packet["semantic_coverage_target_diagnostics"]
+            self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
+            self.assertTrue(diagnostics["repaired"])
+            self.assertEqual(diagnostics["repair_type"], "added_concrete_anchor_to_must_preserve")
+            self.assertIn("opinion about", diagnostics["original_must_preserve"])
+            self.assertIn("consumption timing", diagnostics["original_must_preserve"])
+            self.assertIn(
+                diagnostics["added_must_preserve"][0],
+                semantic_context_packet["semantic_coverage_target"]["must_preserve"],
+            )
+            self.assertIn(diagnostics["added_must_preserve"][0], ["candy snack food before bed", "candy snack food"])
+            self.assertIn("opinion about", semantic_context_packet["semantic_coverage_target"]["must_preserve"])
+            coverage = result.coverage_report["semantic_target_coverage"]
+            self.assertTrue(coverage["covered"])
+            self.assertEqual(coverage["missing_must_preserve"], [])
+            self.assertNotIn(
+                "semantic coverage target missing required evidence: opinion about",
+                result.coverage_report["blocking_reasons"],
+            )
+            self.assertNotIn(
+                "semantic coverage target missing required evidence: consumption timing",
+                result.coverage_report["blocking_reasons"],
+            )
+
+    def test_generic_only_semantic_target_without_concrete_candidates_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _write_synthetic_corpus_journal_note(repo_root)
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "What is the relationship between?",
+                    "probable_user_intent": "generic-only target",
+                    "candidate_targets": [],
+                    "candidate_relations": ["relationship between"],
+                    "question_shape": "abstract question",
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": [],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "raw_user_input": "What is the relationship between?",
+                    "perturbation_nodes": [{"id": "node:relation", "label": "relationship", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["relationship between", "effect of"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "What is the relationship between?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["relationship", "effect"],
+                        "phrases": [],
+                        "conceptual_neighbors": [],
+                        "relation_hints": ["relationship between"],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What is the relationship between?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
+            self.assertIn(
+                "semantic_coverage_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available",
+                result.semantic_context_packet["semantic_contract_validation"]["reasons"],
+            )
+            self.assertFalse(result.semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
+
+    def test_already_good_non_referential_semantic_target_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _write_synthetic_corpus_journal_note(repo_root)
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "What do I think about candy snack food before bed?",
+                    "probable_user_intent": "already good target",
+                    "candidate_targets": ["candy snack food before bed"],
+                    "candidate_relations": [],
+                    "question_shape": "reflective question",
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["candy snack food before bed"],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "raw_user_input": "What do I think about candy snack food before bed?",
+                    "perturbation_nodes": [{"id": "node:candy", "label": "candy", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": ["thoughts"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "What do I think about candy snack food before bed?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["candy", "snack", "food", "bed"],
+                        "phrases": ["candy snack food before bed"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": ["before bed"],
+                        "entity_hints": ["candy snack food before bed"],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            diagnostics = result.semantic_context_packet["semantic_coverage_target_diagnostics"]
+            self.assertFalse(diagnostics["repaired"])
+            self.assertEqual(
+                result.semantic_context_packet["semantic_coverage_target"]["must_preserve"],
+                ["candy snack food before bed"],
+            )
+
+    def test_unrelated_non_referential_generic_target_repairs_to_concrete_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _write_markdown_fixture(
+                repo_root / "corpus",
+                "philosophy/schopenhauer.md",
+                """
+                ---
+                note_type: coverage_fixture
+                ---
+
+                # Schopenhauer
+
+                ## Parallel Postulate Argument
+
+                This paragraph discusses Schopenhauer's parallel postulate argument directly.
+                """,
+            )
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                isolated_payload={
+                    "raw_user_input": "What do I think about Schopenhauer's parallel postulate argument?",
+                    "probable_user_intent": "philosophy topic",
+                    "candidate_targets": ["Schopenhauer's parallel postulate argument"],
+                    "candidate_relations": ["thoughts about"],
+                    "question_shape": "reflective question",
+                    "explicit_user_constraints": [],
+                    "implicit_needs_or_pressures": [],
+                    "terms_or_phrases_not_to_discard": ["Schopenhauer's parallel postulate argument"],
+                    "ambiguities": [],
+                    "extraction_confidence": "low",
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+                contextual_payload={
+                    "raw_user_input": "What do I think about Schopenhauer's parallel postulate argument?",
+                    "perturbation_nodes": [{"id": "node:thoughts", "label": "thoughts", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["thoughts about"],
+                        "should_include": ["Schopenhauer's parallel postulate argument"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "What do I think about Schopenhauer's parallel postulate argument?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["schopenhauer", "parallel", "postulate", "argument"],
+                        "phrases": ["Schopenhauer's parallel postulate argument"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": ["Schopenhauer's parallel postulate argument"],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                },
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about Schopenhauer's parallel postulate argument?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertIn(
+                "Schopenhauer's parallel postulate argument",
+                result.semantic_context_packet["semantic_coverage_target"]["must_preserve"],
+            )
+            self.assertTrue(result.semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
 
     def test_non_followup_malformed_resolved_referents_blocks_closed_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

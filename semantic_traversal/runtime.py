@@ -100,6 +100,60 @@ STOP_WORDS = {
     "your",
 }
 
+GENERIC_RELATION_WORDS = {
+    "about",
+    "analysis",
+    "argument",
+    "assessment",
+    "attitude",
+    "between",
+    "category",
+    "compare",
+    "comparison",
+    "concept",
+    "concrete",
+    "consumption",
+    "effect",
+    "emotional",
+    "emotion",
+    "feel",
+    "feeling",
+    "feelings",
+    "for",
+    "general",
+    "impact",
+    "influence",
+    "objective",
+    "of",
+    "on",
+    "opinion",
+    "perspective",
+    "predicate",
+    "question",
+    "questioning",
+    "relation",
+    "relationship",
+    "response",
+    "shell",
+    "specific",
+    "specificity",
+    "stance",
+    "subjective",
+    "think",
+    "thought",
+    "thoughts",
+    "timing",
+    "topic",
+    "view",
+}
+
+RAW_TOPIC_FRAME_PATTERNS = (
+    re.compile(r"^(?:what|how)\s+do\s+(?:i|you|we|they)\s+(?:think|feel|view|see|assess)\s+about\s+(.+)$", re.IGNORECASE),
+    re.compile(r"^(?:what(?:'s| is)\s+)?(?:my|your|our|their)\s+(?:opinion|view|perspective)\s+(?:about|on|of)\s+(.+)$", re.IGNORECASE),
+    re.compile(r"^(?:what(?:'s| is)\s+)?(?:my|your|our|their)\s+thoughts?\s+(?:about|on)\s+(.+)$", re.IGNORECASE),
+    re.compile(r"^(?:thoughts?|opinions?|views?)\s+(?:about|on)\s+(.+)$", re.IGNORECASE),
+)
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -265,6 +319,199 @@ def _collect_resolved_referent_targets(resolved_referents: Any) -> list[str]:
                 if normalized and normalized not in targets:
                     targets.append(normalized)
     return targets
+
+
+def _phrase_token_count(value: str) -> int:
+    return len(_coverage_target_tokens(value))
+
+
+def _strip_question_framing(raw_user_input: str) -> str:
+    cleaned = str(raw_user_input or "").strip().strip("?.! ")
+    if not cleaned:
+        return ""
+    for pattern in RAW_TOPIC_FRAME_PATTERNS:
+        match = pattern.match(cleaned)
+        if match:
+            return str(match.group(1) or "").strip().strip("?.! ")
+    return ""
+
+
+def _anchor_matches(target: str, candidate: str) -> bool:
+    normalized_target = _normalize_semantic_text(target)
+    normalized_candidate = _normalize_semantic_text(candidate)
+    if not normalized_target or not normalized_candidate:
+        return False
+    return (
+        normalized_target == normalized_candidate
+        or normalized_target in normalized_candidate
+        or normalized_candidate in normalized_target
+    )
+
+
+def _is_generic_relation_shell(target: str, *, raw_topic_terms: set[str]) -> bool:
+    target_tokens = _coverage_target_tokens(target)
+    if not target_tokens:
+        return True
+    nongeneric_tokens = [token for token in target_tokens if token not in GENERIC_RELATION_WORDS]
+    topical_overlap = [token for token in nongeneric_tokens if token in raw_topic_terms]
+    if topical_overlap:
+        return False
+    if not nongeneric_tokens:
+        return True
+    if len(target_tokens) <= 3 and len(nongeneric_tokens) <= 1:
+        return True
+    if len(nongeneric_tokens) * 2 <= len(target_tokens):
+        return True
+    normalized_target = _normalize_semantic_text(target)
+    for suffix in (" about", " on", " of", " between", " for"):
+        if normalized_target.endswith(suffix) and len(nongeneric_tokens) <= 1:
+            return True
+    return False
+
+
+def _collect_concrete_anchor_candidates(
+    *,
+    user_input: str,
+    isolated_packet: dict[str, Any],
+    contextual_packet: dict[str, Any],
+    semantic_payload: dict[str, Any],
+    semantic_coverage_target: dict[str, Any] | None,
+) -> list[str]:
+    raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
+    scored_candidates: list[tuple[int, str]] = []
+    seen: set[str] = set()
+
+    def add_candidate(value: Any, *, weight: int) -> None:
+        if not isinstance(value, str):
+            return
+        candidate = value.strip()
+        normalized_candidate = _normalize_semantic_text(candidate)
+        if not candidate or not normalized_candidate or normalized_candidate in seen:
+            return
+        if _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms):
+            return
+        token_count = _phrase_token_count(candidate)
+        if token_count == 0:
+            return
+        topical_overlap = len(set(_coverage_target_tokens(candidate)).intersection(raw_topic_terms))
+        score = weight + (token_count * 10) + (topical_overlap * 5)
+        seen.add(normalized_candidate)
+        scored_candidates.append((score, candidate))
+
+    stripped_topic = _strip_question_framing(user_input)
+    add_candidate(stripped_topic, weight=60)
+
+    isolated_payload = _dict_or_empty(isolated_packet.get("parsed_payload"))
+    for candidate in _list_or_empty(isolated_payload.get("candidate_targets")):
+        add_candidate(candidate, weight=50)
+    for candidate in _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")):
+        add_candidate(candidate, weight=45)
+
+    for node in _list_or_empty(semantic_payload.get("contextual_salt_nodes")):
+        if isinstance(node, dict):
+            add_candidate(node.get("label"), weight=25)
+
+    activation_hints = _dict_or_empty(semantic_payload.get("activation_hints"))
+    for candidate in _list_or_empty(activation_hints.get("entity_hints")):
+        add_candidate(candidate, weight=30)
+
+    if isinstance(semantic_coverage_target, dict):
+        for candidate in _list_or_empty(semantic_coverage_target.get("should_include")):
+            add_candidate(candidate, weight=35)
+
+    contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
+    contextual_activation_hints = _dict_or_empty(contextual_payload.get("activation_hints"))
+    for candidate in _list_or_empty(contextual_activation_hints.get("entity_hints")):
+        add_candidate(candidate, weight=20)
+
+    scored_candidates.sort(key=lambda item: (-item[0], -_phrase_token_count(item[1]), item[1]))
+    return [candidate for _, candidate in scored_candidates]
+
+
+def _coverage_target_has_concrete_anchor(
+    semantic_coverage_target: dict[str, Any] | None,
+    *,
+    concrete_anchor_candidates: list[str],
+    raw_topic_terms: set[str],
+) -> bool:
+    if not isinstance(semantic_coverage_target, dict):
+        return False
+    must_preserve = _list_or_empty(semantic_coverage_target.get("must_preserve"))
+    for target in must_preserve:
+        if not isinstance(target, str):
+            continue
+        if any(_anchor_matches(target, candidate) for candidate in concrete_anchor_candidates):
+            return True
+        if not _is_generic_relation_shell(target, raw_topic_terms=raw_topic_terms):
+            return True
+    return False
+
+
+def _repair_semantic_coverage_target_anchors(
+    *,
+    user_input: str,
+    prior_thread_state: dict[str, Any],
+    isolated_packet: dict[str, Any],
+    contextual_packet: dict[str, Any],
+    semantic_payload: dict[str, Any],
+    semantic_coverage_target: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any], list[str]]:
+    diagnostics = {
+        "repaired": False,
+        "repair_type": None,
+        "added_must_preserve": [],
+        "original_must_preserve": [],
+        "concrete_anchor_candidates": [],
+        "generic_must_preserve_candidates": [],
+        "reason": "",
+    }
+    if not isinstance(semantic_coverage_target, dict):
+        diagnostics["reason"] = "semantic_coverage_target missing or invalid"
+        return semantic_coverage_target, diagnostics, []
+
+    followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    if followup_detection.get("requires_referent_resolution"):
+        diagnostics["reason"] = "referential follow-up target repair not applied"
+        diagnostics["original_must_preserve"] = list(semantic_coverage_target.get("must_preserve") or [])
+        return semantic_coverage_target, diagnostics, []
+
+    must_preserve = [str(item) for item in _list_or_empty(semantic_coverage_target.get("must_preserve"))]
+    diagnostics["original_must_preserve"] = must_preserve
+    raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
+    concrete_anchor_candidates = _collect_concrete_anchor_candidates(
+        user_input=user_input,
+        isolated_packet=isolated_packet,
+        contextual_packet=contextual_packet,
+        semantic_payload=semantic_payload,
+        semantic_coverage_target=semantic_coverage_target,
+    )
+    diagnostics["concrete_anchor_candidates"] = concrete_anchor_candidates
+    diagnostics["generic_must_preserve_candidates"] = [
+        candidate
+        for candidate in must_preserve
+        if _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms)
+    ]
+
+    if _coverage_target_has_concrete_anchor(
+        semantic_coverage_target,
+        concrete_anchor_candidates=concrete_anchor_candidates,
+        raw_topic_terms=raw_topic_terms,
+    ):
+        diagnostics["reason"] = "must_preserve already contains a concrete anchor"
+        return semantic_coverage_target, diagnostics, []
+
+    if concrete_anchor_candidates:
+        strongest_anchor = concrete_anchor_candidates[0]
+        updated_target = dict(semantic_coverage_target)
+        updated_target["must_preserve"] = [strongest_anchor] + must_preserve
+        diagnostics["repaired"] = True
+        diagnostics["repair_type"] = "added_concrete_anchor_to_must_preserve"
+        diagnostics["added_must_preserve"] = [strongest_anchor]
+        diagnostics["reason"] = "must_preserve contained only generic relation shells; added strongest concrete anchor"
+        return updated_target, diagnostics, []
+
+    diagnostics["reason"] = "semantic_coverage_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available"
+    return semantic_coverage_target, diagnostics, [diagnostics["reason"]]
 
 
 def _validate_resolved_referents(
@@ -526,6 +773,15 @@ def _match_target_to_resolved_referent_anchor(
     return None
 
 
+def _is_deemphasized_generic_must_preserve_target(target: str, *, semantic_context_packet: dict[str, Any]) -> bool:
+    diagnostics = _dict_or_empty(semantic_context_packet.get("semantic_coverage_target_diagnostics"))
+    if not diagnostics.get("repaired"):
+        return False
+    generic_candidates = [str(item) for item in _list_or_empty(diagnostics.get("generic_must_preserve_candidates"))]
+    added_anchors = _list_or_empty(diagnostics.get("added_must_preserve"))
+    return bool(added_anchors) and target in generic_candidates
+
+
 def _evaluate_semantic_target_coverage(
     *,
     semantic_context_packet: dict[str, Any],
@@ -597,6 +853,20 @@ def _evaluate_semantic_target_coverage(
                     "covered": True,
                     "match_type": "resolved_referent_discourse_anchor",
                     "evidence": [discourse_anchor_evidence],
+                }
+            )
+            continue
+        if _is_deemphasized_generic_must_preserve_target(target_text, semantic_context_packet=semantic_context_packet):
+            must_preserve_results.append(
+                {
+                    "target": target_text,
+                    "covered": True,
+                    "match_type": "generic_relation_shell_deemphasized_after_anchor_repair",
+                    "evidence": [
+                        {
+                            "diagnostic": "not treated as hard proof anchor after concrete-anchor repair",
+                        }
+                    ],
                 }
             )
             continue
@@ -793,6 +1063,14 @@ def _build_semantic_context_packet(
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
     )
+    semantic_coverage_target, semantic_coverage_target_diagnostics, adequacy_reasons = _repair_semantic_coverage_target_anchors(
+        user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        isolated_packet=semantic_extraction.isolated_packet,
+        contextual_packet=semantic_extraction.contextual_packet,
+        semantic_payload=semantic_payload,
+        semantic_coverage_target=semantic_coverage_target,
+    )
     referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
         payload=semantic_payload,
         raw_user_input=user_input,
@@ -815,6 +1093,9 @@ def _build_semantic_context_packet(
         for reason in referent_validation_reasons:
             if reason not in contract_reasons:
                 contract_reasons.append(reason)
+    for reason in adequacy_reasons:
+        if reason not in contract_reasons:
+            contract_reasons.append(reason)
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
     resolved_referents = _list_or_empty(semantic_payload.get("resolved_referents"))
     referential_followup_detection = _dict_or_empty(semantic_payload.get("followup_detection")) or followup_detection
@@ -835,6 +1116,7 @@ def _build_semantic_context_packet(
         "contextual_salt_nodes": _list_or_empty(semantic_payload.get("contextual_salt_nodes")),
         "perturbation_semantic_graph": _dict_or_empty(semantic_payload.get("perturbation_semantic_graph")),
         "semantic_coverage_target": semantic_coverage_target,
+        "semantic_coverage_target_diagnostics": semantic_coverage_target_diagnostics,
         "activation_hints": _dict_or_empty(semantic_payload.get("activation_hints")),
         "limitations": _list_or_empty(semantic_payload.get("limitations")),
         "referent_resolution_diagnostics": referent_diagnostics,
