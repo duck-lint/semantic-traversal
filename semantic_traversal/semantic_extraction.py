@@ -324,14 +324,12 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
     mode = str(packet.get("mode") or "contextual").strip().lower()
     if mode == "isolated":
         skeleton = _isolated_json_skeleton()
-        schema = _semantic_extraction_schema("isolated")
         mode_instruction = (
             "This is isolated extraction. Return a JSON object that matches the isolated schema exactly. "
             "Do not include contextual-only fields. Keep every field type correct."
         )
     else:
         skeleton = _contextual_json_skeleton()
-        schema = _semantic_extraction_schema("contextual")
         mode_instruction = (
             "This is contextual extraction. Return a JSON object that matches the contextual schema exactly. "
             "semantic_coverage_target must be an object, activation_hints must be an object, "
@@ -344,8 +342,7 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
         f"{mode_instruction}\n"
         "Do not answer the user.\n"
         "Preserve the raw_user_input field exactly.\n"
-        "Use this JSON Schema with the Ollama `format` field when supported, and match the same shape in the response.\n"
-        f"{json.dumps(schema, ensure_ascii=True, indent=2)}\n"
+        "Return JSON only matching this skeleton.\n"
         "Use this exact JSON skeleton as the target shape:\n"
         f"{json.dumps(skeleton, ensure_ascii=True, indent=2)}\n"
         "Packet:\n"
@@ -672,71 +669,36 @@ class OllamaSemanticExtractorBackend:
                 status="unavailable",
             )
         prompt = _build_ollama_prompt(packet=packet)
-        schema = _semantic_extraction_schema(str(packet.get("mode") or "contextual").strip().lower())
-        base_payload = {
+        payload = {
             "model": self._model,
             "prompt": prompt,
             "stream": False,
         }
-        structured_payload = dict(base_payload)
-        structured_payload["format"] = schema
         raw_response_text: str | None = None
-
-        def _post_generate(request_payload: dict[str, Any]) -> tuple[str | None, Exception | None]:
-            try:
-                http_request = request.Request(
-                    f"{self._base_url}/api/generate",
-                    data=json.dumps(request_payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
-                    envelope_text = response.read().decode("utf-8")
-                envelope = json.loads(envelope_text)
-                return str(envelope.get("response", "")), None
-            except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-                return None, exc
-
-        raw_response_text, structured_error = _post_generate(structured_payload)
-        used_structured_output = True
-        fallback_used = False
-        if raw_response_text is None:
-            structured_retryable = isinstance(structured_error, error.HTTPError) and getattr(structured_error, "code", None) in {400, 404, 415}
-            if structured_retryable:
-                fallback_used = True
-                used_structured_output = False
-                raw_response_text, fallback_error = _post_generate(base_payload)
-                if raw_response_text is None:
-                    error_message = str(fallback_error or structured_error)
-                    return SemanticExtractionResponse(
-                        parsed_payload=None,
-                        raw_response=None,
-                        metadata={
-                            "backend_mode": self.mode_name,
-                            "base_url": self._base_url,
-                            "model": self._model,
-                            "structured_output_requested": True,
-                            "structured_output_fallback_used": True,
-                            "error": error_message,
-                        },
-                        diagnostics={},
-                        status="unavailable",
-                    )
-            else:
-                return SemanticExtractionResponse(
-                    parsed_payload=None,
-                    raw_response=None,
-                    metadata={
-                        "backend_mode": self.mode_name,
-                        "base_url": self._base_url,
-                        "model": self._model,
-                        "structured_output_requested": True,
-                        "structured_output_fallback_used": False,
-                        "error": str(structured_error),
-                    },
-                    diagnostics={},
-                    status="unavailable",
-                )
+        try:
+            http_request = request.Request(
+                f"{self._base_url}/api/generate",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
+                envelope_text = response.read().decode("utf-8")
+            envelope = json.loads(envelope_text)
+            raw_response_text = str(envelope.get("response", ""))
+        except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+            return SemanticExtractionResponse(
+                parsed_payload=None,
+                raw_response=raw_response_text,
+                metadata={
+                    "backend_mode": self.mode_name,
+                    "base_url": self._base_url,
+                    "model": self._model,
+                    "error": str(exc),
+                },
+                diagnostics={},
+                status="unavailable",
+            )
 
         try:
             parsed_payload = json.loads(raw_response_text or "")
@@ -767,11 +729,6 @@ class OllamaSemanticExtractorBackend:
             )
 
         normalized_payload, diagnostics = _normalize_raw_user_input(parsed_payload, str(packet.get("raw_user_input", "")))
-        diagnostics["structured_output"] = {
-            "requested": True,
-            "used": used_structured_output,
-            "fallback_used": fallback_used,
-        }
         return SemanticExtractionResponse(
             parsed_payload=normalized_payload,
             raw_response=raw_response_text,
@@ -779,9 +736,6 @@ class OllamaSemanticExtractorBackend:
                 "backend_mode": self.mode_name,
                 "base_url": self._base_url,
                 "model": self._model,
-                "structured_output_requested": True,
-                "structured_output_used": used_structured_output,
-                "structured_output_fallback_used": fallback_used,
             },
             diagnostics=diagnostics,
             status="parsed",

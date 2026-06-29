@@ -1767,7 +1767,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertIn("resolved_referents[0].confidence expected one of high, medium, low, got str", reasons)
             self.assertIn("resolved_referents[0].required_for_target expected bool, got str", reasons)
 
-    def test_ollama_structured_extraction_uses_schema_format_and_preserves_resolved_referents(self) -> None:
+    def test_ollama_generate_payload_omits_format_and_preserves_resolved_referents(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = Path(repo_dir)
             with _ollama_fixture_server() as base_url:
@@ -1799,8 +1799,8 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
             self.assertTrue(semantic_context_packet["resolved_referents"])
             self.assertEqual(semantic_context_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
-            self.assertIsInstance(_OllamaFixtureHandler.last_generate_payload.get("format"), dict)
-            self.assertIn("resolved_referents", _OllamaFixtureHandler.last_generate_payload["format"]["properties"])
+            self.assertIsNotNone(_OllamaFixtureHandler.last_generate_payload)
+            self.assertNotIn("format", _OllamaFixtureHandler.last_generate_payload)
 
     def test_followup_coverage_blocks_when_only_generic_feelings_are_satisfied(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
