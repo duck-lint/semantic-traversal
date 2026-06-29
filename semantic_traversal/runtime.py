@@ -861,6 +861,22 @@ def _build_contextual_extraction_request(
     isolated_semantic_extraction: dict[str, Any] | None,
 ) -> dict[str, Any]:
     deterministic_followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    base_instruction = (
+        "Hydrate the isolated extraction with conversation context. "
+        "Return JSON only. "
+        "Do not answer the user. Preserve the raw message. "
+        "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
+        "semantic_coverage_target, activation_hints, and limitations."
+    )
+    if not deterministic_followup_detection.get("requires_referent_resolution"):
+        return {
+            "mode": "contextual",
+            "raw_user_input": user_input,
+            "prior_thread_state": prior_thread_state,
+            "isolated_semantic_extraction": isolated_semantic_extraction or {},
+            "instruction": base_instruction,
+        }
+
     deterministic_resolved_referent_candidates = _resolve_followup_referents(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,

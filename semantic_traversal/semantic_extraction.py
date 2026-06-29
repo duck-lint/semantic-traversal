@@ -330,16 +330,23 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
         )
     else:
         skeleton = _contextual_json_skeleton()
+        requires_referent_resolution = bool(
+            isinstance(packet.get("deterministic_followup_detection"), dict)
+            and packet["deterministic_followup_detection"].get("requires_referent_resolution")
+        ) or bool(packet.get("deterministic_resolved_referent_candidates"))
         mode_instruction = (
             "This is contextual extraction. Return a JSON object that matches the contextual schema exactly. "
             "semantic_coverage_target must be an object, activation_hints must be an object, "
             "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
             "perturbation_semantic_graph must be an object with nodes and edges arrays. "
-            "resolved_referents must be an array of objects when follow-up resolution is required. "
-            "Use deterministic_resolved_referent_candidates when present. "
-            "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-            "For referential follow-ups, semantic_coverage_target.must_preserve must include the resolved referent."
+            "resolved_referents must be an array of objects when follow-up resolution is required."
         )
+        if requires_referent_resolution:
+            mode_instruction += (
+                " Use deterministic_resolved_referent_candidates when present. "
+                "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
+                "For referential follow-ups, semantic_coverage_target.must_preserve must include the resolved referent."
+            )
     return (
         "Return JSON only.\n"
         f"{mode_instruction}\n"

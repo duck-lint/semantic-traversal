@@ -33,6 +33,7 @@ from semantic_traversal.runtime import (
     run_thread_turn,
 )
 from semantic_traversal.semantic_extraction import (
+    _build_ollama_prompt,
     _detect_followup_signals,
     DisabledSemanticExtractorBackend,
     SemanticExtractionResponse,
@@ -1566,7 +1567,23 @@ class IngestRuntimeTests(unittest.TestCase):
             "candy snack food before bed",
         )
 
-    def test_contextual_request_uses_compact_extractor_thread_context_without_duplicate_assistant_prose(self) -> None:
+    def test_non_referential_contextual_request_does_not_include_referent_candidate_pressure(self) -> None:
+        request_packet = _build_contextual_extraction_request(
+            user_input="What do I think about candy snack food before bed?",
+            prior_thread_state={
+                "latest_turn_id": 0,
+                "recent_messages": [],
+                "recent_semantic_trajectory": [],
+            },
+            isolated_semantic_extraction={},
+        )
+
+        self.assertIn("prior_thread_state", request_packet)
+        self.assertNotIn("extractor_thread_context", request_packet)
+        self.assertNotIn("deterministic_resolved_referent_candidates", request_packet)
+        self.assertNotIn("Use deterministic_resolved_referent_candidates", request_packet["instruction"])
+
+    def test_contextual_request_uses_compact_extractor_thread_context_without_duplicate_assistant_prose_for_referential_followup(self) -> None:
         request_packet = _build_contextual_extraction_request(
             user_input="I wonder if there's anything specific about how it makes me feel?",
             prior_thread_state={
@@ -1601,6 +1618,37 @@ class IngestRuntimeTests(unittest.TestCase):
             extractor_thread_context["recent_semantic_trajectory"],
             ["What do I think about candy snack food before bed?"],
         )
+
+    def test_non_referential_contextual_prompt_omits_referent_candidate_instruction_text(self) -> None:
+        prompt = _build_ollama_prompt(
+            packet=_build_contextual_extraction_request(
+                user_input="What do I think about candy snack food before bed?",
+                prior_thread_state={
+                    "latest_turn_id": 0,
+                    "recent_messages": [],
+                    "recent_semantic_trajectory": [],
+                },
+                isolated_semantic_extraction={},
+            )
+        )
+        self.assertNotIn("Use deterministic_resolved_referent_candidates", prompt)
+
+    def test_referential_followup_prompt_includes_referent_candidate_instruction_text(self) -> None:
+        prompt = _build_ollama_prompt(
+            packet=_build_contextual_extraction_request(
+                user_input="I wonder if there's anything specific about how it makes me feel?",
+                prior_thread_state={
+                    "latest_turn_id": 1,
+                    "latest_user_input": "What do I think about candy snack food before bed?",
+                    "recent_messages": [
+                        {"role": "user", "content": "What do I think about candy snack food before bed?"},
+                    ],
+                    "recent_semantic_trajectory": ["What do I think about candy snack food before bed?"],
+                },
+                isolated_semantic_extraction={},
+            )
+        )
+        self.assertIn("Use deterministic_resolved_referent_candidates", prompt)
 
     def test_expletive_possible_question_does_not_require_referent_resolution(self) -> None:
         detection = _detect_followup_signals(
@@ -2016,7 +2064,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(result.retrieval_packet["selected_chunks"])
             self.assertTrue(any("disabled" in reason for reason in result.blocking_reasons))
 
-    def test_contextual_extraction_receives_compact_thread_context(self) -> None:
+    def test_non_referential_contextual_extraction_request_packet_preserves_prior_thread_state(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             first_turn = run_thread_turn(
@@ -2036,11 +2084,13 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             contextual_packet = _load_turn_artifact(second_turn.contextual_semantic_extraction_packet_path)
-            extractor_thread_context = contextual_packet["request_packet"]["extractor_thread_context"]
-            self.assertEqual(extractor_thread_context["latest_turn_id"], 1)
-            self.assertEqual(extractor_thread_context["latest_user_input"], "First turn to seed thread state.")
-            self.assertEqual(extractor_thread_context["recent_user_messages"], ["First turn to seed thread state."])
-            self.assertNotIn("latest_assistant_response", extractor_thread_context)
+            request_packet = contextual_packet["request_packet"]
+            self.assertIn("prior_thread_state", request_packet)
+            self.assertNotIn("extractor_thread_context", request_packet)
+            self.assertNotIn("deterministic_resolved_referent_candidates", request_packet)
+            prior_thread_state = request_packet["prior_thread_state"]
+            self.assertEqual(prior_thread_state["latest_turn_id"], 1)
+            self.assertEqual(prior_thread_state["latest_user_input"], "First turn to seed thread state.")
 
     def test_stub_semantic_extraction_blocks_normal_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
