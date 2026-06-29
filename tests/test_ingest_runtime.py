@@ -1774,6 +1774,326 @@ class IngestRuntimeTests(unittest.TestCase):
                 result.coverage_report["blocking_reasons"],
             )
 
+    def test_followup_missing_required_for_target_is_repaired_from_agreeing_deterministic_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            _write_markdown_fixture(
+                repo_root / "corpus",
+                "coverage/followup_discourse_anchor.md",
+                """
+                ---
+                note_type: coverage_fixture
+                ---
+
+                # Followup Anchor Fixture
+
+                ## Generic Feelings
+
+                This paragraph discusses sleep quality and bedtime routines without repeating the antecedent phrase exactly.
+                """,
+            )
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            first_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
+                    "resolved_referents": [
+                        {
+                            "surface_form": "how it",
+                            "resolved_to": "candy snack food before bed",
+                            "source": "prior_thread_state.recent_messages",
+                            "confidence": "high",
+                        }
+                    ],
+                    "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": ["sleep quality"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["sleep", "quality", "feel"],
+                        "phrases": ["how it makes me feel"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="I wonder if there's anything specific about how it makes me feel?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                thread_id=first_turn.thread_id,
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            packet = result.semantic_context_packet
+            self.assertTrue(packet["semantic_contract_validation"]["valid"])
+            self.assertTrue(packet["resolved_referents"][0]["required_for_target"])
+            self.assertTrue(packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertEqual(
+                packet["resolved_referent_repair_diagnostics"]["repair_type"],
+                "filled_required_for_target_from_deterministic_candidate",
+            )
+            self.assertTrue(result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["covered"])
+            self.assertEqual(
+                result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["match_type"],
+                "resolved_referent_discourse_anchor",
+            )
+
+    def test_followup_disagreeing_model_referent_missing_required_for_target_is_not_repaired(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            first_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
+                    "resolved_referents": [
+                        {
+                            "surface_form": "how it",
+                            "resolved_to": "late night sugar",
+                            "source": "prior_thread_state.recent_messages",
+                            "confidence": "high",
+                        }
+                    ],
+                    "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["feel"],
+                        "phrases": ["how it makes me feel"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="I wonder if there's anything specific about how it makes me feel?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                thread_id=first_turn.thread_id,
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertIn("resolved_referents[0] missing required_for_target", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+
+    def test_non_referential_resolved_referent_missing_required_for_target_is_not_repaired(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _write_synthetic_corpus_journal_note(repo_root)
+            run_ingest(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
+            )
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "Please retrieve the fixture note.",
+                    "resolved_referents": [
+                        {
+                            "surface_form": "that note",
+                            "resolved_to": "fixture note",
+                            "source": "prior_thread_state.recent_messages",
+                            "confidence": "high",
+                        }
+                    ],
+                    "perturbation_nodes": [{"id": "node:fixture", "label": "fixture", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["fixture note"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "Please retrieve the fixture note.",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["fixture", "note"],
+                        "phrases": ["fixture note"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": ["fixture note"],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the fixture note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertIn("resolved_referents[0] missing required_for_target", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+
+    def test_followup_referent_with_existing_required_for_target_true_needs_no_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            first_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
+                    "resolved_referents": [
+                        {
+                            "surface_form": "how it",
+                            "resolved_to": "candy snack food before bed",
+                            "source": "prior_thread_state.recent_messages",
+                            "confidence": "high",
+                            "required_for_target": True,
+                        }
+                    ],
+                    "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["feel"],
+                        "phrases": ["how it makes me feel"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="I wonder if there's anything specific about how it makes me feel?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                thread_id=first_turn.thread_id,
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertTrue(result.semantic_context_packet["resolved_referents"][0]["required_for_target"])
+
+    def test_followup_referent_with_explicit_false_is_not_flipped_to_true(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            first_turn = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="What do I think about candy snack food before bed?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=StubSemanticExtractorBackend(),
+            )
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
+                    "resolved_referents": [
+                        {
+                            "surface_form": "how it",
+                            "resolved_to": "candy snack food before bed",
+                            "source": "prior_thread_state.recent_messages",
+                            "confidence": "high",
+                            "required_for_target": False,
+                        }
+                    ],
+                    "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["candy snack food before bed"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["feel"],
+                        "phrases": ["how it makes me feel"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="I wonder if there's anything specific about how it makes me feel?",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                thread_id=first_turn.thread_id,
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertIn(
+                "explicit model required_for_target=false contradicts deterministic required target",
+                result.semantic_context_packet["resolved_referent_repair_diagnostics"]["reason"],
+            )
+            self.assertFalse(result.semantic_context_packet["resolved_referents"][0]["required_for_target"])
+
     def test_non_referential_generic_semantic_target_is_repaired_with_concrete_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)

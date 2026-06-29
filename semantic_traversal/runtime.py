@@ -321,6 +321,93 @@ def _collect_resolved_referent_targets(resolved_referents: Any) -> list[str]:
     return targets
 
 
+def _repair_resolved_referents_from_deterministic_candidates(
+    *,
+    user_input: str,
+    prior_thread_state: dict[str, Any],
+    semantic_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    diagnostics = {
+        "repaired": False,
+        "repair_type": None,
+        "repairs": [],
+        "reason": "",
+    }
+    if not isinstance(semantic_payload, dict):
+        diagnostics["reason"] = "semantic payload missing or invalid"
+        return {}, diagnostics
+
+    repaired_payload = dict(semantic_payload)
+    followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    if not followup_detection.get("requires_referent_resolution"):
+        diagnostics["reason"] = "referent repair not applied for non-referential turn"
+        return repaired_payload, diagnostics
+
+    resolved_referents = repaired_payload.get("resolved_referents")
+    if not isinstance(resolved_referents, list):
+        diagnostics["reason"] = "resolved_referents missing or invalid"
+        return repaired_payload, diagnostics
+
+    deterministic_referents = _resolve_followup_referents(
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        followup_detection=followup_detection,
+    )
+    deterministic_by_target: dict[str, dict[str, Any]] = {}
+    for candidate in deterministic_referents:
+        if not isinstance(candidate, dict):
+            continue
+        normalized_target = _normalize_resolved_referent_value(candidate.get("resolved_to"))
+        if not normalized_target:
+            continue
+        deterministic_by_target[normalized_target] = candidate
+
+    if not deterministic_by_target:
+        diagnostics["reason"] = "no deterministic referent candidates available"
+        return repaired_payload, diagnostics
+
+    repaired_resolved_referents: list[Any] = []
+    repairs: list[dict[str, Any]] = []
+    explicit_conflicts: list[str] = []
+    for index, resolved_referent in enumerate(resolved_referents):
+        if not isinstance(resolved_referent, dict):
+            repaired_resolved_referents.append(resolved_referent)
+            continue
+        updated_referent = dict(resolved_referent)
+        normalized_target = _normalize_resolved_referent_value(updated_referent.get("resolved_to"))
+        deterministic_candidate = deterministic_by_target.get(normalized_target)
+        required_for_target = updated_referent.get("required_for_target")
+        if deterministic_candidate and deterministic_candidate.get("required_for_target") is True:
+            if required_for_target is None:
+                updated_referent["required_for_target"] = True
+                repairs.append(
+                    {
+                        "index": index,
+                        "resolved_to": str(updated_referent.get("resolved_to") or ""),
+                        "surface_form": str(updated_referent.get("surface_form") or ""),
+                        "source": str(updated_referent.get("source") or ""),
+                    }
+                )
+            elif required_for_target is False:
+                explicit_conflicts.append(str(updated_referent.get("resolved_to") or ""))
+        repaired_resolved_referents.append(updated_referent)
+
+    repaired_payload["resolved_referents"] = repaired_resolved_referents
+    if repairs:
+        diagnostics["repaired"] = True
+        diagnostics["repair_type"] = "filled_required_for_target_from_deterministic_candidate"
+        diagnostics["repairs"] = repairs
+        diagnostics["reason"] = "filled missing required_for_target from agreeing deterministic referent candidate"
+    elif explicit_conflicts:
+        diagnostics["reason"] = (
+            "explicit model required_for_target=false contradicts deterministic required target: "
+            + ", ".join(explicit_conflicts)
+        )
+    else:
+        diagnostics["reason"] = "no referent metadata repair needed"
+    return repaired_payload, diagnostics
+
+
 def _phrase_token_count(value: str) -> int:
     return len(_coverage_target_tokens(value))
 
@@ -1063,6 +1150,11 @@ def _build_semantic_context_packet(
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
     )
+    semantic_payload, resolved_referent_repair_diagnostics = _repair_resolved_referents_from_deterministic_candidates(
+        user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        semantic_payload=semantic_payload,
+    )
     semantic_coverage_target, semantic_coverage_target_diagnostics, adequacy_reasons = _repair_semantic_coverage_target_anchors(
         user_input=user_input,
         prior_thread_state=prior_thread_state,
@@ -1119,6 +1211,7 @@ def _build_semantic_context_packet(
         "semantic_coverage_target_diagnostics": semantic_coverage_target_diagnostics,
         "activation_hints": _dict_or_empty(semantic_payload.get("activation_hints")),
         "limitations": _list_or_empty(semantic_payload.get("limitations")),
+        "resolved_referent_repair_diagnostics": resolved_referent_repair_diagnostics,
         "referent_resolution_diagnostics": referent_diagnostics,
         "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
         "retrieval_preparation": retrieval_preparation,
