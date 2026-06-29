@@ -10,7 +10,7 @@ semantic_extraction:
   provider: "ollama"
   model: qwen3:8b
   base_url: "http://localhost:11434"
-  request_timeout_seconds: 20
+  request_timeout_seconds: 60
 
 embeddings:
   provider: "sentence_transformers"
@@ -19,7 +19,7 @@ embeddings:
   batch_size: 32
   normalize_embeddings: true
   device: null
-  request_timeout_seconds: 20
+  request_timeout_seconds: 60
 
 paths:
   corpus_roots:

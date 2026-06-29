@@ -2585,6 +2585,130 @@ class IngestRuntimeTests(unittest.TestCase):
         self.assertEqual(report["missing_must_preserve"], ["candy snack food before bed"])
         self.assertEqual(report["missing_should_include"], ["dream"])
 
+    def test_semantic_target_coverage_accepts_required_resolved_referent_as_discourse_anchor_evidence(self) -> None:
+        report = _evaluate_semantic_target_coverage(
+            semantic_context_packet={
+                "resolved_referents": [
+                    {
+                        "surface_form": "it",
+                        "resolved_to": "candy snack food before bed",
+                        "source": "prior_thread_state.recent_messages",
+                        "confidence": "high",
+                        "required_for_target": True,
+                    }
+                ],
+                "referent_resolution_diagnostics": {
+                    "deterministic_followup_detection": {
+                        "is_referential_followup": True,
+                        "requires_referent_resolution": True,
+                    },
+                    "deterministic_referent_targets": ["candy snack food before bed"],
+                    "model_referent_targets": ["candy snack food before bed"],
+                    "disagreements": [],
+                    "requires_referent_resolution": True,
+                },
+                "semantic_coverage_target": {
+                    "must_preserve": ["candy snack food before bed"],
+                    "should_include": ["sleep quality"],
+                    "avoid_satisfying_with": [],
+                    "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                    "allow_no_retrieval_needed": False,
+                },
+            },
+            semantic_traversal_manifest={},
+            retrieval_packet={
+                "selected_chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "paragraph_text": "This retrieved evidence discusses sleep hygiene without naming the bedtime candy phrase exactly.",
+                        "note_title": "Fixture",
+                        "section_label": "Section",
+                        "relative_path": "fixture.md",
+                        "note_path": "fixture.md",
+                        "section_path": [],
+                        "frontmatter": {},
+                    }
+                ]
+            },
+        )
+        self.assertTrue(report["covered"])
+        self.assertEqual(
+            report["evaluation_mode"],
+            "deterministic_retrieved_evidence_match_with_discourse_anchor_evidence",
+        )
+        self.assertEqual(report["must_preserve"][0]["match_type"], "resolved_referent_discourse_anchor")
+        self.assertEqual(report["must_preserve"][0]["evidence"][0]["resolved_to"], "candy snack food before bed")
+        self.assertTrue(report["must_preserve"][0]["evidence"][0]["deterministic_model_agreement"])
+        self.assertIn("sleep quality", report["missing_should_include"])
+
+    def test_semantic_target_coverage_does_not_auto_cover_resolved_referent_anchor_when_diagnostics_disagree(self) -> None:
+        report = _evaluate_semantic_target_coverage(
+            semantic_context_packet={
+                "resolved_referents": [
+                    {
+                        "surface_form": "it",
+                        "resolved_to": "candy snack food before bed",
+                        "source": "prior_thread_state.recent_messages",
+                        "confidence": "high",
+                        "required_for_target": True,
+                    }
+                ],
+                "referent_resolution_diagnostics": {
+                    "deterministic_referent_targets": ["late night sugar"],
+                    "model_referent_targets": ["candy snack food before bed"],
+                    "disagreements": [
+                        "deterministic resolved referent candidate missing from model output: late night sugar"
+                    ],
+                    "requires_referent_resolution": True,
+                },
+                "semantic_coverage_target": {
+                    "must_preserve": ["candy snack food before bed"],
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                    "allow_no_retrieval_needed": False,
+                },
+            },
+            semantic_traversal_manifest={},
+            retrieval_packet={"selected_chunks": []},
+        )
+        self.assertFalse(report["covered"])
+        self.assertEqual(report["missing_must_preserve"], ["candy snack food before bed"])
+        self.assertFalse(report["must_preserve"][0]["covered"])
+
+    def test_semantic_target_coverage_non_referent_must_preserve_still_requires_retrieved_evidence(self) -> None:
+        report = _evaluate_semantic_target_coverage(
+            semantic_context_packet={
+                "resolved_referents": [
+                    {
+                        "surface_form": "it",
+                        "resolved_to": "candy snack food before bed",
+                        "source": "prior_thread_state.recent_messages",
+                        "confidence": "high",
+                        "required_for_target": True,
+                    }
+                ],
+                "referent_resolution_diagnostics": {
+                    "deterministic_referent_targets": ["candy snack food before bed"],
+                    "model_referent_targets": ["candy snack food before bed"],
+                    "disagreements": [],
+                    "requires_referent_resolution": True,
+                },
+                "semantic_coverage_target": {
+                    "must_preserve": ["sleep quality"],
+                    "should_include": [],
+                    "avoid_satisfying_with": [],
+                    "query_text": "I wonder if there's anything specific about how it makes me feel?",
+                    "allow_no_retrieval_needed": False,
+                },
+            },
+            semantic_traversal_manifest={},
+            retrieval_packet={"selected_chunks": []},
+        )
+        self.assertFalse(report["covered"])
+        self.assertEqual(report["missing_must_preserve"], ["sleep quality"])
+        self.assertFalse(report["must_preserve"][0]["covered"])
+
     def test_semantic_target_coverage_does_not_count_runtime_annotations_as_evidence(self) -> None:
         report = _evaluate_semantic_target_coverage(
             semantic_context_packet={

@@ -482,6 +482,50 @@ def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict
     return None
 
 
+def _match_target_to_resolved_referent_anchor(
+    target: str,
+    *,
+    semantic_context_packet: dict[str, Any],
+) -> dict[str, Any] | None:
+    normalized_target = _normalize_resolved_referent_value(target)
+    if not normalized_target:
+        return None
+
+    referent_diagnostics = _dict_or_empty(semantic_context_packet.get("referent_resolution_diagnostics"))
+    disagreements = _list_or_empty(referent_diagnostics.get("disagreements"))
+    if disagreements:
+        return None
+
+    deterministic_targets = set(_list_or_empty(referent_diagnostics.get("deterministic_referent_targets")))
+    model_targets = set(_list_or_empty(referent_diagnostics.get("model_referent_targets")))
+    diagnostics_available = bool(referent_diagnostics)
+
+    for resolved_referent in _list_or_empty(semantic_context_packet.get("resolved_referents")):
+        if not isinstance(resolved_referent, dict):
+            continue
+        if resolved_referent.get("required_for_target") is not True:
+            continue
+        resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
+        if not resolved_to:
+            continue
+        if _normalize_resolved_referent_value(resolved_to) != normalized_target:
+            continue
+
+        evidence = {
+            "resolved_to": resolved_to,
+            "surface_form": str(resolved_referent.get("surface_form") or ""),
+            "source": str(resolved_referent.get("source") or ""),
+            "confidence": str(resolved_referent.get("confidence") or ""),
+            "required_for_target": True,
+        }
+        if diagnostics_available:
+            evidence["deterministic_model_agreement"] = (
+                normalized_target in deterministic_targets and normalized_target in model_targets
+            )
+        return evidence
+    return None
+
+
 def _evaluate_semantic_target_coverage(
     *,
     semantic_context_packet: dict[str, Any],
@@ -500,14 +544,16 @@ def _evaluate_semantic_target_coverage(
     present_avoid_satisfying_with: list[str] = []
     limits = [
         "deterministic lexical/metadata evidence only",
+        "required resolved referents may be satisfied by discourse-anchor provenance",
         "does not claim full semantic entailment",
     ]
+    evaluation_mode = "deterministic_retrieved_evidence_match_with_discourse_anchor_evidence"
     if not target_present:
         return {
             "target_present": False,
             "target_valid": False,
             "target_hash": None,
-            "evaluation_mode": "deterministic_retrieved_evidence_match",
+            "evaluation_mode": evaluation_mode,
             "must_preserve": [],
             "should_include": [],
             "avoid_satisfying_with": [],
@@ -540,6 +586,20 @@ def _evaluate_semantic_target_coverage(
 
     for target_value in list(semantic_coverage_target.get("must_preserve") or []):
         target_text = str(target_value)
+        discourse_anchor_evidence = _match_target_to_resolved_referent_anchor(
+            target_text,
+            semantic_context_packet=semantic_context_packet,
+        )
+        if discourse_anchor_evidence is not None:
+            must_preserve_results.append(
+                {
+                    "target": target_text,
+                    "covered": True,
+                    "match_type": "resolved_referent_discourse_anchor",
+                    "evidence": [discourse_anchor_evidence],
+                }
+            )
+            continue
         match = None
         for chunk in selected_chunks:
             match = _match_target_to_evidence_fields(target_text, chunk)
@@ -639,7 +699,7 @@ def _evaluate_semantic_target_coverage(
         "target_present": True,
         "target_valid": target_valid,
         "target_hash": target_hash,
-        "evaluation_mode": "deterministic_retrieved_evidence_match",
+        "evaluation_mode": evaluation_mode,
         "must_preserve": must_preserve_results,
         "should_include": should_include_results,
         "avoid_satisfying_with": avoid_results,
