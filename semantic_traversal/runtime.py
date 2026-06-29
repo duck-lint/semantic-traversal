@@ -249,6 +249,133 @@ def _semantic_target_includes_anchor(semantic_coverage_target: Any, anchor: str)
     return False
 
 
+def _normalize_resolved_referent_value(value: Any) -> str:
+    return _normalize_semantic_text(value)
+
+
+def _collect_resolved_referent_targets(resolved_referents: Any) -> list[str]:
+    targets: list[str] = []
+    if not isinstance(resolved_referents, list):
+        return targets
+    for resolved_referent in resolved_referents:
+        if isinstance(resolved_referent, dict):
+            resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
+            if resolved_to:
+                normalized = _normalize_resolved_referent_value(resolved_to)
+                if normalized and normalized not in targets:
+                    targets.append(normalized)
+    return targets
+
+
+def _validate_resolved_referents(
+    *,
+    payload: dict[str, Any],
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    reasons: list[str] = []
+    followup_detection = _detect_followup_signals(raw_user_input, prior_thread_state)
+    requires_resolution = bool(followup_detection.get("requires_referent_resolution"))
+    resolved_referents = payload.get("resolved_referents")
+    deterministic_referents = _resolve_followup_referents(
+        raw_user_input=raw_user_input,
+        prior_thread_state=prior_thread_state,
+        followup_detection=followup_detection,
+    )
+    deterministic_targets = _collect_resolved_referent_targets(deterministic_referents)
+    model_targets = _collect_resolved_referent_targets(resolved_referents)
+    disagreements: list[str] = []
+
+    if resolved_referents is not None:
+        if not isinstance(resolved_referents, list):
+            actual_type = type(resolved_referents).__name__ if resolved_referents is not None else "missing"
+            reasons.append(f"resolved_referents expected list, got {actual_type}")
+        else:
+            for index, resolved_referent in enumerate(resolved_referents):
+                if not isinstance(resolved_referent, dict):
+                    reasons.append(f"resolved_referents[{index}] expected dict, got {type(resolved_referent).__name__}")
+                    continue
+                required_fields = ("surface_form", "resolved_to", "source", "confidence", "required_for_target")
+                for field_name in required_fields:
+                    if field_name not in resolved_referent:
+                        reasons.append(f"resolved_referents[{index}] missing {field_name}")
+                surface_form = resolved_referent.get("surface_form")
+                resolved_to = resolved_referent.get("resolved_to")
+                source = resolved_referent.get("source")
+                confidence = resolved_referent.get("confidence")
+                required_for_target = resolved_referent.get("required_for_target")
+                if not isinstance(surface_form, str):
+                    reasons.append(
+                        f"resolved_referents[{index}].surface_form expected str, got {type(surface_form).__name__}"
+                    )
+                if not isinstance(resolved_to, str):
+                    reasons.append(
+                        f"resolved_referents[{index}].resolved_to expected str, got {type(resolved_to).__name__}"
+                    )
+                if not isinstance(source, str):
+                    reasons.append(f"resolved_referents[{index}].source expected str, got {type(source).__name__}")
+                if confidence not in {"high", "medium", "low"}:
+                    actual_type = type(confidence).__name__ if confidence is not None else "missing"
+                    reasons.append(
+                        f"resolved_referents[{index}].confidence expected one of high, medium, low, got {actual_type}"
+                    )
+                if not isinstance(required_for_target, bool):
+                    reasons.append(
+                        f"resolved_referents[{index}].required_for_target expected bool, got {type(required_for_target).__name__}"
+                    )
+                if required_for_target is True and isinstance(resolved_to, str) and not resolved_to.strip():
+                    reasons.append(
+                        f"resolved_referents[{index}] required_for_target=true but resolved_to is empty"
+                    )
+
+    if requires_resolution:
+        if not isinstance(resolved_referents, list):
+            reasons.append("follow-up semantic target missing resolved referent")
+            reasons.append("follow-up semantic target missing required resolved referent")
+        else:
+            required_referents = [
+                resolved_referent
+                for resolved_referent in resolved_referents
+                if isinstance(resolved_referent, dict)
+                and resolved_referent.get("required_for_target") is True
+                and isinstance(resolved_referent.get("resolved_to"), str)
+                and str(resolved_referent.get("resolved_to")).strip()
+            ]
+            if not required_referents:
+                reasons.append("follow-up semantic target missing resolved referent")
+                reasons.append("follow-up semantic target missing required resolved referent")
+            for resolved_referent in required_referents:
+                resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
+                if resolved_to and not _semantic_target_includes_anchor(payload.get("semantic_coverage_target"), resolved_to):
+                    reasons.append(f"semantic_coverage_target must_preserve does not include required resolved referent: {resolved_to}")
+
+    if deterministic_targets and model_targets:
+        missing_from_model = [target for target in deterministic_targets if target not in model_targets]
+        missing_from_deterministic = [target for target in model_targets if target not in deterministic_targets]
+        if missing_from_model or missing_from_deterministic:
+            disagreements.extend(
+                [
+                    f"deterministic resolved referent candidate missing from model output: {target}"
+                    for target in missing_from_model
+                ]
+            )
+            disagreements.extend(
+                [
+                    f"model resolved referent candidate not predicted deterministically: {target}"
+                    for target in missing_from_deterministic
+                ]
+            )
+
+    diagnostics = {
+        "deterministic_followup_detection": followup_detection,
+        "deterministic_referent_targets": deterministic_targets,
+        "model_referent_targets": model_targets,
+        "disagreements": disagreements,
+        "requires_referent_resolution": requires_resolution,
+    }
+    return reasons, diagnostics
+
+
 def _validate_semantic_context_payload(
     payload: dict[str, Any],
     *,
@@ -276,32 +403,12 @@ def _validate_semantic_context_payload(
     if followup_detection is not None and not isinstance(followup_detection, dict):
         reasons.append(f"followup_detection expected dict, got {type(followup_detection).__name__}")
 
-    detected_followup = _detect_followup_signals(raw_user_input, prior_thread_state)
-    requires_resolution = bool(detected_followup.get("requires_referent_resolution"))
-    if requires_resolution:
-        resolved_referents = payload.get("resolved_referents")
-        if not isinstance(resolved_referents, list):
-            actual_type = type(resolved_referents).__name__ if resolved_referents is not None else "missing"
-            reasons.append(f"resolved_referents expected list, got {actual_type}")
-            reasons.append("follow-up semantic target missing resolved referent")
-            return reasons
-        if not resolved_referents:
-            reasons.append("follow-up semantic target missing resolved referent")
-        for index, resolved_referent in enumerate(resolved_referents):
-            if not isinstance(resolved_referent, dict):
-                reasons.append(f"resolved_referents[{index}] expected dict, got {type(resolved_referent).__name__}")
-                continue
-            for field_name in ("surface_form", "resolved_to", "source", "confidence", "required_for_target"):
-                if field_name not in resolved_referent:
-                    reasons.append(f"resolved_referents[{index}] missing {field_name}")
-            if resolved_referent.get("required_for_target") is True:
-                resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
-                if not resolved_to:
-                    reasons.append(f"resolved_referents[{index}] required_for_target=true but resolved_to is empty")
-                    reasons.append("follow-up semantic target missing resolved referent")
-                    continue
-                if not _semantic_target_includes_anchor(payload.get("semantic_coverage_target"), resolved_to):
-                    reasons.append(f"semantic_coverage_target must_preserve does not include required resolved referent: {resolved_to}")
+    resolved_referent_reasons, _ = _validate_resolved_referents(
+        payload=payload,
+        raw_user_input=raw_user_input,
+        prior_thread_state=prior_thread_state,
+    )
+    reasons.extend(resolved_referent_reasons)
     return reasons
 
 
@@ -626,6 +733,17 @@ def _build_semantic_context_packet(
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
     )
+    referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
+        payload=semantic_payload,
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+    ) if semantic_payload else ([], {
+        "deterministic_followup_detection": _detect_followup_signals(user_input, prior_thread_state),
+        "deterministic_referent_targets": [],
+        "model_referent_targets": [],
+        "disagreements": [],
+        "requires_referent_resolution": False,
+    })
     contract_reasons = _validate_semantic_context_payload(
         semantic_payload,
         raw_user_input=user_input,
@@ -633,6 +751,10 @@ def _build_semantic_context_packet(
     ) if semantic_payload else [
         "semantic extraction parsed but failed contract validation",
     ]
+    if referent_validation_reasons:
+        for reason in referent_validation_reasons:
+            if reason not in contract_reasons:
+                contract_reasons.append(reason)
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
     resolved_referents = _list_or_empty(semantic_payload.get("resolved_referents"))
     referential_followup_detection = _dict_or_empty(semantic_payload.get("followup_detection")) or followup_detection
@@ -655,6 +777,7 @@ def _build_semantic_context_packet(
         "semantic_coverage_target": semantic_coverage_target,
         "activation_hints": _dict_or_empty(semantic_payload.get("activation_hints")),
         "limitations": _list_or_empty(semantic_payload.get("limitations")),
+        "referent_resolution_diagnostics": referent_diagnostics,
         "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
         "retrieval_preparation": retrieval_preparation,
         "semantic_contract_validation": {
@@ -1739,6 +1862,7 @@ def _evaluate_retrieval_coverage(
 
     decision = "approved" if not reasons else "blocked"
     semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
+    referent_resolution_diagnostics = dict(semantic_context_packet.get("referent_resolution_diagnostics") or {})
     return {
         "decision": decision,
         "semantic_coverage_target_hash": semantic_target_coverage.get("target_hash"),
@@ -1747,6 +1871,7 @@ def _evaluate_retrieval_coverage(
         "evaluated_activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
         "semantic_target_coverage": semantic_target_coverage,
         "blocking_reasons": _dedupe_reasons(reasons),
+        "referent_resolution_diagnostics": referent_resolution_diagnostics,
         "limits": {
             "selection_limit": config.max_retrieval_chunks,
             "min_selected_chunks": min_selected_chunks,

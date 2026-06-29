@@ -61,6 +61,13 @@ FOLLOWUP_PHRASE_PATTERNS = (
     (re.compile(r"\bhow\s+it\s+makes\s+me\s+feel\b", re.IGNORECASE), "how it makes me feel"),
 )
 
+FOLLOWUP_EXPLETIVE_PATTERNS = (
+    re.compile(r"\bis\s+it\s+possible\b", re.IGNORECASE),
+    re.compile(r"\bis\s+it\s+worth\b", re.IGNORECASE),
+    re.compile(r"\bit\s+seems\b", re.IGNORECASE),
+    re.compile(r"\bit\s+looks\s+like\b", re.IGNORECASE),
+)
+
 REFERENT_EXTRACTION_PATTERNS = (
     re.compile(
         r"\b(?:about|regarding|around|concerning|on|for|with|toward|towards|linked to|related to)\s+(.+?)(?:[?.!,]|$)",
@@ -279,15 +286,7 @@ def _contextual_json_skeleton() -> dict[str, Any]:
         "contextual_user_intent": "",
         "thread_relevant_context": [],
         "semantic_pressure": None,
-        "resolved_referents": [
-            {
-                "surface_form": "",
-                "resolved_to": "",
-                "source": "",
-                "confidence": "low",
-                "required_for_target": False,
-            }
-        ],
+        "resolved_referents": [],
         "perturbation_nodes": [{"id": "", "label": "", "kind": ""}],
         "contextual_salt_nodes": [{"id": "", "label": "", "kind": ""}],
         "perturbation_semantic_graph": {
@@ -399,6 +398,7 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
     signals: list[str] = []
     surface_forms: list[str] = []
     has_recent_context = bool(prior_thread_state.get("recent_messages") or prior_thread_state.get("recent_semantic_trajectory"))
+    expletive_pattern_matched = any(pattern.search(lowered) for pattern in FOLLOWUP_EXPLETIVE_PATTERNS)
 
     for pattern, label in FOLLOWUP_PHRASE_PATTERNS:
         if pattern.search(lowered):
@@ -406,6 +406,8 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
             surface_forms.append(label)
 
     for surface_form in FOLLOWUP_SURFACE_FORMS:
+        if expletive_pattern_matched and surface_form == "it":
+            continue
         if re.search(rf"\b{re.escape(surface_form)}\b", lowered):
             surface_forms.append(surface_form)
             if has_recent_context:

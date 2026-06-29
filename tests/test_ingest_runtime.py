@@ -1536,7 +1536,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 result.coverage_report["blocking_reasons"],
             )
 
-    def test_followup_semantic_target_passes_when_resolved_referent_is_anchored(self) -> None:
+    def test_followup_semantic_target_contract_validation_passes_when_resolved_referent_is_anchored(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1610,7 +1610,60 @@ class IngestRuntimeTests(unittest.TestCase):
                 result.coverage_report["blocking_reasons"],
             )
 
-    def test_malformed_resolved_referents_blocks_closed_without_crashing(self) -> None:
+    def test_non_followup_malformed_resolved_referents_blocks_closed_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
+            repo_root = _prepared_repo_root(repo_dir)
+            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
+            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
+            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
+
+            parsed_backend = _ParsedSemanticExtractorBackend(
+                contextual_payload={
+                    "raw_user_input": "Please retrieve the fixture note.",
+                    "contextual_user_intent": "malformed referents",
+                    "thread_relevant_context": [],
+                    "semantic_pressure": None,
+                    "resolved_referents": "it",
+                    "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "semantic_coverage_target": {
+                        "must_preserve": ["feelings"],
+                        "should_include": ["specific"],
+                        "avoid_satisfying_with": [],
+                        "query_text": "Please retrieve the fixture note.",
+                        "allow_no_retrieval_needed": False,
+                    },
+                    "activation_hints": {
+                        "lexical_terms": ["specific", "feel"],
+                        "phrases": ["how it makes me feel"],
+                        "conceptual_neighbors": [],
+                        "relation_hints": [],
+                        "temporal_hints": [],
+                        "entity_hints": [],
+                    },
+                    "followup_detection": {
+                        "is_referential_followup": True,
+                        "requires_referent_resolution": True,
+                        "signals": ["how it makes me feel"],
+                        "surface_forms": ["it"],
+                    },
+                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                }
+            )
+            result = run_thread_turn(
+                repo_root=repo_root,
+                data_root=Path(data_dir),
+                user_input="Please retrieve the fixture note.",
+                llm_backend=StubLLMBackend(prefix="Probe stub response"),
+                semantic_extractor_backend=parsed_backend,
+            )
+
+            self.assertEqual(result.runtime_outcome, "blocked")
+            self.assertEqual(result.llm_metadata["mode"], "not_called")
+            self.assertIn("resolved_referents expected list, got str", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+
+    def test_malformed_resolved_referent_item_fields_block_closed_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1627,10 +1680,18 @@ class IngestRuntimeTests(unittest.TestCase):
             parsed_backend = _ParsedSemanticExtractorBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
-                    "contextual_user_intent": "malformed referents",
+                    "contextual_user_intent": "malformed referent item fields",
                     "thread_relevant_context": ["What do I think about candy snack food before bed?"],
                     "semantic_pressure": None,
-                    "resolved_referents": "it",
+                    "resolved_referents": [
+                        {
+                            "surface_form": 123,
+                            "resolved_to": [],
+                            "source": {"note": "bad"},
+                            "confidence": "certain",
+                            "required_for_target": "yes",
+                        }
+                    ],
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
@@ -1669,7 +1730,12 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
-            self.assertIn("resolved_referents expected list, got str", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+            reasons = result.semantic_context_packet["semantic_contract_validation"]["reasons"]
+            self.assertIn("resolved_referents[0].surface_form expected str, got int", reasons)
+            self.assertIn("resolved_referents[0].resolved_to expected str, got list", reasons)
+            self.assertIn("resolved_referents[0].source expected str, got dict", reasons)
+            self.assertIn("resolved_referents[0].confidence expected one of high, medium, low, got str", reasons)
+            self.assertIn("resolved_referents[0].required_for_target expected bool, got str", reasons)
 
     def test_ollama_structured_extraction_uses_schema_format_and_preserves_resolved_referents(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
