@@ -408,6 +408,254 @@ def _repair_resolved_referents_from_deterministic_candidates(
     return repaired_payload, diagnostics
 
 
+def _normalize_compiler_question_type(
+    *,
+    user_input: str,
+    entity_labels: list[str],
+    followup_detection: dict[str, Any],
+) -> str:
+    lowered = user_input.lower()
+    if " or " in lowered and ("make" in lowered or "cause" in lowered or "from" in lowered):
+        return "causal_disambiguation"
+    if " or " in lowered and len(entity_labels) >= 2:
+        return "comparison_disambiguation"
+    if followup_detection.get("requires_referent_resolution"):
+        return "referential_followup"
+    if lowered.startswith(("what", "how", "why")):
+        return "focused_inquiry"
+    return "open_inquiry"
+
+
+def _infer_entity_role(label: str, *, nodes_by_label: dict[str, dict[str, Any]]) -> str:
+    normalized = _normalize_semantic_text(label)
+    node = nodes_by_label.get(normalized, {})
+    kind = str(node.get("kind") or "").strip().lower()
+    if kind in {"topic", "factor", "effect", "constraint", "context"}:
+        return kind
+    if any(token in normalized for token in ("feel", "emotion", "mood", "charged", "anxiety", "melancholy")):
+        return "effect"
+    if any(token in normalized for token in ("sleep", "food", "bed", "quality", "thing", "ate")):
+        return "factor"
+    return "topic" if len(_coverage_target_tokens(label)) >= 2 else "unknown"
+
+
+def _build_semantic_compiler_packet(
+    *,
+    user_input: str,
+    prior_thread_state: dict[str, Any],
+    semantic_payload: dict[str, Any],
+    isolated_packet: dict[str, Any],
+    contextual_packet: dict[str, Any],
+    semantic_coverage_target: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    compiler_reasons: list[str] = []
+    followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    isolated_payload = _dict_or_empty(isolated_packet.get("parsed_payload"))
+    contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
+
+    candidate_entities: list[str] = []
+    seen_entities: set[str] = set()
+    for source in (
+        _list_or_empty(isolated_payload.get("candidate_targets")),
+        _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")),
+        _list_or_empty(contextual_payload.get("candidate_targets")),
+        _list_or_empty(_dict_or_empty(contextual_payload.get("semantic_coverage_target")).get("must_preserve")),
+        _list_or_empty(_dict_or_empty(contextual_payload.get("activation_hints")).get("entity_hints")),
+    ):
+        for item in source:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            normalized = _normalize_semantic_text(cleaned)
+            if not cleaned or not normalized or normalized in seen_entities:
+                continue
+            if len(_coverage_target_tokens(cleaned)) == 0:
+                continue
+            seen_entities.add(normalized)
+            candidate_entities.append(cleaned)
+
+    concrete_candidates = _collect_concrete_anchor_candidates(
+        user_input=user_input,
+        isolated_packet=isolated_packet,
+        contextual_packet=contextual_packet,
+        semantic_payload=semantic_payload,
+        semantic_coverage_target=semantic_coverage_target,
+    )
+    for candidate in concrete_candidates:
+        normalized = _normalize_semantic_text(candidate)
+        if normalized and normalized not in seen_entities:
+            seen_entities.add(normalized)
+            candidate_entities.append(candidate)
+
+    referent_diagnostics = _validate_resolved_referents(
+        payload=semantic_payload,
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+    )[1] if semantic_payload else {
+        "deterministic_followup_detection": followup_detection,
+        "deterministic_referent_targets": [],
+        "model_referent_targets": [],
+        "disagreements": [],
+        "requires_referent_resolution": False,
+    }
+
+    nodes_by_label: dict[str, dict[str, Any]] = {}
+    for node in _list_or_empty(semantic_payload.get("perturbation_nodes")):
+        if isinstance(node, dict):
+            label = str(node.get("label") or "").strip()
+            normalized = _normalize_semantic_text(label)
+            if normalized:
+                nodes_by_label[normalized] = node
+
+    entities: list[dict[str, Any]] = []
+    for index, label in enumerate(candidate_entities, start=1):
+        normalized = _normalize_semantic_text(label)
+        source = "raw_user_input" if normalized and normalized in _normalize_semantic_text(user_input) else "model_inference"
+        if normalized in {str(target) for target in _list_or_empty(referent_diagnostics.get("deterministic_referent_targets"))}:
+            source = "prior_thread_state"
+        entities.append(
+            {
+                "id": f"entity:{index}",
+                "label": label,
+                "role": _infer_entity_role(label, nodes_by_label=nodes_by_label),
+                "source": source,
+            }
+        )
+
+    relations: list[dict[str, Any]] = []
+    graph = _dict_or_empty(semantic_payload.get("perturbation_semantic_graph"))
+    for edge in _list_or_empty(graph.get("edges")):
+        if not isinstance(edge, dict):
+            continue
+        relations.append(
+            {
+                "source_entity": str(edge.get("source") or ""),
+                "relation": str(edge.get("kind") or ""),
+                "target_entity": str(edge.get("target") or ""),
+                "confidence": "medium",
+                "source": "model_inference",
+            }
+        )
+    if not relations:
+        for relation in _list_or_empty(isolated_payload.get("candidate_relations")):
+            if isinstance(relation, str) and relation.strip():
+                relations.append(
+                    {
+                        "source_entity": entities[0]["id"] if entities else "entity:unknown",
+                        "relation": relation.strip(),
+                        "target_entity": entities[1]["id"] if len(entities) > 1 else "entity:unknown",
+                        "confidence": "low",
+                        "source": "model_inference",
+                    }
+                )
+
+    disambiguation_options: list[dict[str, Any]] = []
+    if " or " in user_input.lower() and len(entities) >= 2:
+        for entity in entities[:2]:
+            disambiguation_options.append(
+                {
+                    "label": entity["label"],
+                    "description": f"Interpret the query with emphasis on {entity['label']}",
+                    "entities": [entity["id"]],
+                }
+            )
+
+    required_anchors: list[dict[str, Any]] = []
+    if followup_detection.get("requires_referent_resolution"):
+        for target in _list_or_empty(referent_diagnostics.get("deterministic_referent_targets")):
+            if isinstance(target, str) and target.strip():
+                required_anchors.append(
+                    {
+                        "label": target,
+                        "source": "prior_thread_state",
+                        "coverage_role": "must_touch",
+                    }
+                )
+    if not required_anchors:
+        non_generic_must_preserve = []
+        if isinstance(semantic_coverage_target, dict):
+            raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
+            for candidate in _list_or_empty(semantic_coverage_target.get("must_preserve")):
+                if isinstance(candidate, str) and candidate.strip() and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms):
+                    non_generic_must_preserve.append(candidate.strip())
+        anchor_seed_candidates = non_generic_must_preserve or concrete_candidates or candidate_entities
+        for candidate in anchor_seed_candidates[:2]:
+            required_anchors.append(
+                {
+                    "label": candidate,
+                    "source": "raw_user_input",
+                    "coverage_role": "must_touch",
+                }
+            )
+
+    lexical_terms = _extract_lexical_query_terms(user_input)
+    entity_terms = [entity["label"] for entity in entities]
+    relation_terms = [str(relation.get("relation") or "") for relation in relations if str(relation.get("relation") or "").strip()]
+    avoid_terms = []
+    if isinstance(semantic_coverage_target, dict):
+        avoid_terms = [str(item) for item in _list_or_empty(semantic_coverage_target.get("avoid_satisfying_with")) if str(item).strip()]
+
+    semantic_target = {
+        "intent": str(
+            contextual_payload.get("contextual_user_intent")
+            or isolated_payload.get("probable_user_intent")
+            or user_input
+        ),
+        "question_type": _normalize_compiler_question_type(
+            user_input=user_input,
+            entity_labels=[entity["label"] for entity in entities],
+            followup_detection=followup_detection,
+        ),
+        "canonical_query": str(semantic_coverage_target.get("query_text") if isinstance(semantic_coverage_target, dict) else user_input) or user_input,
+        "entities": entities,
+        "relations": relations,
+        "disambiguation_options": disambiguation_options,
+        "required_anchors": required_anchors,
+        "uncertainties": [
+            str(item)
+            for item in _list_or_empty(isolated_payload.get("ambiguities")) + _list_or_empty(contextual_payload.get("ambiguities"))
+            if isinstance(item, str) and item.strip()
+        ],
+    }
+    retrieval_plan = {
+        "lexical_terms": lexical_terms,
+        "entity_terms": entity_terms,
+        "relation_terms": relation_terms,
+        "vector_query": semantic_target["canonical_query"],
+        "graph_seeds": entity_terms[:4],
+        "avoid_terms": avoid_terms,
+    }
+    coverage_policy = {
+        "requires_retrieval": not bool(isinstance(semantic_coverage_target, dict) and semantic_coverage_target.get("allow_no_retrieval_needed")),
+        "required_anchor_policy": "touch_any" if semantic_target["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} else "touch_all",
+        "coverage_mode": "provenance_alignment",
+        "block_on_missing_exact_phrase": False,
+    }
+    compiler_packet = {
+        "raw_user_input": user_input,
+        "semantic_target": semantic_target,
+        "retrieval_plan": retrieval_plan,
+        "coverage_policy": coverage_policy,
+        "limitations": [
+            "model-generated semantic compiler output",
+            "raw user input remains authoritative",
+            "retrieval/provenance remain runtime-owned",
+        ],
+        "compiler_diagnostics": {
+            "deterministic_followup_detection": followup_detection,
+            "model_followup_detection": _dict_or_empty(semantic_payload.get("followup_detection")),
+            "referent_resolution_diagnostics": referent_diagnostics,
+        },
+    }
+    if not semantic_target["entities"]:
+        compiler_reasons.append("semantic compiler packet missing entities")
+    if not semantic_target["required_anchors"]:
+        compiler_reasons.append("semantic compiler packet missing required anchors")
+    if not retrieval_plan["lexical_terms"] and not retrieval_plan["entity_terms"]:
+        compiler_reasons.append("semantic compiler packet missing retrieval terms")
+    return compiler_packet, compiler_reasons
+
+
 def _phrase_token_count(value: str) -> int:
     return len(_coverage_target_tokens(value))
 
@@ -805,6 +1053,10 @@ def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict
                 "match_type": "normalized_phrase",
                 "excerpt": _build_evidence_excerpt(field_text, target),
             }
+    for field_name, field_text in _chunk_evidence_fields(chunk):
+        normalized_field = _normalize_coverage_text(field_text)
+        if not normalized_field:
+            continue
         if target_tokens:
             field_tokens = set(_coverage_target_tokens(field_text))
             if all(token in field_tokens for token in target_tokens):
@@ -867,6 +1119,224 @@ def _is_deemphasized_generic_must_preserve_target(target: str, *, semantic_conte
     generic_candidates = [str(item) for item in _list_or_empty(diagnostics.get("generic_must_preserve_candidates"))]
     added_anchors = _list_or_empty(diagnostics.get("added_must_preserve"))
     return bool(added_anchors) and target in generic_candidates
+
+
+def _evaluate_semantic_compiler_alignment(
+    *,
+    semantic_context_packet: dict[str, Any],
+    semantic_traversal_manifest: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+    config: RuntimeConfig,
+) -> dict[str, Any]:
+    compiler_packet = _dict_or_empty(semantic_context_packet.get("semantic_compiler_packet"))
+    legacy_target = _evaluate_semantic_target_coverage(
+        semantic_context_packet=semantic_context_packet,
+        semantic_traversal_manifest=semantic_traversal_manifest,
+        retrieval_packet=retrieval_packet,
+    )
+    semantic_target = _dict_or_empty(compiler_packet.get("semantic_target"))
+    retrieval_plan = _dict_or_empty(compiler_packet.get("retrieval_plan"))
+    coverage_policy = _dict_or_empty(compiler_packet.get("coverage_policy"))
+    selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
+    target_present = bool(compiler_packet)
+    target_valid = bool(semantic_target and retrieval_plan and coverage_policy)
+    if not dict(semantic_context_packet.get("semantic_contract_validation") or {}).get("valid"):
+        target_valid = False
+    if not isinstance(semantic_context_packet.get("semantic_coverage_target"), dict):
+        target_valid = False
+    if not legacy_target.get("target_valid"):
+        target_valid = False
+
+    selected_chunk_provenance = [
+        {
+            "chunk_id": str(chunk.get("chunk_id") or ""),
+            "note_id": str(chunk.get("note_id") or ""),
+            "source_root_label": str(chunk.get("source_root_label") or ""),
+            "relative_path": str(chunk.get("relative_path") or ""),
+            "has_provenance": bool(chunk.get("chunk_id") and chunk.get("note_id") and chunk.get("relative_path")),
+        }
+        for chunk in selected_chunks
+    ]
+    selected_text = " ".join(
+        " ".join(
+            [
+                str(chunk.get("paragraph_text") or ""),
+                str(chunk.get("note_title") or ""),
+                str(chunk.get("section_label") or ""),
+                str(chunk.get("relative_path") or ""),
+            ]
+        )
+        for chunk in selected_chunks
+    )
+    selected_terms = set(_coverage_target_tokens(selected_text))
+    compiler_query_terms = set(
+        _collect_string_terms(retrieval_plan.get("lexical_terms"))
+        + _collect_string_terms(retrieval_plan.get("entity_terms"))
+        + _collect_string_terms(retrieval_plan.get("relation_terms"))
+    )
+
+    referent_diagnostics = _dict_or_empty(semantic_context_packet.get("referent_resolution_diagnostics"))
+    deterministic_targets = set(_list_or_empty(referent_diagnostics.get("deterministic_referent_targets")))
+    resolved_referents = _list_or_empty(semantic_context_packet.get("resolved_referents"))
+    required_anchor_alignment: list[dict[str, Any]] = []
+    legacy_must_preserve: list[dict[str, Any]] = []
+    diagnostic_gaps: list[str] = []
+    missing_required_anchors: list[str] = []
+    for anchor in _list_or_empty(semantic_target.get("required_anchors")):
+        if not isinstance(anchor, dict):
+            continue
+        label = str(anchor.get("label") or "").strip()
+        anchor_source = str(anchor.get("source") or "raw_user_input")
+        anchor_tokens = set(_coverage_target_tokens(label))
+        aligned = False
+        evidence: list[dict[str, Any]] = []
+        if anchor_source == "prior_thread_state":
+            normalized_anchor = _normalize_resolved_referent_value(label)
+            if normalized_anchor in deterministic_targets or any(
+                _normalize_resolved_referent_value(referent.get("resolved_to")) == normalized_anchor
+                for referent in resolved_referents
+                if isinstance(referent, dict)
+            ):
+                aligned = True
+                evidence.append(
+                    {
+                        "alignment_type": "discourse_anchor",
+                        "label": label,
+                    }
+                )
+        if not aligned and anchor_tokens:
+            for chunk in selected_chunks:
+                match = _match_target_to_evidence_fields(label, chunk)
+                if match is not None:
+                    aligned = True
+                    evidence.append(
+                        {
+                            "alignment_type": "retrieved_term_overlap",
+                            "matched_terms": sorted(anchor_tokens.intersection(set(_coverage_target_tokens(str(chunk.get("paragraph_text") or ""))))),
+                            "chunk_id": str(chunk.get("chunk_id") or ""),
+                            "field": match["field"],
+                            "excerpt": match["excerpt"],
+                        }
+                    )
+                    break
+        if not aligned:
+            missing_required_anchors.append(label)
+            diagnostic_gaps.append(f"required anchor not aligned: {label}")
+            legacy_must_preserve.append(
+                {
+                    "target": label,
+                    "covered": False,
+                    "match_type": None,
+                    "evidence": [],
+                }
+            )
+        else:
+            legacy_evidence = []
+            if evidence and evidence[0].get("alignment_type") == "discourse_anchor":
+                legacy_evidence = [evidence[0]]
+                match_type = "resolved_referent_discourse_anchor"
+            else:
+                match_type = "provenance_alignment_term_overlap"
+                if evidence and evidence[0].get("chunk_id"):
+                    legacy_evidence = [
+                        {
+                            "chunk_id": evidence[0]["chunk_id"],
+                            "field": evidence[0].get("field", "paragraph_text"),
+                            "excerpt": evidence[0].get("excerpt", ""),
+                        }
+                    ]
+            legacy_must_preserve.append(
+                {
+                    "target": label,
+                    "covered": True,
+                    "match_type": match_type,
+                    "evidence": legacy_evidence,
+                }
+            )
+        required_anchor_alignment.append(
+            {
+                "label": label,
+                "source": anchor_source,
+                "coverage_role": str(anchor.get("coverage_role") or "must_touch"),
+                "aligned": aligned,
+                "evidence": evidence,
+            }
+        )
+
+    retrieval_plan_alignment = {
+        "lexical_term_overlap": sorted(set(_collect_string_terms(retrieval_plan.get("lexical_terms"))).intersection(selected_terms)),
+        "entity_term_overlap": sorted(set(_collect_string_terms(retrieval_plan.get("entity_terms"))).intersection(selected_terms)),
+        "relation_term_overlap": sorted(set(_collect_string_terms(retrieval_plan.get("relation_terms"))).intersection(selected_terms)),
+        "query_term_overlap_count": len(compiler_query_terms.intersection(selected_terms)),
+    }
+    relation_terms = [str(term) for term in _list_or_empty(retrieval_plan.get("relation_terms")) if str(term).strip()]
+    should_include = list(legacy_target.get("should_include") or [])
+    if not should_include:
+        should_include = [
+            {
+                "target": term,
+                "covered": term.lower() in {item.lower() for item in retrieval_plan_alignment["relation_term_overlap"]},
+                "match_type": "provenance_alignment_term_overlap"
+                if term.lower() in {item.lower() for item in retrieval_plan_alignment["relation_term_overlap"]}
+                else None,
+                "evidence": [],
+            }
+            for term in relation_terms
+        ]
+    missing_should_include = list(legacy_target.get("missing_should_include") or [])
+    if not missing_should_include:
+        missing_should_include = [item["target"] for item in should_include if not item["covered"]]
+
+    avoid_violations: list[str] = []
+    avoid_results: list[dict[str, Any]] = []
+    for avoid_term in _list_or_empty(retrieval_plan.get("avoid_terms")):
+        if isinstance(avoid_term, str) and _normalize_semantic_text(avoid_term) in _normalize_semantic_text(selected_text):
+            avoid_violations.append(avoid_term)
+            diagnostic_gaps.append(f"avoid term present in retrieved evidence: {avoid_term}")
+            avoid_results.append({"target": avoid_term, "present": True, "match_type": "normalized_phrase", "evidence": []})
+        elif isinstance(avoid_term, str):
+            avoid_results.append({"target": avoid_term, "present": False, "match_type": None, "evidence": []})
+
+    missing_required_surfaces = [
+        surface_name
+        for surface_name, required in config.coverage_require_surface_contributions.items()
+        if required and not dict(semantic_traversal_manifest.get("surface_contributions") or {}).get(surface_name)
+    ]
+    required_policy = str(coverage_policy.get("required_anchor_policy") or "touch_all")
+    anchor_alignment_satisfied = (
+        all(item.get("aligned") for item in required_anchor_alignment)
+        if required_policy == "touch_all"
+        else any(item.get("aligned") for item in required_anchor_alignment) if required_anchor_alignment else False
+    )
+    requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
+    provenance_present = all(item["has_provenance"] for item in selected_chunk_provenance) if selected_chunk_provenance else False
+    covered = (
+        target_present
+        and target_valid
+        and (not requires_retrieval or bool(selected_chunks))
+        and (not requires_retrieval or provenance_present)
+        and anchor_alignment_satisfied
+        and not avoid_violations
+    )
+    return {
+        "target_present": target_present,
+        "target_valid": target_valid,
+        "coverage_mode": "provenance_alignment",
+        "required_anchor_alignment": required_anchor_alignment,
+        "retrieval_plan_alignment": retrieval_plan_alignment,
+        "selected_chunk_provenance": selected_chunk_provenance,
+        "missing_required_surfaces": missing_required_surfaces,
+        "missing_required_anchors": missing_required_anchors,
+        "diagnostic_gaps": diagnostic_gaps,
+        "avoid_violations": avoid_violations,
+        "must_preserve": legacy_must_preserve,
+        "should_include": should_include,
+        "avoid_satisfying_with": avoid_results,
+        "missing_must_preserve": missing_required_anchors,
+        "missing_should_include": missing_should_include,
+        "present_avoid_satisfying_with": avoid_violations,
+        "covered": covered,
+    }
 
 
 def _evaluate_semantic_target_coverage(
@@ -1074,6 +1544,7 @@ def _build_retrieval_preparation(
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
     semantic_coverage_target: dict[str, Any] | None,
+    semantic_compiler_packet: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     raw_lexical_terms = _extract_lexical_query_terms(user_input)
     candidate_term_sources: dict[str, list[str]] = {}
@@ -1089,6 +1560,7 @@ def _build_retrieval_preparation(
         extraction_mode="contextual",
     )
     coverage_target_terms: list[str] = []
+    compiler_plan_terms: list[str] = []
     if isinstance(semantic_coverage_target, dict):
         for key in ("must_preserve", "should_include"):
             for term in _collect_string_terms(semantic_coverage_target.get(key)):
@@ -1102,6 +1574,26 @@ def _build_retrieval_preparation(
                 coverage_target_terms.append(term)
             if "semantic_coverage_target.query_text" not in candidate_term_sources.setdefault(term, []):
                 candidate_term_sources[term].append("semantic_coverage_target.query_text")
+    if isinstance(semantic_compiler_packet, dict):
+        retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
+        for key in ("lexical_terms", "entity_terms", "relation_terms", "graph_seeds", "avoid_terms"):
+            for term in _collect_string_terms(retrieval_plan.get(key)):
+                if term not in compiler_plan_terms:
+                    compiler_plan_terms.append(term)
+                if (
+                    "raw_user_input" not in candidate_term_sources.get(term, [])
+                    and f"semantic_compiler_packet.retrieval_plan.{key}" not in candidate_term_sources.setdefault(term, [])
+                ):
+                    candidate_term_sources[term].append(f"semantic_compiler_packet.retrieval_plan.{key}")
+        semantic_target = _dict_or_empty(semantic_compiler_packet.get("semantic_target"))
+        for term in _collect_string_terms(semantic_target.get("canonical_query")):
+            if term not in compiler_plan_terms:
+                compiler_plan_terms.append(term)
+            if (
+                "raw_user_input" not in candidate_term_sources.get(term, [])
+                and "semantic_compiler_packet.semantic_target.canonical_query" not in candidate_term_sources.setdefault(term, [])
+            ):
+                candidate_term_sources[term].append("semantic_compiler_packet.semantic_target.canonical_query")
 
     extraction_hint_terms: list[str] = []
     for term in isolated_hint_terms:
@@ -1118,19 +1610,20 @@ def _build_retrieval_preparation(
                 candidate_term_sources[term].append(source_label)
 
     combined_candidate_terms: list[str] = []
-    for term in raw_lexical_terms + extraction_hint_terms + coverage_target_terms:
+    for term in raw_lexical_terms + extraction_hint_terms + coverage_target_terms + compiler_plan_terms:
         if term not in combined_candidate_terms:
             combined_candidate_terms.append(term)
 
     model_proposed_only_terms = [
         term
-        for term in extraction_hint_terms + coverage_target_terms
+        for term in extraction_hint_terms + coverage_target_terms + compiler_plan_terms
         if "raw_user_input" not in candidate_term_sources.get(term, [])
     ]
     return {
         "raw_lexical_terms": raw_lexical_terms,
         "extraction_hint_terms": extraction_hint_terms,
         "coverage_target_terms": coverage_target_terms,
+        "compiler_plan_terms": compiler_plan_terms,
         "combined_candidate_terms": combined_candidate_terms,
         "candidate_term_sources": candidate_term_sources,
         "model_proposed_only_terms": model_proposed_only_terms,
@@ -1163,6 +1656,14 @@ def _build_semantic_context_packet(
         semantic_payload=semantic_payload,
         semantic_coverage_target=semantic_coverage_target,
     )
+    semantic_compiler_packet, semantic_compiler_reasons = _build_semantic_compiler_packet(
+        user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        semantic_payload=semantic_payload,
+        isolated_packet=semantic_extraction.isolated_packet,
+        contextual_packet=semantic_extraction.contextual_packet,
+        semantic_coverage_target=semantic_coverage_target,
+    )
     referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
         payload=semantic_payload,
         raw_user_input=user_input,
@@ -1181,6 +1682,20 @@ def _build_semantic_context_packet(
     ) if semantic_payload else [
         "semantic extraction parsed but failed contract validation",
     ]
+    compiler_required_prior_anchors = {
+        str(anchor.get("label") or "").strip()
+        for anchor in _list_or_empty(_dict_or_empty(semantic_compiler_packet.get("semantic_target")).get("required_anchors"))
+        if isinstance(anchor, dict) and str(anchor.get("source") or "") == "prior_thread_state"
+    }
+    if compiler_required_prior_anchors:
+        contract_reasons = [
+            reason
+            for reason in contract_reasons
+            if not (
+                reason.startswith("semantic_coverage_target must_preserve does not include required resolved referent:")
+                and any(anchor in reason for anchor in compiler_required_prior_anchors)
+            )
+        ]
     if referent_validation_reasons:
         for reason in referent_validation_reasons:
             if reason not in contract_reasons:
@@ -1188,14 +1703,27 @@ def _build_semantic_context_packet(
     for reason in adequacy_reasons:
         if reason not in contract_reasons:
             contract_reasons.append(reason)
+    for reason in semantic_compiler_reasons:
+        if reason not in contract_reasons:
+            contract_reasons.append(reason)
+    if compiler_required_prior_anchors:
+        contract_reasons = [
+            reason
+            for reason in contract_reasons
+            if not (
+                reason.startswith("semantic_coverage_target must_preserve does not include required resolved referent:")
+                and any(anchor in reason for anchor in compiler_required_prior_anchors)
+            )
+        ]
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
     resolved_referents = _list_or_empty(semantic_payload.get("resolved_referents"))
-    referential_followup_detection = _dict_or_empty(semantic_payload.get("followup_detection")) or followup_detection
+    referential_followup_detection = followup_detection
     retrieval_preparation = _build_retrieval_preparation(
         user_input=user_input,
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
         semantic_coverage_target=semantic_coverage_target,
+        semantic_compiler_packet=semantic_compiler_packet,
     )
     return {
         "thread_id": thread_document["thread_id"],
@@ -1204,6 +1732,7 @@ def _build_semantic_context_packet(
         "raw_user_input": user_input,
         "resolved_referents": resolved_referents,
         "referential_followup_detection": referential_followup_detection,
+        "semantic_compiler_packet": semantic_compiler_packet,
         "perturbation_nodes": _list_or_empty(semantic_payload.get("perturbation_nodes")),
         "contextual_salt_nodes": _list_or_empty(semantic_payload.get("contextual_salt_nodes")),
         "perturbation_semantic_graph": _dict_or_empty(semantic_payload.get("perturbation_semantic_graph")),
@@ -1609,6 +2138,18 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 
 
 def _build_query_embedding_text(semantic_context_packet: dict[str, Any]) -> str:
+    semantic_compiler_packet = _dict_or_empty(semantic_context_packet.get("semantic_compiler_packet"))
+    retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
+    semantic_target = _dict_or_empty(semantic_compiler_packet.get("semantic_target"))
+    if semantic_target or retrieval_plan:
+        parts = [
+            str(semantic_target.get("canonical_query") or ""),
+            " ".join(str(item) for item in list(retrieval_plan.get("entity_terms") or [])),
+            " ".join(str(item) for item in list(retrieval_plan.get("relation_terms") or [])),
+            " ".join(str(item) for item in list(retrieval_plan.get("lexical_terms") or [])),
+            str(semantic_context_packet.get("user_input") or ""),
+        ]
+        return " ".join(part for part in parts if part).strip()
     semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target") or {}
     parts = [
         str(semantic_coverage_target.get("query_text") or ""),
@@ -2106,8 +2647,8 @@ def _build_semantic_traversal_manifest(
         manifest_validity_reasons.append("semantic extraction parsed but failed contract validation")
     if semantic_context_packet.get("perturbation_semantic_graph") is None:
         manifest_validity_reasons.append("perturbation_semantic_graph missing")
-    if semantic_context_packet.get("semantic_coverage_target") is None:
-        manifest_validity_reasons.append("semantic_coverage_target missing")
+    if not isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict):
+        manifest_validity_reasons.append("semantic_compiler_packet missing")
     if not ranked_candidates:
         manifest_validity_reasons.append("semantic traversal produced no candidate regions")
     manifest = {
@@ -2279,31 +2820,12 @@ def _evaluate_retrieval_coverage(
 
     if backend_mode in {"disabled", "stub", "unavailable"}:
         reasons.append(f"semantic_context_extraction backend `{backend_mode}` is not valid for the normal runtime")
-    if isolated_status != "parsed":
-        reasons.append(f"isolated semantic extraction did not produce a valid parsed result: {isolated_status}")
     if contextual_status != "parsed":
         reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
     contract_validation = dict(semantic_context_packet.get("semantic_contract_validation") or {})
     if not contract_validation.get("valid"):
         reasons.extend(list(contract_validation.get("reasons") or []))
         reasons.append("semantic extraction parsed but failed contract validation")
-
-    referential_followup_detection = dict(semantic_context_packet.get("referential_followup_detection") or {})
-    if referential_followup_detection.get("requires_referent_resolution"):
-        resolved_referents = list(semantic_context_packet.get("resolved_referents") or [])
-        required_anchors = [
-            str(referent.get("resolved_to") or "").strip()
-            for referent in resolved_referents
-            if isinstance(referent, dict) and referent.get("required_for_target") is True
-        ]
-        if not required_anchors:
-            reasons.append("follow-up semantic target missing resolved referent")
-        else:
-            for resolved_anchor in required_anchors:
-                if not _semantic_target_includes_anchor(semantic_context_packet.get("semantic_coverage_target"), resolved_anchor):
-                    reasons.append(
-                        f"semantic_coverage_target must_preserve does not include required resolved referent: {resolved_anchor}"
-                    )
 
     surface_statuses = {
         str(surface["surface"]): str(surface["status"])
@@ -2337,37 +2859,40 @@ def _evaluate_retrieval_coverage(
     min_selected_chunks = config.coverage_min_selected_chunks
     max_selected_chunks = config.coverage_max_selected_chunks
     allow_no_retrieval_needed = config.coverage_allow_no_retrieval_needed
-    target_allows_no_retrieval = bool(
-        isinstance(semantic_context_packet.get("semantic_coverage_target"), dict)
-        and semantic_context_packet["semantic_coverage_target"].get("allow_no_retrieval_needed")
-    )
-    semantic_target_coverage = _evaluate_semantic_target_coverage(
+    semantic_target_coverage = _evaluate_semantic_compiler_alignment(
         semantic_context_packet=semantic_context_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
+        config=config,
     )
     if not semantic_target_coverage["target_present"] or not semantic_target_coverage["target_valid"]:
-        reasons.append("semantic_coverage_target missing or invalid")
-    for target in list(semantic_target_coverage.get("missing_must_preserve") or []):
-        reasons.append(f"semantic coverage target missing required evidence: {target}")
-    for target in list(semantic_target_coverage.get("present_avoid_satisfying_with") or []):
-        reasons.append(f"semantic coverage target matched avoided evidence: {target}")
+        reasons.append("semantic_compiler_packet missing or invalid")
+        legacy_target = _evaluate_semantic_target_coverage(
+            semantic_context_packet=semantic_context_packet,
+            semantic_traversal_manifest=semantic_traversal_manifest,
+            retrieval_packet=retrieval_packet,
+        )
+        if not legacy_target.get("target_valid"):
+            reasons.append("semantic_coverage_target missing or invalid")
+    for gap in list(semantic_target_coverage.get("diagnostic_gaps") or []):
+        reasons.append(gap)
+    if semantic_target_coverage.get("avoid_violations"):
+        for target in list(semantic_target_coverage.get("avoid_violations") or []):
+            reasons.append(f"semantic compiler avoid term present in retrieved evidence: {target}")
+    target_allows_no_retrieval = not bool(_dict_or_empty(semantic_context_packet.get("semantic_compiler_packet")).get("coverage_policy", {}).get("requires_retrieval", True))
     if selected_chunk_count < min_selected_chunks and not (allow_no_retrieval_needed and target_allows_no_retrieval):
         reasons.append(f"selected chunk count below configured minimum: {selected_chunk_count} < {min_selected_chunks}")
     if selected_chunk_count > max_selected_chunks:
         reasons.append(f"selected chunk count exceeds configured maximum: {selected_chunk_count} > {max_selected_chunks}")
 
     actual_surface_contributions = dict(semantic_traversal_manifest.get("surface_contributions") or {})
-    for surface_name, required in required_surface_contributions.items():
-        if required and not actual_surface_contributions.get(surface_name):
-            reasons.append(f"required surface contribution missing: {surface_name}")
 
     decision = "approved" if not reasons else "blocked"
-    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
+    semantic_compiler_packet = semantic_context_packet.get("semantic_compiler_packet")
     referent_resolution_diagnostics = dict(semantic_context_packet.get("referent_resolution_diagnostics") or {})
     return {
         "decision": decision,
-        "semantic_coverage_target_hash": semantic_target_coverage.get("target_hash"),
+        "semantic_coverage_target_hash": sha256_json(semantic_compiler_packet) if isinstance(semantic_compiler_packet, dict) else None,
         "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
         "retrieval_packet_hash": retrieval_packet_hash,
         "evaluated_activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
