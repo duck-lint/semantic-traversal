@@ -814,21 +814,72 @@ def _build_isolated_extraction_request(user_input: str) -> dict[str, Any]:
     }
 
 
+def _build_extractor_thread_context(prior_thread_state: dict[str, Any]) -> dict[str, Any]:
+    recent_messages = list(prior_thread_state.get("recent_messages") or [])
+    recent_user_messages = [
+        str(message.get("content") or "").strip()
+        for message in recent_messages
+        if isinstance(message, dict)
+        and str(message.get("role") or "").lower() == "user"
+        and str(message.get("content") or "").strip()
+    ][-4:]
+    assistant_recent_messages = {
+        str(message.get("content") or "").strip()
+        for message in recent_messages
+        if isinstance(message, dict)
+        and str(message.get("role") or "").lower() == "assistant"
+        and str(message.get("content") or "").strip()
+    }
+    recent_semantic_trajectory: list[str] = []
+    for item in list(prior_thread_state.get("recent_semantic_trajectory") or []):
+        if not isinstance(item, str):
+            continue
+        cleaned = item.strip()
+        if not cleaned or cleaned in assistant_recent_messages:
+            continue
+        if cleaned not in recent_semantic_trajectory:
+            recent_semantic_trajectory.append(cleaned)
+    context = {
+        "latest_turn_id": prior_thread_state.get("latest_turn_id", 0),
+        "latest_user_input": prior_thread_state.get("latest_user_input"),
+        "recent_user_messages": recent_user_messages,
+        "recent_semantic_trajectory": recent_semantic_trajectory[-4:],
+        "current_user_goals": list(prior_thread_state.get("current_user_goals") or []),
+        "open_questions": list(prior_thread_state.get("open_questions") or []),
+        "active_constraints": list(prior_thread_state.get("active_constraints") or []),
+    }
+    conversation_summary = str(prior_thread_state.get("conversation_summary") or "").strip()
+    if conversation_summary:
+        context["conversation_summary"] = conversation_summary
+    return context
+
+
 def _build_contextual_extraction_request(
     *,
     user_input: str,
     prior_thread_state: dict[str, Any],
     isolated_semantic_extraction: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    deterministic_followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    deterministic_resolved_referent_candidates = _resolve_followup_referents(
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        followup_detection=deterministic_followup_detection,
+    )
     return {
         "mode": "contextual",
         "raw_user_input": user_input,
-        "prior_thread_state": prior_thread_state,
+        "extractor_thread_context": _build_extractor_thread_context(prior_thread_state),
+        "deterministic_followup_detection": deterministic_followup_detection,
+        "deterministic_resolved_referent_candidates": deterministic_resolved_referent_candidates,
         "isolated_semantic_extraction": isolated_semantic_extraction or {},
         "instruction": (
             "Hydrate the isolated extraction with conversation context. "
             "Return JSON only. "
             "Do not answer the user. Preserve the raw message. "
+            "Use deterministic_resolved_referent_candidates when present. "
+            "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
+            "For referential follow-ups, semantic_coverage_target.must_preserve must include the resolved referent. "
             "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
             "semantic_coverage_target, activation_hints, and limitations."
         ),

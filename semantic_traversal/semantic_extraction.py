@@ -335,7 +335,10 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
             "semantic_coverage_target must be an object, activation_hints must be an object, "
             "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
             "perturbation_semantic_graph must be an object with nodes and edges arrays. "
-            "resolved_referents must be an array of objects when follow-up resolution is required."
+            "resolved_referents must be an array of objects when follow-up resolution is required. "
+            "Use deterministic_resolved_referent_candidates when present. "
+            "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
+            "For referential follow-ups, semantic_coverage_target.must_preserve must include the resolved referent."
         )
     return (
         "Return JSON only.\n"
@@ -381,6 +384,13 @@ def _clean_referent_text(text: str) -> str:
 
 
 def _recent_user_messages(prior_thread_state: dict[str, Any]) -> list[str]:
+    compact_recent_user_messages = [
+        str(message).strip()
+        for message in list(prior_thread_state.get("recent_user_messages") or [])
+        if str(message).strip()
+    ]
+    if compact_recent_user_messages:
+        return compact_recent_user_messages
     recent_messages = []
     for message in list(prior_thread_state.get("recent_messages") or []):
         if isinstance(message, dict) and str(message.get("role") or "").lower() == "user":
@@ -395,7 +405,11 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
     signals: list[str] = []
     referential_signals: list[str] = []
     surface_forms: list[str] = []
-    has_recent_context = bool(prior_thread_state.get("recent_messages") or prior_thread_state.get("recent_semantic_trajectory"))
+    has_recent_context = bool(
+        prior_thread_state.get("recent_messages")
+        or prior_thread_state.get("recent_user_messages")
+        or prior_thread_state.get("recent_semantic_trajectory")
+    )
     expletive_pattern_matched = any(pattern.search(lowered) for pattern in FOLLOWUP_EXPLETIVE_PATTERNS)
 
     for pattern, label in FOLLOWUP_PHRASE_PATTERNS:
@@ -535,7 +549,7 @@ class StubSemanticExtractorBackend:
 
     def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
-        prior_thread_state = packet.get("prior_thread_state") or {}
+        prior_thread_state = packet.get("extractor_thread_context") or packet.get("prior_thread_state") or {}
         isolated_payload = packet.get("isolated_semantic_extraction") or {}
         payload = self._contextual_payload or self._build_default_contextual_payload(
             raw_user_input=raw_user_input,

@@ -26,6 +26,7 @@ from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roo
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
 from semantic_traversal.runtime import (
+    _build_contextual_extraction_request,
     _evaluate_retrieval_coverage,
     _evaluate_semantic_target_coverage,
     _query_vector_candidates,
@@ -388,8 +389,9 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
         packet_json = prompt.split("Packet:\n", 1)[1] if "Packet:\n" in prompt else "{}"
         packet = json.loads(packet_json)
         raw_user_input = str(packet.get("raw_user_input") or "")
-        prior_thread_state = packet.get("prior_thread_state") or {}
-        recent_messages = list(prior_thread_state.get("recent_messages") or [])
+        extractor_thread_context = packet.get("extractor_thread_context") or packet.get("prior_thread_state") or {}
+        recent_messages = list(extractor_thread_context.get("recent_user_messages") or [])
+        deterministic_referent_candidates = list(packet.get("deterministic_resolved_referent_candidates") or [])
         terms = ["candy", "snack", "food", "bed"]
         followup_detection = {
             "is_referential_followup": "it" in raw_user_input.lower() or "that" in raw_user_input.lower(),
@@ -398,7 +400,9 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
             "surface_forms": ["it"] if "it" in raw_user_input.lower() else [],
         }
         resolved_referents = []
-        if followup_detection["requires_referent_resolution"]:
+        if deterministic_referent_candidates:
+            resolved_referents = deterministic_referent_candidates
+        elif followup_detection["requires_referent_resolution"]:
             resolved_referents = [
                 {
                     "surface_form": "it",
@@ -428,7 +432,7 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
             "resolved_referents": resolved_referents,
             "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
             "contextual_salt_nodes": [
-                {"id": f"context:{index}", "label": message.get("content", ""), "kind": "recent_message"}
+                {"id": f"context:{index}", "label": message, "kind": "recent_message"}
                 for index, message in enumerate(recent_messages[-2:], start=1)
             ],
             "perturbation_semantic_graph": {
@@ -1537,6 +1541,67 @@ class IngestRuntimeTests(unittest.TestCase):
                 result.coverage_report["blocking_reasons"],
             )
 
+    def test_contextual_request_includes_deterministic_resolved_referent_candidates(self) -> None:
+        request_packet = _build_contextual_extraction_request(
+            user_input="I wonder if there's anything specific about how it makes me feel?",
+            prior_thread_state={
+                "latest_turn_id": 1,
+                "latest_user_input": "What do I think about candy snack food before bed?",
+                "recent_messages": [
+                    {"role": "user", "content": "What do I think about candy snack food before bed?"},
+                    {"role": "assistant", "content": "You have mixed feelings about late candy snacks."},
+                ],
+                "recent_semantic_trajectory": [
+                    "What do I think about candy snack food before bed?",
+                    "You have mixed feelings about late candy snacks.",
+                ],
+            },
+            isolated_semantic_extraction={},
+        )
+
+        self.assertIn("deterministic_followup_detection", request_packet)
+        self.assertIn("deterministic_resolved_referent_candidates", request_packet)
+        self.assertEqual(
+            request_packet["deterministic_resolved_referent_candidates"][0]["resolved_to"],
+            "candy snack food before bed",
+        )
+
+    def test_contextual_request_uses_compact_extractor_thread_context_without_duplicate_assistant_prose(self) -> None:
+        request_packet = _build_contextual_extraction_request(
+            user_input="I wonder if there's anything specific about how it makes me feel?",
+            prior_thread_state={
+                "latest_turn_id": 1,
+                "latest_user_input": "What do I think about candy snack food before bed?",
+                "conversation_summary": "Assistant summary about candy snack food before bed.",
+                "recent_messages": [
+                    {"role": "user", "content": "What do I think about candy snack food before bed?"},
+                    {"role": "assistant", "content": "Assistant summary about candy snack food before bed."},
+                ],
+                "current_user_goals": ["Understand bedtime candy feelings"],
+                "open_questions": ["Does it affect sleep?"],
+                "active_constraints": ["Keep retrieval lexical"],
+                "recent_semantic_trajectory": [
+                    "What do I think about candy snack food before bed?",
+                    "Assistant summary about candy snack food before bed.",
+                ],
+                "latest_assistant_response": "Assistant summary about candy snack food before bed.",
+            },
+            isolated_semantic_extraction={},
+        )
+
+        self.assertNotIn("prior_thread_state", request_packet)
+        extractor_thread_context = request_packet["extractor_thread_context"]
+        self.assertEqual(extractor_thread_context["latest_turn_id"], 1)
+        self.assertEqual(
+            extractor_thread_context["recent_user_messages"],
+            ["What do I think about candy snack food before bed?"],
+        )
+        self.assertNotIn("latest_assistant_response", extractor_thread_context)
+        self.assertEqual(
+            extractor_thread_context["recent_semantic_trajectory"],
+            ["What do I think about candy snack food before bed?"],
+        )
+
     def test_expletive_possible_question_does_not_require_referent_resolution(self) -> None:
         detection = _detect_followup_signals(
             "Is it possible to use qwen3:4b here?",
@@ -1796,11 +1861,16 @@ class IngestRuntimeTests(unittest.TestCase):
                 )
 
             semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
             self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
             self.assertTrue(semantic_context_packet["resolved_referents"])
             self.assertEqual(semantic_context_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
             self.assertIsNotNone(_OllamaFixtureHandler.last_generate_payload)
             self.assertNotIn("format", _OllamaFixtureHandler.last_generate_payload)
+            self.assertEqual(
+                contextual_packet["request_packet"]["deterministic_resolved_referent_candidates"][0]["resolved_to"],
+                "candy snack food before bed",
+            )
 
     def test_followup_coverage_blocks_when_only_generic_feelings_are_satisfied(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -1946,7 +2016,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(result.retrieval_packet["selected_chunks"])
             self.assertTrue(any("disabled" in reason for reason in result.blocking_reasons))
 
-    def test_contextual_extraction_receives_prior_thread_state(self) -> None:
+    def test_contextual_extraction_receives_compact_thread_context(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             first_turn = run_thread_turn(
@@ -1966,9 +2036,11 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             contextual_packet = _load_turn_artifact(second_turn.contextual_semantic_extraction_packet_path)
-            prior_thread_state = contextual_packet["request_packet"]["prior_thread_state"]
-            self.assertEqual(prior_thread_state["latest_turn_id"], 1)
-            self.assertEqual(prior_thread_state["latest_user_input"], "First turn to seed thread state.")
+            extractor_thread_context = contextual_packet["request_packet"]["extractor_thread_context"]
+            self.assertEqual(extractor_thread_context["latest_turn_id"], 1)
+            self.assertEqual(extractor_thread_context["latest_user_input"], "First turn to seed thread state.")
+            self.assertEqual(extractor_thread_context["recent_user_messages"], ["First turn to seed thread state."])
+            self.assertNotIn("latest_assistant_response", extractor_thread_context)
 
     def test_stub_semantic_extraction_blocks_normal_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
