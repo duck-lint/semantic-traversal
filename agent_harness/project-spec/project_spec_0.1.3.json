@@ -2,31 +2,35 @@
   "metadata": {
     "id": "project_spec.json",
     "authority": "global",
-    "last_update": "2026-06-18"
+    "last_update": "2026-06-28",
+    "spec_version": "0.1.4",
+    "previous_spec_version": "0.1.3",
+    "revision_focus": "Reframe the runtime as a local semantic context compiler for frontier-model conversation, with discourse-aware semantic target resolution before latent-space activation, traversal, retrieval/provenance, coverage audit, and synthesis."
   },
-  "system_description": "Conversational inputs trigger state_perturbations that activate data_representations and perform projection, traversal, retrieval, and inference synthesis operations",
+  "system_description": "Conversational utterances trigger a local semantic context compiler that resolves the semantic target of the utterance in thread context, activates latent-space regions across multiple data representations, traverses relations, retrieves evidence and provenance, audits coverage, and assembles a synthesis_context_packet for a fresh frontier-model response.",
   "system_design": {
     "runtime_flow": [
       {
         "id": 1,
-        "process": "receive_user_input",
-        "description": "User enters a message into a conversation_thread.",
+        "process": "receive_user_utterance",
+        "description": "User enters an utterance into a conversation_thread. The raw utterance is preserved before any semantic interpretation.",
         "operational_boundaries": [
           "UI",
           "conversation_thread"
         ],
         "input": [
-          "user_input",
+          "raw_user_utterance",
           "thread_id"
         ],
         "output": [
-          "pending_state_perturbation"
+          "pending_state_perturbation",
+          "user_input_event"
         ]
       },
       {
         "id": 2,
         "process": "load_thread_state",
-        "description": "Runtime loads the current materialized thread_state from the conversation_thread.",
+        "description": "Runtime loads the current materialized thread_state and ledger parent for the conversation_thread before interpreting the utterance.",
         "operational_boundaries": [
           "conversation_thread",
           "thread_ledger",
@@ -43,38 +47,53 @@
       },
       {
         "id": 3,
-        "process": "semantic_context_extraction",
-        "description": "User input is parsed in isolation, then salted with prior_thread_state to project the semantic target for this perturbation.",
+        "process": "semantic_target_resolution",
+        "description": "Runtime resolves the conversational meaning of the utterance in thread context. Isolated parsing is retained only as a diagnostic contrast lens; it is not the authoritative interpretation for context-dependent turns.",
         "operational_boundaries": [
           "conversation_thread",
-          "state_perturbation"
+          "thread_state",
+          "state_perturbation",
+          "semantic_context_compiler"
         ],
         "input": [
-          "user_input",
+          "raw_user_utterance",
           "prior_thread_state"
         ],
         "suboperations": [
-          "extract_user_input_semantic_units",
+          "preserve_raw_utterance",
+          "detect_utterance_type",
+          "produce_isolated_contrast_parse",
+          "resolve_deixis_pronouns_and_omitted_referents",
           "extract_contextual_salt_from_prior_thread_state",
-          "form_edges_between_user_input_and_contextual_salt",
-          "project_semantic_coverage_target"
+          "form_edges_between_utterance_and_resolved_referents",
+          "project_resolved_semantic_target",
+          "project_semantic_coverage_target",
+          "record_target_anchoring_requirements"
         ],
         "output": [
+          "utterance_type",
+          "isolated_contrast_parse",
+          "resolved_referents",
+          "perturbation_nodes",
+          "contextual_salt_nodes",
           "perturbation_semantic_graph",
-          "semantic_coverage_target"
+          "semantic_coverage_target",
+          "semantic_context_packet"
         ]
       },
       {
         "id": 4,
         "process": "latent_space_activation",
-        "description": "Semantic targets activate candidate regions of latent_space across available data representations.",
+        "description": "The resolved semantic target activates candidate regions of latent_space across available data representations.",
         "operational_boundaries": [
           "state_perturbation",
-          "latent_space"
+          "latent_space",
+          "semantic_context_compiler"
         ],
         "input": [
           "perturbation_semantic_graph",
           "semantic_coverage_target",
+          "resolved_referents",
           "latent_space"
         ],
         "suboperations": [
@@ -91,21 +110,26 @@
       {
         "id": 5,
         "process": "semantic_traversal",
-        "description": "Activated regions are expanded into candidate neighborhoods and organized into a traversal manifest.",
+        "description": "Activated regions are traversed through lexical, vector, graph, metadata, path-topology, and provenance surfaces to organize candidate neighborhoods into a traversal manifest. Retrieval is not the control object; the resolved semantic target plus traversal manifest is the control object.",
         "operational_boundaries": [
           "state_perturbation",
-          "latent_space"
+          "latent_space",
+          "semantic_context_compiler"
         ],
         "input": [
           "activated_semantic_regions",
-          "semantic_coverage_target"
+          "semantic_coverage_target",
+          "resolved_referents"
         ],
         "suboperations": [
           "neighbor_identification",
           "graph_edge_expansion",
           "metadata_projection",
+          "path_topology_projection",
           "candidate_ranking",
-          "coverage_guided_expansion"
+          "required_surface_contribution_planning",
+          "coverage_guided_expansion",
+          "drift_risk_recording"
         ],
         "output": [
           "semantic_traversal_manifest"
@@ -114,10 +138,11 @@
       {
         "id": 6,
         "process": "retrieval_packet_assembly",
-        "description": "Concrete content is retrieved from latent_space using the semantic_traversal_manifest.",
+        "description": "Concrete evidence and provenance are retrieved from latent_space according to the semantic_traversal_manifest. Retrieval materializes traversal selections; it must not bypass target resolution or traversal.",
         "operational_boundaries": [
           "state_perturbation",
-          "latent_space"
+          "latent_space",
+          "semantic_context_compiler"
         ],
         "input": [
           "semantic_traversal_manifest"
@@ -127,6 +152,8 @@
           "retrieve_note_metadata",
           "retrieve_graph_context",
           "retrieve_source_paths",
+          "retrieve_raw_markdown_spans_if_required",
+          "retrieve_selection_provenance",
           "retrieve_synthetic_node_context"
         ],
         "output": [
@@ -135,19 +162,23 @@
       },
       {
         "id": 7,
-        "process": "retrieval_coverage_evaluation",
-        "description": "Retrieved material is checked against the semantic_coverage_target before synthesis.",
+        "process": "coverage_audit",
+        "description": "Retrieved evidence and provenance are audited against the semantic_coverage_target before synthesis. Coverage approval must be anchored to the resolved target, not merely to generic lexical overlap.",
         "operational_boundaries": [
-          "state_perturbation"
+          "state_perturbation",
+          "semantic_context_compiler"
         ],
         "input": [
           "semantic_coverage_target",
+          "resolved_referents",
           "semantic_traversal_manifest",
           "retrieval_packet"
         ],
         "suboperations": [
           "evaluate_retrieval_sufficiency",
+          "verify_resolved_referent_preservation",
           "identify_missing_regions",
+          "identify_generic_match_false_approvals",
           "loop_to_traversal_if_required_and_budget_available",
           "record_coverage_limits"
         ],
@@ -159,14 +190,17 @@
       {
         "id": 8,
         "process": "synthesis_context_assembly",
-        "description": "Runtime assembles the fresh LLM call context from user_input, prior_thread_state, traversal, retrieval, and coverage artifacts.",
+        "description": "Runtime assembles the fresh frontier-model call context from the raw utterance, prior_thread_state, resolved semantic target, traversal, retrieval, provenance, and coverage artifacts.",
         "operational_boundaries": [
           "state_perturbation",
-          "llm_call_boundary"
+          "llm_call_boundary",
+          "semantic_context_compiler"
         ],
         "input": [
-          "user_input",
+          "raw_user_utterance",
           "prior_thread_state",
+          "utterance_type",
+          "resolved_referents",
           "perturbation_semantic_graph",
           "semantic_coverage_target",
           "semantic_traversal_manifest",
@@ -179,8 +213,8 @@
       },
       {
         "id": 9,
-        "process": "llm_call_boundary",
-        "description": "A fresh LLM call produces the user-facing response from the synthesis_context_packet.",
+        "process": "frontier_model_synthesis_boundary",
+        "description": "A fresh frontier-model call produces the user-facing response from the synthesis_context_packet. The frontier model synthesizes; it does not decide whether retrieval was valid.",
         "operational_boundaries": [
           "llm_call_boundary"
         ],
@@ -189,18 +223,20 @@
         ],
         "suboperations": [
           "generate_user_facing_response",
-          "identify_optional_synthetic_node_candidate",
-          "preserve_retrieval_basis"
+          "preserve_retrieval_basis",
+          "identify_optional_synthetic_node_candidate"
         ],
         "output": [
           "assistant_response",
-          "optional_synthetic_node_candidate"
+          "optional_synthetic_node_candidate",
+          "raw_model_response",
+          "llm_call_metadata"
         ]
       },
       {
         "id": 10,
         "process": "thread_state_delta_projection",
-        "description": "Runtime materializes the next thread_state from the prior state, user input, perturbation artifacts, and assistant response.",
+        "description": "Runtime materializes the next thread_state from the prior state, raw utterance, resolved target, perturbation artifacts, retrieval anchors, coverage limits, and assistant response.",
         "operational_boundaries": [
           "conversation_thread",
           "thread_state",
@@ -208,7 +244,8 @@
         ],
         "input": [
           "prior_thread_state",
-          "user_input",
+          "raw_user_utterance",
+          "resolved_referents",
           "perturbation_semantic_graph",
           "semantic_traversal_manifest",
           "retrieval_packet",
@@ -232,7 +269,10 @@
           "parent_perturbation_hash",
           "prior_thread_state_hash",
           "user_input_hash",
-          "perturbation_artifact_hashes",
+          "semantic_context_packet_hash",
+          "semantic_traversal_manifest_hash",
+          "retrieval_packet_hash",
+          "coverage_report_hash",
           "assistant_response_hash",
           "state_delta_hash",
           "next_thread_state_hash"
@@ -246,7 +286,7 @@
       {
         "id": 12,
         "process": "synthetic_node_promotion",
-        "description": "Selected synthesis output may be intentionally promoted back into latent_space.",
+        "description": "Selected synthesis output may be intentionally promoted back into latent_space with provenance back to the originating thread, retrieval packet, traversal manifest, and state perturbation.",
         "operational_boundaries": [
           "conversation_thread",
           "latent_space"
@@ -272,19 +312,23 @@
       }
     ],
     "runtime_invariants": {
-      "semantic_extraction_required": {
-        "description": "A normal state_perturbation runtime must perform semantic_context_extraction before latent_space_activation.",
+      "semantic_target_resolution_required": {
+        "description": "A normal state_perturbation runtime must resolve the utterance semantic target in thread context before latent_space_activation.",
         "rules": [
-          "semantic_context_extraction is not optional in the normal runtime route.",
-          "semantic_context_extraction must produce a parsed semantic_context_packet containing perturbation_semantic_graph and semantic_coverage_target before retrieval can be approved for synthesis.",
-          "If semantic_context_extraction is unavailable, invalid, disabled, or fixture-backed, the normal runtime route must fail closed or emit a blocked diagnostic artifact; it must not emit decision=approved or any soft-success coverage label."
+          "semantic_target_resolution is not optional in the normal runtime route.",
+          "The runtime must preserve raw_user_utterance before interpretation.",
+          "Isolated parsing may be produced as a diagnostic contrast lens, but it is not the authoritative semantic target for context-dependent turns.",
+          "If an utterance depends on prior context through pronouns, deixis, ellipsis, or omitted referents, semantic_target_resolution must produce resolved_referents or block before synthesis.",
+          "semantic_context_packet must contain perturbation_semantic_graph and semantic_coverage_target before retrieval can be approved for synthesis.",
+          "semantic_coverage_target must preserve required resolved_referents when the utterance depends on them.",
+          "If semantic_target_resolution is unavailable, invalid, disabled, fixture-backed, or missing required outputs, the normal runtime route must fail closed or emit a blocked diagnostic artifact; it must not emit decision=approved or any soft-success coverage label."
         ]
       },
       "no_runtime_stubs_for_integral_operations": {
         "description": "Integral runtime operations cannot be replaced by stubs in the normal runtime route.",
         "rules": [
           "Stub or fixture implementations may exist only inside tests or diagnostic probes.",
-          "Fixture-backed semantic extraction cannot count as evidence that semantic_context_extraction works.",
+          "Fixture-backed semantic extraction cannot count as evidence that semantic_target_resolution works.",
           "Fixture-backed semantic extraction cannot produce a thesis-valid state_perturbation."
         ]
       },
@@ -293,19 +337,59 @@
         "rules": [
           "The CLI must not expose lexical retrieval as an alternate runtime route.",
           "Lexical retrieval may be tested as an isolated component, but isolated lexical success does not constitute semantic traversal success.",
-          "The traversal manifest must record which activation surfaces were attempted, which were unavailable, and how missing surfaces limit coverage."
+          "The traversal manifest must record which activation surfaces were attempted, which were unavailable, and how missing surfaces limit coverage.",
+          "Required activation surfaces may shape traversal selection, but surface quota satisfaction cannot by itself prove semantic target coverage."
+        ]
+      },
+      "retrieval_materializes_traversal": {
+        "description": "Retrieval is a materialization step downstream of semantic target resolution and traversal; it is not the primary control object.",
+        "rules": [
+          "The control object for a turn is the resolved semantic target plus semantic_traversal_manifest, not the retrieved chunk list alone.",
+          "retrieval_packet may be assembled only from a semantic_traversal_manifest.",
+          "retrieval_packet must preserve enough provenance to explain why each selected chunk was retrieved, including contributing surfaces, selected terms or relations when available, source paths, and graph context when available.",
+          "Hybrid lexical/vector retrieval is an activation and evidence surface, not a replacement for semantic traversal."
+        ]
+      },
+      "coverage_audit_must_be_anchored": {
+        "description": "Coverage approval must audit whether retrieved evidence satisfies the resolved semantic target, not merely whether generic target words appear in retrieved text.",
+        "rules": [
+          "approved_retrieval_packet may be emitted only after coverage_audit against semantic_coverage_target.",
+          "For follow-up turns with resolved_referents, coverage_audit must verify that required referents are preserved in semantic_coverage_target or supporting evidence.",
+          "Generic affect, feeling, relation, or context terms must not approve coverage when they are detached from a required resolved referent.",
+          "Coverage may record deterministic lexical or metadata evidence as a limit, but this does not claim full semantic entailment."
         ]
       },
       "fail_closed_before_synthesis": {
         "description": "The runtime must not synthesize from a retrieval packet that was produced without satisfying required upstream semantic operations.",
         "rules": [
-          "retrieval_packet may be assembled only from a semantic_traversal_manifest.",
-          "approved_retrieval_packet may be emitted only after retrieval_coverage_evaluation against semantic_coverage_target.",
-          "If required upstream operations fail, synthesis_context_packet must either omit approved_retrieval_packet or mark the turn blocked before LLM synthesis."
+          "approved_retrieval_packet may be emitted only after coverage_audit approves retrieval against semantic_coverage_target.",
+          "If required upstream operations fail, synthesis_context_packet must either omit approved_retrieval_packet or mark the turn blocked before LLM synthesis.",
+          "The frontier model must not be used to retroactively repair failed coverage or missing semantic target resolution inside the normal runtime route."
         ]
       }
     },
     "operational_boundaries": {
+      "semantic_context_compiler": {
+        "description": "Local runtime boundary that compiles conversational utterances and latent-space evidence into a synthesis_context_packet for a fresh frontier-model call. It is not the conversational persona and not a classic autonomous agent; it is the pre-synthesis context compiler.",
+        "components": [
+          "semantic_target_resolution",
+          "latent_space_activation",
+          "semantic_traversal",
+          "retrieval_packet_assembly",
+          "coverage_audit",
+          "synthesis_context_assembly"
+        ],
+        "input": [
+          "raw_user_utterance",
+          "prior_thread_state",
+          "latent_space"
+        ],
+        "output": [
+          "synthesis_context_packet",
+          "coverage_report",
+          "semantic_traversal_manifest"
+        ]
+      },
       "latent_space": {
         "description": "Present, potential, inactive data_representations available for activation into active_state",
         "components": {
@@ -443,11 +527,12 @@
         ]
       },
       "user_input": {
-        "description": "The user message or request that provides immediate, contextually semantic pressure triggering a state_perturbation",
+        "description": "The user utterance or request that provides immediate conversational and semantic pressure triggering a state_perturbation. The utterance may be incomplete outside thread context.",
         "components": [
           "UI surface for text entry",
           "raw user text",
-          "semantic_context_extraction",
+          "utterance type",
+          "semantic_target_resolution",
           "semantic_context_benchmark"
         ],
         "input": [
@@ -456,7 +541,8 @@
         "output": [
           "pending user_input event",
           "candidate semantic units",
-          "initial perturbation pressure"
+          "initial perturbation pressure",
+          "candidate discourse referents"
         ]
       },
       "conversation_thread": {
@@ -518,6 +604,8 @@
         "description": "Current materialized projection of the thread_ledger used to hydrate the next fresh LLM call",
         "components": [
           "active concepts",
+          "active discourse referents",
+          "recent resolved referents",
           "recent semantic trajectory",
           "current user goals",
           "open questions",
@@ -536,21 +624,22 @@
         ],
         "output": [
           "prior_thread_state for next state_perturbation",
-          "contextual_salt for semantic_context_extraction",
+          "contextual_salt for semantic_target_resolution",
+          "referent candidates for follow-up utterances",
           "state continuity for synthesis_context_assembly"
         ]
       },
       "state_perturbation": {
         "description": "One turn transition from prior_thread_state to next_thread_state, triggered by user_input",
         "components": [
-          "semantic_context_extraction",
+          "semantic_target_resolution",
           "semantic_context_benchmark",
           "latent_space_activation",
           "semantic_traversal",
           "retrieval_packet_assembly",
-          "retrieval_coverage_evaluation",
+          "coverage_audit",
           "synthesis_context_assembly",
-          "llm_call_boundary",
+          "frontier_model_synthesis_boundary",
           "thread_state_delta_projection",
           "append_thread_ledger_record",
           "synthetic_node_promotion"
@@ -571,18 +660,25 @@
         ]
       },
       "semantic_context_extraction": {
-        "description": "Operation that parses user_input in isolation, then hydrates it with prior_thread_state to project the semantic target for this perturbation",
+        "description": "Discourse-aware operation that resolves the semantic target of raw user_input in prior_thread_state. Isolated parsing is retained as diagnostic contrast, not as the authoritative target for context-dependent utterances.",
         "components": [
-          "extract_user_input_semantic_units",
+          "preserve_raw_utterance",
+          "detect_utterance_type",
+          "produce_isolated_contrast_parse",
+          "resolve_deixis_pronouns_and_omitted_referents",
           "extract_contextual_salt_from_prior_thread_state",
-          "form_edges_between_user_input_and_contextual_salt",
+          "form_edges_between_utterance_and_resolved_referents",
+          "project_resolved_semantic_target",
           "project_semantic_coverage_target"
         ],
         "input": [
-          "user_input",
+          "raw_user_utterance",
           "prior_thread_state"
         ],
         "output": [
+          "utterance_type",
+          "isolated_contrast_parse",
+          "resolved_referents",
           "perturbation_nodes",
           "contextual_salt_nodes",
           "perturbation_semantic_graph",
@@ -590,9 +686,10 @@
         ]
       },
       "semantic_context_benchmark": {
-        "description": "Coverage target that estimates which semantic region must be activated before retrieval and synthesis can proceed",
+        "description": "Coverage target that estimates which anchored semantic region must be activated before retrieval and synthesis can proceed.",
         "components": [
           "perturbation_semantic_graph",
+          "resolved_referents",
           "semantic_coverage_target",
           "candidate region requirements",
           "coverage threshold or heuristic",
@@ -601,8 +698,9 @@
         "input": [
           "perturbation_nodes",
           "contextual_salt_nodes",
+          "resolved_referents",
           "prior_thread_state",
-          "user_input"
+          "raw_user_utterance"
         ],
         "output": [
           "semantic_coverage_target",
@@ -611,7 +709,7 @@
         ]
       },
       "latent_space_activation": {
-        "description": "Operation that activates candidate regions of latent_space across available data_representations",
+        "description": "Operation that activates candidate regions of latent_space across available data_representations from the resolved semantic target.",
         "components": [
           "activate_vector_regions",
           "activate_lexical_matches",
@@ -622,6 +720,7 @@
         "input": [
           "perturbation_semantic_graph",
           "semantic_coverage_target",
+          "resolved_referents",
           "latent_space"
         ],
         "output": [
@@ -630,18 +729,21 @@
         ]
       },
       "semantic_traversal": {
-        "description": "Operation that expands activated semantic regions into candidate neighborhoods and organizes them into a traversal manifest",
+        "description": "Operation that traverses activated semantic regions into candidate neighborhoods and organizes them into a traversal manifest. The manifest records target pressure, candidate surfaces, relation/path/provenance expansion, ranking, and drift limits.",
         "components": [
           "neighbor_identification",
           "graph_edge_expansion",
           "metadata_projection",
+          "path_topology_projection",
           "candidate_ranking",
+          "required_surface_contribution_planning",
           "coverage_guided_expansion",
           "semantic_traversal_manifest_generation"
         ],
         "input": [
           "activated_semantic_regions",
           "semantic_coverage_target",
+          "resolved_referents",
           "latent_space"
         ],
         "output": [
@@ -649,13 +751,14 @@
         ]
       },
       "retrieval_packet_assembly": {
-        "description": "Operation that retrieves concrete content from latent_space using the semantic_traversal_manifest",
+        "description": "Operation that materializes concrete evidence and provenance from latent_space using the semantic_traversal_manifest.",
         "components": [
           "retrieve_chunk_text",
           "retrieve_note_metadata",
           "retrieve_graph_context",
           "retrieve_source_paths",
           "retrieve_raw_markdown_spans_if_required",
+          "retrieve_selection_provenance",
           "retrieve_synthetic_node_context"
         ],
         "input": [
@@ -667,15 +770,18 @@
         ]
       },
       "retrieval_coverage_evaluation": {
-        "description": "Operation that checks retrieved material against semantic_coverage_target before synthesis",
+        "description": "Coverage audit operation that checks retrieved material against the semantic_coverage_target and resolved referents before synthesis.",
         "components": [
           "evaluate_retrieval_sufficiency",
+          "verify_resolved_referent_preservation",
           "identify_missing_regions",
+          "identify_generic_match_false_approvals",
           "loop_to_traversal_if_required_and_budget_available",
           "record_coverage_limits"
         ],
         "input": [
           "semantic_coverage_target",
+          "resolved_referents",
           "semantic_traversal_manifest",
           "retrieval_packet"
         ],
@@ -686,11 +792,13 @@
         ]
       },
       "synthesis_context_assembly": {
-        "description": "Boundary where runtime packages the fresh LLM call context from thread continuity, semantic extraction, traversal, retrieval, and coverage artifacts",
+        "description": "Boundary where the local semantic context compiler packages the fresh frontier-model call context from thread continuity, resolved semantic target, traversal, evidence/provenance retrieval, and coverage artifacts.",
         "components": [
           "system instructions",
-          "current user_input",
+          "raw_user_utterance",
           "prior_thread_state",
+          "utterance_type",
+          "resolved_referents",
           "perturbation_semantic_graph",
           "semantic_coverage_target",
           "semantic_traversal_manifest",
@@ -712,7 +820,7 @@
         ]
       },
       "llm_call_boundary": {
-        "description": "Fresh LLM call boundary that receives synthesis_context_packet and produces the user-facing assistant response",
+        "description": "Fresh frontier-model call boundary that receives synthesis_context_packet and produces the user-facing assistant response.",
         "components": [
           "provider payload construction",
           "structured or semi-structured response instructions",
@@ -731,10 +839,11 @@
         ]
       },
       "thread_state_delta_projection": {
-        "description": "Final operation inside a state_perturbation that projects the completed turn artifacts into next_thread_state",
+        "description": "Final operation inside a state_perturbation that projects the completed turn artifacts into next_thread_state, including resolved referents and retrieval anchors for future follow-up turns.",
         "components": [
           "state_delta_generation",
           "active_concept_projection",
+          "resolved_referent_projection",
           "open_question_projection",
           "semantic_trajectory_projection",
           "retrieval_anchor_projection",
@@ -817,7 +926,7 @@
         ]
       },
       "coverage_report_contract": {
-        "description": "coverage_report is a gatekeeping artifact, not a progress report. It determines whether retrieved material satisfies the semantic_coverage_target strongly enough to enter synthesis.",
+        "description": "coverage_report is a gatekeeping audit artifact, not a progress report. It determines whether retrieved material satisfies the resolved semantic_coverage_target strongly enough to enter synthesis.",
         "allowed_decisions": [
           "approved",
           "blocked"
@@ -828,23 +937,74 @@
           "semantic_traversal_manifest_hash",
           "retrieval_packet_hash",
           "evaluated_activation_surfaces",
+          "resolved_referent_audit_when_applicable",
           "blocking_reasons",
           "limits"
         ],
         "rules": [
-          "decision=approved is allowed only when semantic_context_extraction, latent_space_activation, semantic_traversal, retrieval_packet_assembly, and retrieval_coverage_evaluation all completed according to the active project spec.",
-          "decision=blocked is required when semantic_context_extraction is disabled, unavailable, invalid, fixture-backed, or missing required outputs.",
+          "decision=approved is allowed only when semantic_target_resolution, latent_space_activation, semantic_traversal, retrieval_packet_assembly, and coverage_audit all completed according to the active project spec.",
+          "decision=blocked is required when semantic_target_resolution is disabled, unavailable, invalid, fixture-backed, or missing required outputs.",
+          "decision=blocked is required when a thread-dependent utterance has unresolved required referents.",
+          "decision=blocked is required when semantic_coverage_target omits required resolved referents for a context-dependent utterance.",
           "decision=blocked is required when retrieval was produced from lexical terms alone without a valid semantic_traversal_manifest generated from latent_space_activation.",
           "decision=blocked is required when required activation surfaces are absent or not implemented.",
           "approved_retrieval_packet may be emitted only when decision=approved.",
           "A blocked coverage_report may include diagnostic retrieval observations, but those observations must not be promoted into approved retrieval."
         ]
-      }      
+      },
+      "semantic_target_resolution": {
+        "description": "Primary 0.1.4 name for discourse-aware semantic context extraction: resolves the utterance semantic target before activation and traversal.",
+        "components": [
+          "preserve_raw_utterance",
+          "detect_utterance_type",
+          "produce_isolated_contrast_parse",
+          "resolve_deixis_pronouns_and_omitted_referents",
+          "extract_contextual_salt_from_prior_thread_state",
+          "form_edges_between_utterance_and_resolved_referents",
+          "project_resolved_semantic_target",
+          "project_semantic_coverage_target"
+        ],
+        "input": [
+          "raw_user_utterance",
+          "prior_thread_state"
+        ],
+        "output": [
+          "utterance_type",
+          "isolated_contrast_parse",
+          "resolved_referents",
+          "perturbation_nodes",
+          "contextual_salt_nodes",
+          "perturbation_semantic_graph",
+          "semantic_coverage_target"
+        ]
+      },
+      "coverage_audit": {
+        "description": "Primary 0.1.4 name for retrieval_coverage_evaluation: audits target-anchored coverage before synthesis.",
+        "components": [
+          "evaluate_retrieval_sufficiency",
+          "verify_resolved_referent_preservation",
+          "identify_missing_regions",
+          "identify_generic_match_false_approvals",
+          "loop_to_traversal_if_required_and_budget_available",
+          "record_coverage_limits"
+        ],
+        "input": [
+          "semantic_coverage_target",
+          "resolved_referents",
+          "semantic_traversal_manifest",
+          "retrieval_packet"
+        ],
+        "output": [
+          "coverage_report",
+          "approved_retrieval_packet",
+          "optional traversal_loop_request"
+        ]
+      }
     }
   },
   "artifacts": {
     "user_input_event": {
-      "description": "Recorded user_input submitted into a conversation_thread and used to trigger a state_perturbation",
+      "description": "Recorded raw_user_utterance submitted into a conversation_thread and used to trigger a state_perturbation.",
       "created_by": "user_input",
       "consumed_by": [
         "conversation_thread",
@@ -854,7 +1014,7 @@
       ]
     },
     "prior_thread_state": {
-      "description": "Current materialized thread_state loaded from the conversation_thread before the new state_perturbation begins",
+      "description": "Current materialized thread_state loaded from the conversation_thread before the new state_perturbation begins; provides contextual salt and referent candidates.",
       "created_by": "conversation_thread",
       "consumed_by": [
         "semantic_context_extraction",
@@ -872,27 +1032,28 @@
       ]
     },
     "semantic_context_packet": {
-      "description": "Structured packet produced from user_input and prior_thread_state, containing perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, and semantic_coverage_target",
-      "created_by": "semantic_context_extraction",
+      "description": "Structured packet produced from raw_user_utterance and prior_thread_state, containing utterance_type, isolated_contrast_parse when available, resolved_referents when required, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, and semantic_coverage_target.",
+      "created_by": "semantic_target_resolution",
       "consumed_by": [
         "semantic_context_benchmark",
         "latent_space_activation",
+        "semantic_traversal",
         "synthesis_context_assembly",
         "thread_state_delta_projection",
         "append_thread_ledger_record"
       ]
     },
     "perturbation_nodes": {
-      "description": "Semantic units extracted from user_input before and during contextual hydration",
-      "created_by": "semantic_context_extraction",
+      "description": "Semantic units extracted from raw_user_utterance during target resolution, with isolated extraction treated as diagnostic contrast where applicable.",
+      "created_by": "semantic_target_resolution",
       "consumed_by": [
         "semantic_context_benchmark",
         "latent_space_activation"
       ]
     },
     "contextual_salt_nodes": {
-      "description": "Relevant contextual nodes extracted from prior_thread_state to hydrate user_input interpretation",
-      "created_by": "semantic_context_extraction",
+      "description": "Relevant contextual nodes extracted from prior_thread_state to hydrate raw_user_utterance interpretation and referent resolution.",
+      "created_by": "semantic_target_resolution",
       "consumed_by": [
         "semantic_context_benchmark",
         "latent_space_activation",
@@ -900,8 +1061,8 @@
       ]
     },
     "perturbation_semantic_graph": {
-      "description": "Graph-like representation of perturbation_nodes, contextual_salt_nodes, and their relationships for the current state_perturbation",
-      "created_by": "semantic_context_extraction",
+      "description": "Graph-like representation of perturbation_nodes, contextual_salt_nodes, resolved_referents, and their relationships for the current state_perturbation.",
+      "created_by": "semantic_target_resolution",
       "consumed_by": [
         "semantic_context_benchmark",
         "latent_space_activation",
@@ -910,24 +1071,24 @@
       ]
     },
     "semantic_coverage_target": {
-      "description": "Target describing what semantic region must be sufficiently activated and retrieved before synthesis proceeds",
-      "created_by": "semantic_context_benchmark",
+      "description": "Target describing what anchored semantic region must be sufficiently activated and retrieved before synthesis proceeds; must preserve resolved referents for context-dependent utterances.",
+      "created_by": "semantic_target_resolution",
       "consumed_by": [
         "latent_space_activation",
         "semantic_traversal",
-        "retrieval_coverage_evaluation",
+        "coverage_audit",
         "synthesis_context_assembly"
       ]
     },
     "activated_semantic_regions": {
-      "description": "Candidate attractor regions activated from latent_space across vector, lexical, graph, primary_corpus, and synthetic_node representations",
+      "description": "Candidate attractor regions activated from latent_space across vector, lexical, graph, primary_corpus, and synthetic_node representations using the resolved semantic target.",
       "created_by": "latent_space_activation",
       "consumed_by": [
         "semantic_traversal"
       ]
     },
     "semantic_traversal_manifest": {
-      "description": "Manifest of activated regions, candidate neighbors, graph expansions, metadata projections, rankings, and retrieval targets",
+      "description": "Manifest of target pressure, activated regions, candidate neighbors, graph expansions, metadata/path projections, rankings, required surface contribution planning, selection provenance, and retrieval targets.",
       "created_by": "semantic_traversal",
       "consumed_by": [
         "retrieval_packet_assembly",
@@ -939,7 +1100,7 @@
       ]
     },
     "retrieval_packet": {
-      "description": "Concrete retrieved material selected from latent_space for the current state_perturbation",
+      "description": "Concrete evidence and provenance selected from latent_space for the current state_perturbation according to the semantic_traversal_manifest.",
       "created_by": "retrieval_packet_assembly",
       "consumed_by": [
         "retrieval_coverage_evaluation",
@@ -950,8 +1111,8 @@
       ]
     },
     "coverage_report": {
-      "description": "Evaluation artifact stating retrieval sufficiency, missing regions, traversal loop decisions, and coverage limits for the current perturbation",
-      "created_by": "retrieval_coverage_evaluation",
+      "description": "Coverage audit artifact stating whether retrieval satisfies the anchored semantic_coverage_target, including missing regions, referent preservation status, false-approval risks, traversal loop decisions, and coverage limits.",
+      "created_by": "coverage_audit",
       "consumed_by": [
         "synthesis_context_assembly",
         "thread_state_delta_projection",
@@ -959,8 +1120,8 @@
       ]
     },
     "approved_retrieval_packet": {
-      "description": "Retrieval packet approved for synthesis after coverage evaluation, possibly with explicit coverage limits",
-      "created_by": "retrieval_coverage_evaluation",
+      "description": "Retrieval packet approved for synthesis after target-anchored coverage audit, possibly with explicit coverage limits.",
+      "created_by": "coverage_audit",
       "consumed_by": [
         "synthesis_context_assembly"
       ]
@@ -973,15 +1134,15 @@
       ]
     },
     "synthesis_context_packet": {
-      "description": "Compiled context packet for the fresh LLM call, combining user_input, prior_thread_state, semantic context, traversal, retrieval, coverage, and output requirements",
+      "description": "Compiled context packet for the fresh frontier-model call, combining raw_user_utterance, prior_thread_state, resolved semantic target, traversal manifest, retrieval evidence/provenance, coverage audit, and output requirements.",
       "created_by": "synthesis_context_assembly",
       "consumed_by": [
         "llm_call_boundary"
       ]
     },
     "assistant_response": {
-      "description": "User-facing conversational response produced by the fresh LLM call from synthesis_context_packet",
-      "created_by": "llm_call_boundary",
+      "description": "User-facing conversational response produced by the fresh frontier-model call from synthesis_context_packet.",
+      "created_by": "frontier_model_synthesis_boundary",
       "consumed_by": [
         "conversation_thread",
         "thread_state_delta_projection",
@@ -997,8 +1158,8 @@
       ]
     },
     "raw_model_response": {
-      "description": "Raw provider response returned from the fresh LLM call",
-      "created_by": "llm_call_boundary",
+      "description": "Raw provider response returned from the fresh frontier-model call.",
+      "created_by": "frontier_model_synthesis_boundary",
       "consumed_by": [
         "append_thread_ledger_record",
         "debugging",
@@ -1006,8 +1167,8 @@
       ]
     },
     "llm_call_metadata": {
-      "description": "Metadata for the fresh LLM call, such as provider, model, timestamps, token usage, and response identifiers",
-      "created_by": "llm_call_boundary",
+      "description": "Metadata for the fresh frontier-model call, such as provider, model, timestamps, token usage, and response identifiers.",
+      "created_by": "frontier_model_synthesis_boundary",
       "consumed_by": [
         "append_thread_ledger_record",
         "debugging",
@@ -1127,11 +1288,23 @@
         "audit",
         "future provenance inspection"
       ]
+    },
+    "resolved_referents": {
+      "description": "Discourse referents resolved from prior_thread_state for context-dependent utterances, such as pronouns, deictic terms, ellipses, or omitted subjects.",
+      "created_by": "semantic_target_resolution",
+      "consumed_by": [
+        "semantic_context_benchmark",
+        "latent_space_activation",
+        "semantic_traversal",
+        "coverage_audit",
+        "synthesis_context_assembly",
+        "thread_state_delta_projection"
+      ]
     }
   },
   "execution_surfaces": {
     "normal_runtime_cli": {
-      "description": "Runs the thesis-faithful conversational state_perturbation route.",
+      "description": "Runs the thesis-faithful conversational route by invoking the local semantic context compiler before frontier-model synthesis.",
       "allowed_user_controls": [
         "message",
         "thread_id",
@@ -1144,7 +1317,9 @@
         "semantic_extractor_mode",
         "lexical_only_retrieval",
         "disabled_semantic_extraction",
-        "stub_semantic_extraction"
+        "stub_semantic_extraction",
+        "skip_semantic_target_resolution",
+        "skip_coverage_audit"
       ]
     },
     "diagnostic_probe_runner": {
@@ -1154,7 +1329,9 @@
         "lexical index tests",
         "artifact hashing tests",
         "thread ledger tests",
-        "semantic extraction contract tests"
+        "semantic target resolution contract tests",
+        "semantic extraction contract tests",
+        "referent preservation tests"
       ],
       "limits": [
         "Diagnostic probes must not be described as successful runtime turns.",
@@ -1178,26 +1355,33 @@
       "summary": "Conversational loop, thread_state, thread_ledger, and basic persistence are operational."
     },
     "active_build_target": {
-      "id": "full_thesis_runtime_target",
+      "id": "discourse_aware_semantic_context_compiler_target",
       "status": "active",
       "minimum_admissible_runtime": [
-        "semantic_context_extraction using a configured non-fixture backend",
-        "semantic_context_benchmark emission",
-        "latent_space_activation over lexical, vector, and graph surfaces when available",
-        "semantic_traversal_manifest assembled from activation results",
-        "retrieval_packet assembled from traversal manifest",
-        "coverage_report evaluated against semantic_coverage_target",
-        "synthesis_context_packet assembled only after coverage evaluation",
+        "semantic_target_resolution using a configured non-fixture backend",
+        "raw_user_utterance preservation before interpretation",
+        "isolated_contrast_parse treated as diagnostic rather than authoritative for context-dependent turns",
+        "resolved_referents emitted for pronouns, deixis, ellipsis, or omitted subjects when required",
+        "semantic_coverage_target emission anchored to resolved_referents when applicable",
+        "latent_space_activation over lexical, vector, graph, and primary_corpus surfaces when available",
+        "semantic_traversal_manifest assembled from activation results with traversal and selection provenance",
+        "retrieval_packet assembled from traversal manifest with evidence and provenance",
+        "coverage_report audited against semantic_coverage_target and resolved_referents",
+        "synthesis_context_packet assembled only after coverage audit",
+        "fresh frontier-model synthesis from synthesis_context_packet",
         "hash-chained state_perturbation ledger record"
       ],
       "blocked_conditions": [
-        "semantic extractor unavailable",
-        "semantic extractor disabled",
-        "semantic extractor fixture-backed",
+        "semantic target resolver unavailable",
+        "semantic target resolver disabled",
+        "semantic target resolver fixture-backed",
         "semantic extraction invalid_json",
         "semantic_coverage_target missing",
+        "context-dependent utterance has unresolved required referent",
+        "semantic_coverage_target omits required resolved referent",
+        "coverage approved by generic affect/context terms detached from the resolved referent",
         "retrieval attempted without traversal manifest",
-        "coverage marked approved without required semantic extraction"
+        "coverage marked approved without required semantic target resolution"
       ]
     },
     "staged_surface_policy": {
@@ -1209,27 +1393,46 @@
       ]
     },
     "deferred_questions": [
-      "exact coverage_benchmark math",
+      "exact semantic coverage calculus/math",
       "promotion criteria for synthetic_nodes",
       "long-term thread_state compression",
-      "multi-thread state interaction"
-    ]
+      "multi-thread state interaction",
+      "full discourse-coreference model beyond near-thread referents",
+      "coverage-guided traversal loops beyond first-pass audit"
+    ],
+    "observed_live_milestone_0_1_4": {
+      "id": "first_live_semantic_context_compiler_smoke",
+      "status": "observed",
+      "summary": "Live local extraction, traversal, retrieval, coverage approval, frontier synthesis, thread continuation, state persistence, and ledger emission completed. The milestone exposed semantic drift rather than runtime bootstrap failure: follow-up extraction can lose discourse referents, traversal can over-activate generic semantic basins, and deterministic coverage can approve under-anchored targets."
+    },
+    "next_required_evaluation_harness": {
+      "description": "Small adversarial semantic evaluation set used to prevent extraction, traversal, and coverage tuning from regressing discourse-aware behavior.",
+      "minimum_cases": [
+        "follow-up pronoun preserves prior turn subject",
+        "generic feeling query remains anchored to resolved referent",
+        "lexical overlap alone cannot approve under-anchored coverage",
+        "graph and primary corpus surface contributions preserve topicality",
+        "frontier synthesis reports weak evidence when coverage limits are weak"
+      ]
+    }
   },
   "runtime_validity_policy": {
-    "description": "Normal runtime execution is binary: a state_perturbation either satisfies the project runtime contract and may proceed to synthesis, or it is blocked. Component-level success does not imply runtime validity.",
+    "description": "Normal runtime execution is binary: a state_perturbation either satisfies the project runtime contract and may proceed to frontier-model synthesis, or it is blocked. Component-level success does not imply runtime validity, and coverage approval does not by itself prove semantic correctness beyond recorded limits.",
     "valid_runtime_outcomes": [
       "completed",
       "blocked"
     ],
     "rules": [
       "A normal state_perturbation must execute the required runtime processes in project_spec order.",
-      "semantic_context_extraction is required before latent_space_activation.",
+      "semantic_target_resolution is required before latent_space_activation.",
+      "For context-dependent utterances, semantic_target_resolution must preserve required resolved_referents before latent_space_activation.",
       "latent_space_activation is required before semantic_traversal.",
       "semantic_traversal is required before retrieval_packet_assembly.",
-      "retrieval_coverage_evaluation is required before approved_retrieval_packet may be emitted.",
-      "synthesis_context_assembly must not receive an approved_retrieval_packet unless retrieval_coverage_evaluation has approved it against semantic_coverage_target.",
-      "If any required runtime process is unavailable, disabled, fixture-backed, invalid, missing required outputs, or not implemented, the normal runtime outcome is blocked.",
-      "Blocked runtime execution must preserve diagnostic artifacts where available, but those artifacts must not be described as successful traversal, successful coverage, or approved retrieval."
+      "coverage_audit is required before approved_retrieval_packet may be emitted.",
+      "synthesis_context_assembly must not receive an approved_retrieval_packet unless coverage_audit has approved it against semantic_coverage_target and applicable resolved_referents.",
+      "If any required runtime process is unavailable, disabled, fixture-backed, invalid, missing required outputs, missing required referents, or not implemented, the normal runtime outcome is blocked.",
+      "Blocked runtime execution must preserve diagnostic artifacts where available, but those artifacts must not be described as successful traversal, successful coverage, or approved retrieval.",
+      "Completed runtime execution means the runtime contract was satisfied; it does not assert that the answer is semantically correct beyond the recorded coverage limits."
     ],
     "forbidden_runtime_status_vocabulary": {
       "description": "The project spec rejects soft success language for required runtime processes. Status labels must not imply that incomplete execution is an acceptable runtime state.",
@@ -1248,9 +1451,9 @@
         "Lexical retrieval success is a component observation, not a runtime success condition.",
         "Fixture-backed or stubbed execution is a component-test condition, not runtime evidence.",
         "Disabled semantic extraction is a blocked runtime condition, not an alternate runtime mode.",
-        "Missing vector activation, graph activation, semantic traversal, semantic coverage evaluation, or required retrieval surfaces must block runtime completion unless the active project spec explicitly narrows the target before implementation begins.",
+        "Missing semantic target resolution, missing required referents, missing vector activation, graph activation, semantic traversal, semantic coverage audit, or required retrieval surfaces must block runtime completion unless the active project spec explicitly narrows the target before implementation begins.",
         "Runtime artifacts may record diagnostic reasons for blockage, but diagnostic survival is not runtime success."
       ]
-    }    
+    }
   }
 }
