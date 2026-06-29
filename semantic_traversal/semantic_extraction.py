@@ -42,6 +42,34 @@ EXTRACTION_STOP_WORDS = {
     "you",
     "your",
 }
+
+FOLLOWUP_SURFACE_FORMS = (
+    "it",
+    "that",
+    "this",
+    "those",
+    "they",
+    "them",
+)
+
+FOLLOWUP_PHRASE_PATTERNS = (
+    (re.compile(r"\bhow\s+(?:it|that|this|those|they|them)\b", re.IGNORECASE), "how it"),
+    (re.compile(r"\bwhat\s+about\s+(?:that|it|this|those|them|they)\b", re.IGNORECASE), "what about that"),
+    (re.compile(r"\bsame\s+thing\b", re.IGNORECASE), "same thing"),
+    (re.compile(r"\bthat\s+makes\s+me\b", re.IGNORECASE), "that makes me"),
+    (re.compile(r"\bhow\s+that\s+makes\s+me\s+feel\b", re.IGNORECASE), "how that makes me feel"),
+    (re.compile(r"\bhow\s+it\s+makes\s+me\s+feel\b", re.IGNORECASE), "how it makes me feel"),
+)
+
+REFERENT_EXTRACTION_PATTERNS = (
+    re.compile(
+        r"\b(?:about|regarding|around|concerning|on|for|with|toward|towards|linked to|related to)\s+(.+?)(?:[?.!,]|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:think|feel|wonder|care|ask)\s+about\s+(.+?)(?:[?.!,]|$)", re.IGNORECASE),
+)
+
+
 @dataclass(frozen=True)
 class SemanticExtractionResponse:
     parsed_payload: dict[str, Any] | None
@@ -81,6 +109,154 @@ def _default_limitations() -> list[str]:
     ]
 
 
+def _default_contextual_coverage_fields() -> dict[str, Any]:
+    return {
+        "must_preserve": [],
+        "should_include": [],
+        "avoid_satisfying_with": [],
+        "query_text": "",
+        "allow_no_retrieval_needed": False,
+    }
+
+
+def _default_activation_hints() -> dict[str, Any]:
+    return {
+        "lexical_terms": [],
+        "phrases": [],
+        "conceptual_neighbors": [],
+        "relation_hints": [],
+        "temporal_hints": [],
+        "entity_hints": [],
+    }
+
+
+def _semantic_extraction_schema(mode: str) -> dict[str, Any]:
+    if mode == "isolated":
+        return {
+            "type": "object",
+            "additionalProperties": True,
+            "required": [
+                "raw_user_input",
+                "probable_user_intent",
+                "candidate_targets",
+                "candidate_relations",
+                "question_shape",
+                "explicit_user_constraints",
+                "implicit_needs_or_pressures",
+                "terms_or_phrases_not_to_discard",
+                "ambiguities",
+                "extraction_confidence",
+                "limitations",
+            ],
+            "properties": {
+                "raw_user_input": {"type": "string"},
+                "probable_user_intent": {"type": "string"},
+                "candidate_targets": {"type": "array", "items": {"type": "string"}},
+                "candidate_relations": {"type": "array", "items": {"type": "string"}},
+                "question_shape": {"type": ["string", "null"]},
+                "explicit_user_constraints": {"type": "array", "items": {"type": "string"}},
+                "implicit_needs_or_pressures": {"type": "array", "items": {"type": "string"}},
+                "terms_or_phrases_not_to_discard": {"type": "array", "items": {"type": "string"}},
+                "ambiguities": {"type": "array", "items": {"type": "string"}},
+                "extraction_confidence": {"type": "string"},
+                "limitations": {"type": "array", "items": {"type": "string"}},
+            },
+        }
+    return {
+        "type": "object",
+        "additionalProperties": True,
+        "required": [
+            "raw_user_input",
+            "contextual_user_intent",
+            "thread_relevant_context",
+            "semantic_pressure",
+            "resolved_referents",
+            "perturbation_nodes",
+            "contextual_salt_nodes",
+            "perturbation_semantic_graph",
+            "semantic_coverage_target",
+            "activation_hints",
+            "limitations",
+        ],
+        "properties": {
+            "raw_user_input": {"type": "string"},
+            "contextual_user_intent": {"type": "string"},
+            "thread_relevant_context": {"type": "array", "items": {"type": "string"}},
+            "semantic_pressure": {"type": ["string", "null"]},
+            "resolved_referents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "required": [
+                        "surface_form",
+                        "resolved_to",
+                        "source",
+                        "confidence",
+                        "required_for_target",
+                    ],
+                    "properties": {
+                        "surface_form": {"type": "string"},
+                        "resolved_to": {"type": "string"},
+                        "source": {"type": "string"},
+                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                        "required_for_target": {"type": "boolean"},
+                    },
+                },
+            },
+            "perturbation_nodes": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "contextual_salt_nodes": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "perturbation_semantic_graph": {"type": "object"},
+            "semantic_coverage_target": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": [
+                    "must_preserve",
+                    "should_include",
+                    "avoid_satisfying_with",
+                    "query_text",
+                    "allow_no_retrieval_needed",
+                ],
+                "properties": {
+                    "must_preserve": {"type": "array", "items": {"type": "string"}},
+                    "should_include": {"type": "array", "items": {"type": "string"}},
+                    "avoid_satisfying_with": {"type": "array", "items": {"type": "string"}},
+                    "query_text": {"type": "string"},
+                    "allow_no_retrieval_needed": {"type": "boolean"},
+                },
+            },
+            "activation_hints": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": [
+                    "lexical_terms",
+                    "phrases",
+                    "conceptual_neighbors",
+                    "relation_hints",
+                    "temporal_hints",
+                    "entity_hints",
+                ],
+                "properties": {
+                    "lexical_terms": {"type": "array", "items": {"type": "string"}},
+                    "phrases": {"type": "array", "items": {"type": "string"}},
+                    "conceptual_neighbors": {"type": "array", "items": {"type": "string"}},
+                    "relation_hints": {"type": "array", "items": {"type": "string"}},
+                    "temporal_hints": {"type": "array", "items": {"type": "string"}},
+                    "entity_hints": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            "followup_detection": {"type": ["object", "null"]},
+            "limitations": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
 def _isolated_json_skeleton() -> dict[str, Any]:
     return {
         "raw_user_input": "",
@@ -103,6 +279,15 @@ def _contextual_json_skeleton() -> dict[str, Any]:
         "contextual_user_intent": "",
         "thread_relevant_context": [],
         "semantic_pressure": None,
+        "resolved_referents": [
+            {
+                "surface_form": "",
+                "resolved_to": "",
+                "source": "",
+                "confidence": "low",
+                "required_for_target": False,
+            }
+        ],
         "perturbation_nodes": [{"id": "", "label": "", "kind": ""}],
         "contextual_salt_nodes": [{"id": "", "label": "", "kind": ""}],
         "perturbation_semantic_graph": {
@@ -124,6 +309,12 @@ def _contextual_json_skeleton() -> dict[str, Any]:
             "temporal_hints": [],
             "entity_hints": [],
         },
+        "followup_detection": {
+            "is_referential_followup": False,
+            "signals": [],
+            "surface_forms": [],
+            "requires_referent_resolution": False,
+        },
         "candidate_targets": [],
         "candidate_relations": [],
         "limitations": _default_limitations(),
@@ -134,23 +325,28 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
     mode = str(packet.get("mode") or "contextual").strip().lower()
     if mode == "isolated":
         skeleton = _isolated_json_skeleton()
+        schema = _semantic_extraction_schema("isolated")
         mode_instruction = (
             "This is isolated extraction. Return a JSON object that matches the isolated schema exactly. "
             "Do not include contextual-only fields. Keep every field type correct."
         )
     else:
         skeleton = _contextual_json_skeleton()
+        schema = _semantic_extraction_schema("contextual")
         mode_instruction = (
             "This is contextual extraction. Return a JSON object that matches the contextual schema exactly. "
             "semantic_coverage_target must be an object, activation_hints must be an object, "
             "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
-            "perturbation_semantic_graph must be an object with nodes and edges arrays."
+            "perturbation_semantic_graph must be an object with nodes and edges arrays. "
+            "resolved_referents must be an array of objects when follow-up resolution is required."
         )
     return (
         "Return JSON only.\n"
         f"{mode_instruction}\n"
         "Do not answer the user.\n"
         "Preserve the raw_user_input field exactly.\n"
+        "Use this JSON Schema with the Ollama `format` field when supported, and match the same shape in the response.\n"
+        f"{json.dumps(schema, ensure_ascii=True, indent=2)}\n"
         "Use this exact JSON skeleton as the target shape:\n"
         f"{json.dumps(skeleton, ensure_ascii=True, indent=2)}\n"
         "Packet:\n"
@@ -179,6 +375,103 @@ def _normalize_raw_user_input(
             "raw_user_input_repaired": raw_user_input_repaired,
         }
     }
+
+
+def _clean_referent_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    cleaned = cleaned.strip(" \t\r\n\"'`")
+    cleaned = re.sub(r"^(?:the|a|an|this|that|these|those)\s+", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" \t\r\n\"'`")
+
+
+def _recent_user_messages(prior_thread_state: dict[str, Any]) -> list[str]:
+    recent_messages = []
+    for message in list(prior_thread_state.get("recent_messages") or []):
+        if isinstance(message, dict) and str(message.get("role") or "").lower() == "user":
+            content = str(message.get("content") or "").strip()
+            if content:
+                recent_messages.append(content)
+    return recent_messages
+
+
+def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, Any]) -> dict[str, Any]:
+    lowered = raw_user_input.lower()
+    signals: list[str] = []
+    surface_forms: list[str] = []
+    has_recent_context = bool(prior_thread_state.get("recent_messages") or prior_thread_state.get("recent_semantic_trajectory"))
+
+    for pattern, label in FOLLOWUP_PHRASE_PATTERNS:
+        if pattern.search(lowered):
+            signals.append(label)
+            surface_forms.append(label)
+
+    for surface_form in FOLLOWUP_SURFACE_FORMS:
+        if re.search(rf"\b{re.escape(surface_form)}\b", lowered):
+            surface_forms.append(surface_form)
+            if has_recent_context:
+                signals.append(f"deictic:{surface_form}")
+
+    question_token_count = len(extract_terms(raw_user_input))
+    if has_recent_context and "?" in raw_user_input and question_token_count <= 8:
+        signals.append("short_followup_question")
+
+    is_followup = bool(signals)
+    requires_resolution = is_followup and has_recent_context
+    return {
+        "is_referential_followup": is_followup,
+        "requires_referent_resolution": requires_resolution,
+        "signals": signals,
+        "surface_forms": list(dict.fromkeys(surface_forms)),
+    }
+
+
+def _extract_referent_candidate(text: str) -> str | None:
+    for pattern in REFERENT_EXTRACTION_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            candidate = _clean_referent_text(match.group(1))
+            if candidate:
+                return candidate
+    return None
+
+
+def _resolve_followup_referents(
+    *,
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+    followup_detection: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not followup_detection.get("requires_referent_resolution"):
+        return []
+
+    referent_candidates = _recent_user_messages(prior_thread_state)
+    resolved_to: str | None = None
+    source = "prior_thread_state.recent_messages"
+    for candidate_text in reversed(referent_candidates):
+        resolved_to = _extract_referent_candidate(candidate_text)
+        if resolved_to:
+            break
+    if not resolved_to:
+        for candidate_text in reversed(list(prior_thread_state.get("recent_semantic_trajectory") or [])):
+            if not isinstance(candidate_text, str):
+                continue
+            resolved_to = _extract_referent_candidate(candidate_text)
+            if resolved_to:
+                source = "prior_thread_state.recent_semantic_trajectory"
+                break
+    if not resolved_to:
+        return []
+
+    surface_form = followup_detection.get("surface_forms", [None])[0] or "it"
+    return [
+        {
+            "surface_form": str(surface_form),
+            "resolved_to": resolved_to,
+            "source": source,
+            "confidence": "high" if source == "prior_thread_state.recent_messages" else "medium",
+            "required_for_target": True,
+        }
+    ]
 
 
 class DisabledSemanticExtractorBackend:
@@ -283,9 +576,25 @@ class StubSemanticExtractorBackend:
         terms = extract_terms(raw_user_input)
         preserved_terms = list(isolated_payload.get("terms_or_phrases_not_to_discard") or [])[:5]
         recent_trajectory = list(prior_thread_state.get("recent_semantic_trajectory") or [])[-2:]
+        followup_detection = _detect_followup_signals(raw_user_input, prior_thread_state)
+        resolved_referents = _resolve_followup_referents(
+            raw_user_input=raw_user_input,
+            prior_thread_state=prior_thread_state,
+            followup_detection=followup_detection,
+        )
+        if resolved_referents:
+            must_preserve = [referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")]
+            should_include = [raw_user_input]
+            avoid_satisfying_with = ["feelings", "felt", "anxiety", "urgency", "context", "influence"]
+        else:
+            must_preserve = preserved_terms
+            should_include = list(isolated_payload.get("candidate_targets") or terms[:2])
+            avoid_satisfying_with = []
         return {
             "raw_user_input": raw_user_input,
             "contextual_user_intent": "stub contextual hydration of the isolated semantic extraction",
+            "followup_detection": followup_detection,
+            "resolved_referents": resolved_referents,
             "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms[:4]],
             "contextual_salt_nodes": [
                 {"id": f"context:{index}", "label": text, "kind": "recent_trajectory"}
@@ -299,9 +608,9 @@ class StubSemanticExtractorBackend:
                 "edges": [],
             },
             "semantic_coverage_target": {
-                "must_preserve": preserved_terms,
-                "should_include": list(isolated_payload.get("candidate_targets") or terms[:2]),
-                "avoid_satisfying_with": [],
+                "must_preserve": must_preserve,
+                "should_include": should_include,
+                "avoid_satisfying_with": avoid_satisfying_with,
                 "query_text": raw_user_input,
                 "allow_no_retrieval_needed": False,
             },
@@ -311,7 +620,7 @@ class StubSemanticExtractorBackend:
             "candidate_relations": list(isolated_payload.get("candidate_relations") or []),
             "activation_hints": {
                 "lexical_terms": terms[:4],
-                "phrases": [],
+                "phrases": [referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")] or [],
                 "conceptual_neighbors": [],
                 "relation_hints": list(isolated_payload.get("candidate_relations") or []),
                 "temporal_hints": [],
@@ -356,36 +665,71 @@ class OllamaSemanticExtractorBackend:
                 status="unavailable",
             )
         prompt = _build_ollama_prompt(packet=packet)
-        payload = {
+        schema = _semantic_extraction_schema(str(packet.get("mode") or "contextual").strip().lower())
+        base_payload = {
             "model": self._model,
             "prompt": prompt,
             "stream": False,
         }
+        structured_payload = dict(base_payload)
+        structured_payload["format"] = schema
         raw_response_text: str | None = None
-        try:
-            http_request = request.Request(
-                f"{self._base_url}/api/generate",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
-                envelope_text = response.read().decode("utf-8")
-            envelope = json.loads(envelope_text)
-            raw_response_text = str(envelope.get("response", ""))
-        except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-            return SemanticExtractionResponse(
-                parsed_payload=None,
-                raw_response=raw_response_text,
-                metadata={
-                    "backend_mode": self.mode_name,
-                    "base_url": self._base_url,
-                    "model": self._model,
-                    "error": str(exc),
-                },
-                diagnostics={},
-                status="unavailable",
-            )
+
+        def _post_generate(request_payload: dict[str, Any]) -> tuple[str | None, Exception | None]:
+            try:
+                http_request = request.Request(
+                    f"{self._base_url}/api/generate",
+                    data=json.dumps(request_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
+                    envelope_text = response.read().decode("utf-8")
+                envelope = json.loads(envelope_text)
+                return str(envelope.get("response", "")), None
+            except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+                return None, exc
+
+        raw_response_text, structured_error = _post_generate(structured_payload)
+        used_structured_output = True
+        fallback_used = False
+        if raw_response_text is None:
+            structured_retryable = isinstance(structured_error, error.HTTPError) and getattr(structured_error, "code", None) in {400, 404, 415}
+            if structured_retryable:
+                fallback_used = True
+                used_structured_output = False
+                raw_response_text, fallback_error = _post_generate(base_payload)
+                if raw_response_text is None:
+                    error_message = str(fallback_error or structured_error)
+                    return SemanticExtractionResponse(
+                        parsed_payload=None,
+                        raw_response=None,
+                        metadata={
+                            "backend_mode": self.mode_name,
+                            "base_url": self._base_url,
+                            "model": self._model,
+                            "structured_output_requested": True,
+                            "structured_output_fallback_used": True,
+                            "error": error_message,
+                        },
+                        diagnostics={},
+                        status="unavailable",
+                    )
+            else:
+                return SemanticExtractionResponse(
+                    parsed_payload=None,
+                    raw_response=None,
+                    metadata={
+                        "backend_mode": self.mode_name,
+                        "base_url": self._base_url,
+                        "model": self._model,
+                        "structured_output_requested": True,
+                        "structured_output_fallback_used": False,
+                        "error": str(structured_error),
+                    },
+                    diagnostics={},
+                    status="unavailable",
+                )
 
         try:
             parsed_payload = json.loads(raw_response_text or "")
@@ -416,6 +760,11 @@ class OllamaSemanticExtractorBackend:
             )
 
         normalized_payload, diagnostics = _normalize_raw_user_input(parsed_payload, str(packet.get("raw_user_input", "")))
+        diagnostics["structured_output"] = {
+            "requested": True,
+            "used": used_structured_output,
+            "fallback_used": fallback_used,
+        }
         return SemanticExtractionResponse(
             parsed_payload=normalized_payload,
             raw_response=raw_response_text,
@@ -423,6 +772,9 @@ class OllamaSemanticExtractorBackend:
                 "backend_mode": self.mode_name,
                 "base_url": self._base_url,
                 "model": self._model,
+                "structured_output_requested": True,
+                "structured_output_used": used_structured_output,
+                "structured_output_fallback_used": fallback_used,
             },
             diagnostics=diagnostics,
             status="parsed",

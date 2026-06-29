@@ -16,6 +16,8 @@ from .llm import LLMBackend
 from .semantic_extraction import (
     SemanticExtractionResponse,
     SemanticExtractorBackend,
+    _detect_followup_signals,
+    _resolve_followup_referents,
     extract_terms as extract_semantic_terms,
     resolve_semantic_extractor_backend,
 )
@@ -230,7 +232,29 @@ def _dict_or_empty(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _validate_semantic_context_payload(payload: dict[str, Any], *, raw_user_input: str) -> list[str]:
+def _normalize_semantic_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
+
+
+def _semantic_target_includes_anchor(semantic_coverage_target: Any, anchor: str) -> bool:
+    if not isinstance(semantic_coverage_target, dict):
+        return False
+    normalized_anchor = _normalize_semantic_text(anchor)
+    if not normalized_anchor:
+        return False
+    for candidate in list(semantic_coverage_target.get("must_preserve") or []):
+        candidate_text = _normalize_semantic_text(candidate)
+        if candidate_text and normalized_anchor in candidate_text:
+            return True
+    return False
+
+
+def _validate_semantic_context_payload(
+    payload: dict[str, Any],
+    *,
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+) -> list[str]:
     reasons: list[str] = []
     if payload.get("raw_user_input") != raw_user_input:
         reasons.append("semantic extraction did not preserve raw_user_input")
@@ -247,6 +271,37 @@ def _validate_semantic_context_payload(payload: dict[str, Any], *, raw_user_inpu
         if not isinstance(value, expected_type):
             actual_type = type(value).__name__ if value is not None else "missing"
             reasons.append(f"{field_name} expected {_expected_type_name(expected_type)}, got {actual_type}")
+
+    followup_detection = payload.get("followup_detection")
+    if followup_detection is not None and not isinstance(followup_detection, dict):
+        reasons.append(f"followup_detection expected dict, got {type(followup_detection).__name__}")
+
+    detected_followup = _detect_followup_signals(raw_user_input, prior_thread_state)
+    requires_resolution = bool(detected_followup.get("requires_referent_resolution"))
+    if requires_resolution:
+        resolved_referents = payload.get("resolved_referents")
+        if not isinstance(resolved_referents, list):
+            actual_type = type(resolved_referents).__name__ if resolved_referents is not None else "missing"
+            reasons.append(f"resolved_referents expected list, got {actual_type}")
+            reasons.append("follow-up semantic target missing resolved referent")
+            return reasons
+        if not resolved_referents:
+            reasons.append("follow-up semantic target missing resolved referent")
+        for index, resolved_referent in enumerate(resolved_referents):
+            if not isinstance(resolved_referent, dict):
+                reasons.append(f"resolved_referents[{index}] expected dict, got {type(resolved_referent).__name__}")
+                continue
+            for field_name in ("surface_form", "resolved_to", "source", "confidence", "required_for_target"):
+                if field_name not in resolved_referent:
+                    reasons.append(f"resolved_referents[{index}] missing {field_name}")
+            if resolved_referent.get("required_for_target") is True:
+                resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
+                if not resolved_to:
+                    reasons.append(f"resolved_referents[{index}] required_for_target=true but resolved_to is empty")
+                    reasons.append("follow-up semantic target missing resolved referent")
+                    continue
+                if not _semantic_target_includes_anchor(payload.get("semantic_coverage_target"), resolved_to):
+                    reasons.append(f"semantic_coverage_target must_preserve does not include required resolved referent: {resolved_to}")
     return reasons
 
 
@@ -571,9 +626,16 @@ def _build_semantic_context_packet(
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
     )
-    contract_reasons = _validate_semantic_context_payload(semantic_payload, raw_user_input=user_input) if semantic_payload else [
+    contract_reasons = _validate_semantic_context_payload(
+        semantic_payload,
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+    ) if semantic_payload else [
         "semantic extraction parsed but failed contract validation",
     ]
+    followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    resolved_referents = _list_or_empty(semantic_payload.get("resolved_referents"))
+    referential_followup_detection = _dict_or_empty(semantic_payload.get("followup_detection")) or followup_detection
     retrieval_preparation = _build_retrieval_preparation(
         user_input=user_input,
         isolated_packet=semantic_extraction.isolated_packet,
@@ -585,6 +647,8 @@ def _build_semantic_context_packet(
         "turn_id": turn_id,
         "user_input": user_input,
         "raw_user_input": user_input,
+        "resolved_referents": resolved_referents,
+        "referential_followup_detection": referential_followup_detection,
         "perturbation_nodes": _list_or_empty(semantic_payload.get("perturbation_nodes")),
         "contextual_salt_nodes": _list_or_empty(semantic_payload.get("contextual_salt_nodes")),
         "perturbation_semantic_graph": _dict_or_empty(semantic_payload.get("perturbation_semantic_graph")),
@@ -1598,6 +1662,23 @@ def _evaluate_retrieval_coverage(
     if not contract_validation.get("valid"):
         reasons.extend(list(contract_validation.get("reasons") or []))
         reasons.append("semantic extraction parsed but failed contract validation")
+
+    referential_followup_detection = dict(semantic_context_packet.get("referential_followup_detection") or {})
+    if referential_followup_detection.get("requires_referent_resolution"):
+        resolved_referents = list(semantic_context_packet.get("resolved_referents") or [])
+        required_anchors = [
+            str(referent.get("resolved_to") or "").strip()
+            for referent in resolved_referents
+            if isinstance(referent, dict) and referent.get("required_for_target") is True
+        ]
+        if not required_anchors:
+            reasons.append("follow-up semantic target missing resolved referent")
+        else:
+            for resolved_anchor in required_anchors:
+                if not _semantic_target_includes_anchor(semantic_context_packet.get("semantic_coverage_target"), resolved_anchor):
+                    reasons.append(
+                        f"semantic_coverage_target must_preserve does not include required resolved referent: {resolved_anchor}"
+                    )
 
     surface_statuses = {
         str(surface["surface"]): str(surface["status"])
