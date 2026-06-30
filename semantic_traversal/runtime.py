@@ -912,7 +912,7 @@ def _repair_semantic_coverage_target_anchors(
         "reason": "",
     }
     if not isinstance(semantic_coverage_target, dict):
-        diagnostics["reason"] = "semantic_coverage_target missing or invalid"
+        diagnostics["reason"] = "legacy semantic coverage target missing or invalid"
         return semantic_coverage_target, diagnostics, []
 
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
@@ -1892,7 +1892,7 @@ def _build_semantic_context_packet(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
     ) if legacy_semantic_payload else [
-        "semantic extraction parsed but failed contract validation",
+        "legacy semantic payload failed validation",
     ]
     legacy_warnings: list[str] = []
     for reason in legacy_contract_reasons + referent_validation_reasons + adequacy_reasons:
@@ -2843,7 +2843,7 @@ def _build_semantic_traversal_manifest(
     }
     manifest_validity_reasons: list[str] = []
     if not semantic_context_packet.get("semantic_contract_validation", {}).get("valid"):
-        manifest_validity_reasons.append("semantic extraction parsed but failed contract validation")
+        manifest_validity_reasons.append("semantic compiler packet failed validation")
     if semantic_context_packet.get("perturbation_semantic_graph") is None:
         manifest_validity_reasons.append("perturbation_semantic_graph missing")
     if not isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict):
@@ -2853,11 +2853,6 @@ def _build_semantic_traversal_manifest(
     manifest = {
         "thread_id": semantic_context_packet["thread_id"],
         "turn_id": semantic_context_packet["turn_id"],
-        "semantic_coverage_target_hash": (
-            sha256_json(semantic_context_packet["semantic_compiler_packet"])
-            if isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict)
-            else None
-        ),
         "semantic_compiler_packet_hash": (
             sha256_json(semantic_context_packet["semantic_compiler_packet"])
             if isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict)
@@ -3023,13 +3018,13 @@ def _evaluate_retrieval_coverage(
     reasons: list[str] = []
 
     if backend_mode in {"disabled", "stub", "unavailable"}:
-        reasons.append(f"semantic_context_extraction backend `{backend_mode}` is not valid for the normal runtime")
+        reasons.append(f"semantic compiler backend `{backend_mode}` is not valid for the normal runtime")
     if contextual_status != "parsed":
         reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
     contract_validation = dict(semantic_context_packet.get("semantic_contract_validation") or {})
     if not contract_validation.get("valid"):
         reasons.extend(list(contract_validation.get("reasons") or []))
-        reasons.append("semantic extraction parsed but failed contract validation")
+        reasons.append("semantic compiler packet failed validation")
 
     surface_statuses = {
         str(surface["surface"]): str(surface["status"])
@@ -3070,14 +3065,7 @@ def _evaluate_retrieval_coverage(
         config=config,
     )
     if not semantic_target_coverage["target_present"] or not semantic_target_coverage["target_valid"]:
-        reasons.append("semantic_compiler_packet missing or invalid")
-        legacy_target = _evaluate_semantic_target_coverage(
-            semantic_context_packet=semantic_context_packet,
-            semantic_traversal_manifest=semantic_traversal_manifest,
-            retrieval_packet=retrieval_packet,
-        )
-        if not legacy_target.get("target_valid"):
-            reasons.append("semantic_coverage_target missing or invalid")
+        reasons.append("semantic compiler packet failed validation")
     for gap in list(semantic_target_coverage.get("blocking_gaps") or []):
         reasons.append(gap)
     if semantic_target_coverage.get("avoid_violations"):
@@ -3096,7 +3084,7 @@ def _evaluate_retrieval_coverage(
     referent_resolution_diagnostics = dict(semantic_context_packet.get("referent_resolution_diagnostics") or {})
     return {
         "decision": decision,
-        "semantic_coverage_target_hash": sha256_json(semantic_compiler_packet) if isinstance(semantic_compiler_packet, dict) else None,
+        "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet) if isinstance(semantic_compiler_packet, dict) else None,
         "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
         "retrieval_packet_hash": retrieval_packet_hash,
         "evaluated_activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),

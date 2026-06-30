@@ -4243,7 +4243,7 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "approved")
-        self.assertNotIn("semantic_coverage_target missing or invalid", report["blocking_reasons"])
+        self.assertNotIn("semantic compiler packet failed validation", report["blocking_reasons"])
 
     def test_legacy_followup_detection_cannot_force_missing_referent_block_for_explicit_causal_query(self) -> None:
         inputs = _minimal_compiler_coverage_inputs(
@@ -4439,7 +4439,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertFalse(
                 result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["valid"]
             )
-            self.assertNotIn("semantic_coverage_target missing or invalid", result.coverage_report["blocking_reasons"])
+            self.assertNotIn("semantic compiler packet failed validation", result.coverage_report["blocking_reasons"])
 
     def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
