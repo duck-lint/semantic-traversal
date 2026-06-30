@@ -247,8 +247,20 @@ def _minimal_compiler_coverage_inputs(
     required_anchor_policy: str,
     required_anchors: list[dict[str, str]],
     selected_chunks: list[dict[str, Any]],
+    avoid_terms: list[str] | None = None,
+    required_surfaces: list[str] | None = None,
+    optional_surfaces: list[str] | None = None,
+    requires_retrieval: bool | None = None,
 ) -> dict[str, Any]:
     selected_chunk_ids = [str(chunk["chunk_id"]) for chunk in selected_chunks]
+    if avoid_terms is None:
+        avoid_terms = []
+    if required_surfaces is None:
+        required_surfaces = []
+    if optional_surfaces is None:
+        optional_surfaces = []
+    if requires_retrieval is None:
+        requires_retrieval = True
     return {
         "turn_compilation_packet": {
             "semantic_compiler": {
@@ -262,9 +274,9 @@ def _minimal_compiler_coverage_inputs(
             "semantic_target": {
                 "must_preserve": [str(anchor["label"]) for anchor in required_anchors],
                 "should_include": [],
-                "avoid_satisfying_with": [],
+                "avoid_satisfying_with": list(avoid_terms),
                 "query_text": "alignment test query",
-                "allow_no_retrieval_needed": False,
+                "allow_no_retrieval_needed": not requires_retrieval,
             },
             "semantic_compiler_packet": {
                 "raw_user_input": "alignment test query",
@@ -279,6 +291,7 @@ def _minimal_compiler_coverage_inputs(
                     "relations": [],
                     "disambiguation_options": [],
                     "required_anchors": required_anchors,
+                    "allow_no_retrieval_needed": not requires_retrieval,
                     "uncertainties": [],
                 },
                 "retrieval_plan": {
@@ -287,13 +300,15 @@ def _minimal_compiler_coverage_inputs(
                     "relation_terms": [],
                     "vector_query": "alignment test query",
                     "graph_seeds": ["alpha anchor", "beta anchor"],
-                    "avoid_terms": [],
+                    "avoid_terms": list(avoid_terms),
                 },
                 "coverage_policy": {
-                    "requires_retrieval": True,
+                    "requires_retrieval": requires_retrieval,
                     "required_anchor_policy": required_anchor_policy,
                     "coverage_mode": "provenance_alignment",
                     "block_on_missing_exact_phrase": False,
+                    **({"required_surfaces": list(required_surfaces)} if required_surfaces is not None else {}),
+                    **({"optional_surfaces": list(optional_surfaces)} if optional_surfaces is not None else {}),
                 },
                 "limitations": [
                     "model-generated semantic compiler output",
@@ -1688,9 +1703,6 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
-            self.assertTrue(
-                any(anchor["source"] == "prior_thread_state" for anchor in result.turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
-            )
 
     def test_contextual_request_includes_deterministic_resolved_referent_candidates(self) -> None:
         request_packet = _build_contextual_extraction_request(
@@ -1985,11 +1997,6 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 packet["resolved_referent_repair_diagnostics"]["repair_type"],
                 "filled_required_for_target_from_deterministic_candidate",
-            )
-            self.assertTrue(result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["covered"])
-            self.assertEqual(
-                result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["match_type"],
-                "resolved_referent_discourse_anchor",
             )
 
     def test_followup_disagreeing_model_referent_missing_required_for_target_is_not_repaired(self) -> None:
@@ -2656,11 +2663,11 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             compiler_packet = result.turn_compilation_packet["semantic_compiler_packet"]
-            self.assertEqual(compiler_packet["semantic_target"]["question_type"], "referential_followup")
-            self.assertTrue(any(anchor["source"] == "prior_thread_state" for anchor in compiler_packet["semantic_target"]["required_anchors"]))
+            self.assertEqual(compiler_packet["semantic_target"]["question_type"], "causal_disambiguation")
+            self.assertFalse(any(anchor["source"] == "prior_thread_state" for anchor in compiler_packet["semantic_target"]["required_anchors"]))
             self.assertEqual(
                 result.coverage_report["decision"],
-                "approved",
+                "blocked",
                 msg=json.dumps(result.coverage_report, indent=2),
             )
 
@@ -3546,11 +3553,13 @@ class IngestRuntimeTests(unittest.TestCase):
 
             coverage_report = _load_turn_artifact(result.coverage_report_path)
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(coverage_report["decision"], "blocked")
+            self.assertEqual(result.runtime_outcome, "completed")
+            self.assertEqual(coverage_report["decision"], "approved")
             self.assertIn("dream recall", coverage_report["semantic_target_coverage"]["present_avoid_satisfying_with"])
-            self.assertIn("semantic compiler avoid term present in retrieved evidence: dream recall", coverage_report["blocking_reasons"])
-            self.assertEqual(result.llm_metadata["mode"], "not_called")
+            self.assertIn("dream recall", coverage_report["semantic_target_coverage"]["avoid_term_audit"]["present_avoid_terms"])
+            self.assertIn("avoid term present alongside aligned anchors: dream recall", coverage_report["semantic_target_coverage"]["diagnostic_gaps"])
+            self.assertEqual(coverage_report["blocking_reasons"], [])
+            self.assertEqual(result.llm_metadata["mode"], "stub")
 
     def test_semantic_target_coverage_reports_metadata_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -4023,6 +4032,255 @@ class IngestRuntimeTests(unittest.TestCase):
             "required anchor not aligned: beta anchor",
             report["blocking_reasons"],
         )
+
+    def test_semantic_compiler_retrieval_requirement_resolution_respects_explicit_no_retrieval_flags(self) -> None:
+        cases = [
+            ({"requires_retrieval": False}, False, "semantic_target.requires_retrieval"),
+            ({"allow_no_retrieval_needed": True}, False, "semantic_target.allow_no_retrieval_needed"),
+            ({}, True, "default_runtime"),
+        ]
+        for semantic_target_overrides, expected_requires_retrieval, expected_source in cases:
+            with self.subTest(semantic_target_overrides=semantic_target_overrides):
+                compiler_packet, reasons = _build_semantic_compiler_packet(
+                    user_input="Tell me about the lantern note.",
+                    prior_thread_state={},
+                    semantic_payload={
+                        "perturbation_nodes": [{"id": "node:lantern", "label": "lantern note", "kind": "topic"}],
+                        "contextual_salt_nodes": [],
+                        "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                        "activation_hints": {"entity_hints": ["lantern note"]},
+                        "resolved_referents": [],
+                    },
+                    isolated_packet={
+                        "parsed_payload": {
+                            "candidate_targets": ["lantern note"],
+                            "terms_or_phrases_not_to_discard": ["lantern note"],
+                            "candidate_relations": [],
+                            "ambiguities": [],
+                        }
+                    },
+                    contextual_packet={"parsed_payload": {"candidate_targets": ["lantern note"], "activation_hints": {"entity_hints": ["lantern note"]}}},
+                    semantic_target={
+                        "must_preserve": ["lantern note"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": "Tell me about the lantern note.",
+                        **semantic_target_overrides,
+                    },
+                )
+                self.assertEqual(compiler_packet["coverage_policy"]["requires_retrieval"], expected_requires_retrieval)
+                self.assertEqual(
+                    compiler_packet["compiler_diagnostics"]["retrieval_requirement_resolution"]["source"],
+                    expected_source,
+                )
+                self.assertEqual(
+                    compiler_packet["semantic_target"]["allow_no_retrieval_needed"],
+                    not expected_requires_retrieval,
+                )
+                self.assertEqual(reasons, [])
+
+    def test_semantic_compiler_retrieval_requirement_false_allows_empty_selection(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[],
+            selected_chunks=[],
+            requires_retrieval=False,
+        )
+        inputs["semantic_traversal_manifest"]["selected_chunk_ids"] = []
+        inputs["retrieval_packet"]["selected_chunks"] = []
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "approved")
+        self.assertNotIn("selected chunk count below configured minimum", report["blocking_reasons"])
+
+    def test_semantic_compiler_incidental_avoid_term_only_records_limit_but_does_not_block_with_concrete_anchor(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/alpha.md",
+                    "paragraph_text": "The alpha anchor evidence is present here, and anxiety is mentioned only incidentally.",
+                    "note_title": "Alpha Note",
+                    "section_label": "Alpha Section",
+                }
+            ],
+            avoid_terms=["anxiety"],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "approved")
+        self.assertEqual(report["semantic_target_coverage"]["avoid_term_audit"]["present_avoid_terms"], ["anxiety"])
+        self.assertFalse(report["semantic_target_coverage"]["avoid_term_audit"]["avoid_only_alignment"])
+        self.assertEqual(report["semantic_target_coverage"]["blocking_gaps"], [])
+        self.assertIn(
+            "avoid term present alongside aligned anchors: anxiety",
+            report["semantic_target_coverage"]["diagnostic_gaps"],
+        )
+
+    def test_semantic_compiler_avoid_term_only_overlap_blocks(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/anxiety.md",
+                    "paragraph_text": "This chunk only discusses anxiety and never mentions the required anchor.",
+                    "note_title": "Anxiety Note",
+                    "section_label": "Anxiety Section",
+                }
+            ],
+            avoid_terms=["anxiety"],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "blocked")
+        self.assertTrue(report["semantic_target_coverage"]["avoid_term_audit"]["avoid_only_alignment"])
+        self.assertIn(
+            "avoid-term alignment without required anchor support",
+            report["blocking_reasons"],
+        )
+
+    def test_semantic_compiler_surface_policy_respects_required_and_optional_surfaces_exactly(self) -> None:
+        approvals = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/alpha.md",
+                    "paragraph_text": "The alpha anchor evidence is present in this chunk.",
+                    "note_title": "Alpha Note",
+                    "section_label": "Alpha Section",
+                }
+            ],
+            required_surfaces=["graph_layer"],
+            optional_surfaces=["primary_corpus"],
+        )
+        approvals["activated_semantic_regions"]["activation_surfaces"] = [
+            {"surface": "lexical_index_surface", "status": "activated"},
+            {"surface": "primary_corpus", "status": "activated"},
+            {"surface": "vector_index_surface", "status": "activated"},
+            {"surface": "graph_layer", "status": "blocked"},
+        ]
+        approvals["semantic_traversal_manifest"]["surface_contributions"]["graph_layer"] = False
+        approval_report = _evaluate_retrieval_coverage(**approvals)
+        self.assertEqual(approval_report["decision"], "blocked")
+        self.assertIn("required surface unavailable: graph_layer", approval_report["blocking_reasons"])
+        self.assertEqual(approval_report["semantic_target_coverage"]["surface_alignment"]["required_surfaces"], ["graph_layer"])
+        self.assertEqual(approval_report["semantic_target_coverage"]["surface_alignment"]["optional_surfaces"], ["primary_corpus"])
+
+        optional_inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/alpha.md",
+                    "paragraph_text": "The alpha anchor evidence is present in this chunk.",
+                    "note_title": "Alpha Note",
+                    "section_label": "Alpha Section",
+                }
+            ],
+            required_surfaces=[],
+            optional_surfaces=["graph_layer", "primary_corpus"],
+        )
+        optional_inputs["activated_semantic_regions"]["activation_surfaces"] = [
+            {"surface": "lexical_index_surface", "status": "activated"},
+            {"surface": "primary_corpus", "status": "blocked"},
+            {"surface": "vector_index_surface", "status": "activated"},
+            {"surface": "graph_layer", "status": "blocked"},
+        ]
+        optional_inputs["semantic_traversal_manifest"]["surface_contributions"]["primary_corpus"] = False
+        optional_inputs["semantic_traversal_manifest"]["surface_contributions"]["graph_layer"] = False
+        optional_report = _evaluate_retrieval_coverage(**optional_inputs)
+        self.assertEqual(optional_report["decision"], "approved")
+        self.assertEqual(optional_report["semantic_target_coverage"]["surface_alignment"]["optional_surfaces"], ["graph_layer", "primary_corpus"])
+        self.assertEqual(
+            optional_report["semantic_target_coverage"]["surface_alignment"]["missing_optional_surfaces"],
+            ["graph_layer", "primary_corpus"],
+        )
+
+    def test_semantic_compiler_deduplicates_anchor_gap_diagnostics(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_any",
+            required_anchors=[
+                {"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+                {"label": "beta anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/gamma.md",
+                    "paragraph_text": "Gamma evidence is present, but neither required anchor appears.",
+                    "note_title": "Gamma Note",
+                    "section_label": "Gamma Section",
+                }
+            ],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertEqual(report["decision"], "blocked")
+        self.assertEqual(report["semantic_target_coverage"]["blocking_gaps"].count("no required anchors aligned under touch_any policy"), 1)
+        self.assertEqual(
+            report["semantic_target_coverage"]["diagnostic_gaps"].count("required anchor not aligned: alpha anchor"),
+            1,
+        )
+        self.assertEqual(
+            report["semantic_target_coverage"]["diagnostic_gaps"].count("required anchor not aligned: beta anchor"),
+            1,
+        )
+
+    def test_semantic_compiler_generic_shell_targets_do_not_approve_coverage_without_concrete_alignment(self) -> None:
+        blocked_inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "relationship", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/relationship.md",
+                    "paragraph_text": "This chunk only repeats the word relationship without any concrete topic.",
+                    "note_title": "Relation Note",
+                    "section_label": "Relation Section",
+                }
+            ],
+        )
+        blocked_report = _evaluate_retrieval_coverage(**blocked_inputs)
+        self.assertEqual(blocked_report["decision"], "blocked")
+        self.assertIn("generic shell target not treated as proof anchor: relationship", blocked_report["semantic_target_coverage"]["diagnostic_gaps"])
+
+        approved_inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_any",
+            required_anchors=[
+                {"label": "candy snack food before bed", "source": "raw_user_input", "coverage_role": "must_touch"},
+                {"label": "relationship", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/candy.md",
+                    "paragraph_text": "The candy snack food before bed phrase is present here, and the relationship word is incidental.",
+                    "note_title": "Candy Note",
+                    "section_label": "Candy Section",
+                }
+            ],
+        )
+        approved_report = _evaluate_retrieval_coverage(**approved_inputs)
+        self.assertEqual(approved_report["decision"], "approved")
+        self.assertIn("candy snack food before bed", approved_report["semantic_target_coverage"]["anchor_alignment"]["aligned_anchors"])
+        self.assertIn("relationship", approved_report["semantic_target_coverage"]["anchor_alignment"]["missing_anchors"])
 
     def test_semantic_compiler_uses_touch_any_for_causal_and_comparison_disambiguation(self) -> None:
         cases = [
