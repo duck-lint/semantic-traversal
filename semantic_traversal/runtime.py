@@ -439,6 +439,135 @@ def _infer_entity_role(label: str, *, nodes_by_label: dict[str, dict[str, Any]])
     return "topic" if len(_coverage_target_tokens(label)) >= 2 else "unknown"
 
 
+def _build_compiler_entity_lookup(
+    *,
+    entities: list[dict[str, Any]],
+    graph_nodes: list[dict[str, Any]],
+    candidate_entities: list[str],
+) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+
+    def register(key: Any, entity_id: str) -> None:
+        normalized = _normalize_semantic_text(key)
+        if normalized and normalized not in lookup:
+            lookup[normalized] = entity_id
+
+    candidate_map = {
+        _normalize_semantic_text(label): entity["id"]
+        for label, entity in zip(candidate_entities, entities)
+        if _normalize_semantic_text(label)
+    }
+    for entity in entities:
+        entity_id = str(entity.get("id") or "")
+        register(entity_id, entity_id)
+        register(entity.get("label"), entity_id)
+
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "").strip()
+        node_label = str(node.get("label") or "").strip()
+        canonical_id = (
+            candidate_map.get(_normalize_semantic_text(node_label))
+            or candidate_map.get(_normalize_semantic_text(node_id))
+            or lookup.get(_normalize_semantic_text(node_label))
+            or lookup.get(_normalize_semantic_text(node_id))
+        )
+        if canonical_id:
+            register(node_id, canonical_id)
+            register(node_label, canonical_id)
+
+    return lookup
+
+
+def _resolve_compiler_relation_endpoint(
+    endpoint: Any,
+    *,
+    entity_lookup: dict[str, str],
+) -> tuple[str, bool]:
+    endpoint_text = str(endpoint or "").strip()
+    normalized = _normalize_semantic_text(endpoint_text)
+    canonical_id = entity_lookup.get(normalized) if normalized else None
+    if canonical_id:
+        return canonical_id, True
+    return endpoint_text, False
+
+
+def _normalize_compiler_relations(
+    *,
+    graph: dict[str, Any],
+    isolated_payload: dict[str, Any],
+    entities: list[dict[str, Any]],
+    candidate_entities: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    relations: list[dict[str, Any]] = []
+    diagnostics = {
+        "normalized_count": 0,
+        "partial_count": 0,
+        "unresolved_count": 0,
+    }
+    graph_nodes = [node for node in _list_or_empty(graph.get("nodes")) if isinstance(node, dict)]
+    entity_lookup = _build_compiler_entity_lookup(
+        entities=entities,
+        graph_nodes=graph_nodes,
+        candidate_entities=candidate_entities,
+    )
+
+    for edge in _list_or_empty(graph.get("edges")):
+        if not isinstance(edge, dict):
+            continue
+        source_entity, source_normalized = _resolve_compiler_relation_endpoint(
+            edge.get("source"),
+            entity_lookup=entity_lookup,
+        )
+        target_entity, target_normalized = _resolve_compiler_relation_endpoint(
+            edge.get("target"),
+            entity_lookup=entity_lookup,
+        )
+        if source_normalized and target_normalized:
+            endpoint_normalization = "normalized"
+            diagnostics["normalized_count"] += 1
+        elif source_normalized or target_normalized:
+            endpoint_normalization = "partial"
+            diagnostics["partial_count"] += 1
+        else:
+            endpoint_normalization = "unresolved"
+            diagnostics["unresolved_count"] += 1
+        relations.append(
+            {
+                "source_entity": source_entity,
+                "relation": str(edge.get("kind") or ""),
+                "target_entity": target_entity,
+                "confidence": "medium",
+                "source": "model_inference",
+                "original_source": str(edge.get("source") or ""),
+                "original_target": str(edge.get("target") or ""),
+                "endpoint_normalization": endpoint_normalization,
+            }
+        )
+
+    if relations:
+        return relations, diagnostics
+
+    for relation in _list_or_empty(isolated_payload.get("candidate_relations")):
+        if isinstance(relation, str) and relation.strip():
+            relations.append(
+                {
+                    "source_entity": entities[0]["id"] if entities else "entity:unknown",
+                    "relation": relation.strip(),
+                    "target_entity": entities[1]["id"] if len(entities) > 1 else "entity:unknown",
+                    "confidence": "low",
+                    "source": "model_inference",
+                    "endpoint_normalization": "normalized" if len(entities) >= 2 else "unresolved",
+                }
+            )
+            if len(entities) >= 2:
+                diagnostics["normalized_count"] += 1
+            else:
+                diagnostics["unresolved_count"] += 1
+    return relations, diagnostics
+
+
 def _build_semantic_compiler_packet(
     *,
     user_input: str,
@@ -522,32 +651,13 @@ def _build_semantic_compiler_packet(
             }
         )
 
-    relations: list[dict[str, Any]] = []
     graph = _dict_or_empty(semantic_payload.get("perturbation_semantic_graph"))
-    for edge in _list_or_empty(graph.get("edges")):
-        if not isinstance(edge, dict):
-            continue
-        relations.append(
-            {
-                "source_entity": str(edge.get("source") or ""),
-                "relation": str(edge.get("kind") or ""),
-                "target_entity": str(edge.get("target") or ""),
-                "confidence": "medium",
-                "source": "model_inference",
-            }
-        )
-    if not relations:
-        for relation in _list_or_empty(isolated_payload.get("candidate_relations")):
-            if isinstance(relation, str) and relation.strip():
-                relations.append(
-                    {
-                        "source_entity": entities[0]["id"] if entities else "entity:unknown",
-                        "relation": relation.strip(),
-                        "target_entity": entities[1]["id"] if len(entities) > 1 else "entity:unknown",
-                        "confidence": "low",
-                        "source": "model_inference",
-                    }
-                )
+    relations, relation_endpoint_normalization = _normalize_compiler_relations(
+        graph=graph,
+        isolated_payload=isolated_payload,
+        entities=entities,
+        candidate_entities=candidate_entities,
+    )
 
     disambiguation_options: list[dict[str, Any]] = []
     if " or " in user_input.lower() and len(entities) >= 2:
@@ -645,6 +755,7 @@ def _build_semantic_compiler_packet(
             "deterministic_followup_detection": followup_detection,
             "model_followup_detection": _dict_or_empty(semantic_payload.get("followup_detection")),
             "referent_resolution_diagnostics": referent_diagnostics,
+            "relation_endpoint_normalization": relation_endpoint_normalization,
         },
     }
     if not semantic_target["entities"]:
@@ -994,6 +1105,93 @@ def _validate_semantic_context_payload(
     return reasons
 
 
+def _validate_semantic_compiler_packet(
+    packet: dict[str, Any],
+    *,
+    raw_user_input: str,
+) -> list[str]:
+    reasons: list[str] = []
+    if packet.get("raw_user_input") != raw_user_input:
+        reasons.append("semantic_compiler_packet did not preserve raw_user_input")
+
+    semantic_target = packet.get("semantic_target")
+    retrieval_plan = packet.get("retrieval_plan")
+    coverage_policy = packet.get("coverage_policy")
+    if not isinstance(semantic_target, dict):
+        reasons.append("semantic_compiler_packet.semantic_target missing or invalid")
+    if not isinstance(retrieval_plan, dict):
+        reasons.append("semantic_compiler_packet.retrieval_plan missing or invalid")
+    if not isinstance(coverage_policy, dict):
+        reasons.append("semantic_compiler_packet.coverage_policy missing or invalid")
+    if reasons:
+        return reasons
+
+    if not isinstance(semantic_target.get("entities"), list):
+        reasons.append("semantic_compiler_packet.semantic_target.entities missing or invalid")
+    if not isinstance(semantic_target.get("required_anchors"), list):
+        reasons.append("semantic_compiler_packet.semantic_target.required_anchors missing or invalid")
+    if coverage_policy.get("coverage_mode") != "provenance_alignment":
+        reasons.append("semantic_compiler_packet.coverage_policy.coverage_mode must be provenance_alignment")
+    if coverage_policy.get("block_on_missing_exact_phrase") is not False:
+        reasons.append("semantic_compiler_packet.coverage_policy.block_on_missing_exact_phrase must be false")
+
+    requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
+    useful_query_surfaces = [
+        *(_collect_string_terms(retrieval_plan.get("lexical_terms"))),
+        *(_collect_string_terms(retrieval_plan.get("entity_terms"))),
+        *(_collect_string_terms(retrieval_plan.get("relation_terms"))),
+        *(_collect_string_terms(retrieval_plan.get("graph_seeds"))),
+        *(_collect_string_terms(retrieval_plan.get("vector_query"))),
+        *(_collect_string_terms(semantic_target.get("canonical_query"))),
+    ]
+    if requires_retrieval and not useful_query_surfaces:
+        reasons.append("semantic_compiler_packet missing retrieval terms")
+    return reasons
+
+
+def _build_legacy_compatibility_target_from_compiler(
+    semantic_compiler_packet: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not isinstance(semantic_compiler_packet, dict):
+        return None
+    semantic_target = _dict_or_empty(semantic_compiler_packet.get("semantic_target"))
+    retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
+    coverage_policy = _dict_or_empty(semantic_compiler_packet.get("coverage_policy"))
+    if not semantic_target or not retrieval_plan or not coverage_policy:
+        return None
+
+    must_preserve: list[str] = []
+    for anchor in _list_or_empty(semantic_target.get("required_anchors")):
+        if isinstance(anchor, dict):
+            label = str(anchor.get("label") or "").strip()
+            if label and label not in must_preserve:
+                must_preserve.append(label)
+    if not must_preserve:
+        for entity in _list_or_empty(semantic_target.get("entities"))[:2]:
+            if isinstance(entity, dict):
+                label = str(entity.get("label") or "").strip()
+                if label and label not in must_preserve:
+                    must_preserve.append(label)
+
+    should_include: list[str] = []
+    for term in _collect_string_terms(retrieval_plan.get("relation_terms")):
+        if term not in should_include:
+            should_include.append(term)
+
+    avoid_terms = [
+        str(item)
+        for item in _list_or_empty(retrieval_plan.get("avoid_terms"))
+        if isinstance(item, str) and item.strip()
+    ]
+    return {
+        "must_preserve": must_preserve,
+        "should_include": should_include,
+        "avoid_satisfying_with": avoid_terms,
+        "query_text": str(semantic_target.get("canonical_query") or semantic_compiler_packet.get("raw_user_input") or ""),
+        "allow_no_retrieval_needed": not bool(coverage_policy.get("requires_retrieval", True)),
+    }
+
+
 def _normalize_coverage_text(value: Any) -> str:
     normalized = re.sub(r"[^a-z0-9]+", " ", str(value).lower())
     return re.sub(r"\s+", " ", normalized).strip()
@@ -1129,8 +1327,12 @@ def _evaluate_semantic_compiler_alignment(
     config: RuntimeConfig,
 ) -> dict[str, Any]:
     compiler_packet = _dict_or_empty(semantic_context_packet.get("semantic_compiler_packet"))
+    legacy_semantic_context_packet = dict(semantic_context_packet)
+    legacy_diagnostics = _dict_or_empty(semantic_context_packet.get("legacy_semantic_extraction_diagnostics"))
+    if isinstance(legacy_diagnostics.get("legacy_semantic_coverage_target"), dict):
+        legacy_semantic_context_packet["semantic_coverage_target"] = legacy_diagnostics["legacy_semantic_coverage_target"]
     legacy_target = _evaluate_semantic_target_coverage(
-        semantic_context_packet=semantic_context_packet,
+        semantic_context_packet=legacy_semantic_context_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
     )
@@ -1141,10 +1343,6 @@ def _evaluate_semantic_compiler_alignment(
     target_present = bool(compiler_packet)
     target_valid = bool(semantic_target and retrieval_plan and coverage_policy)
     if not dict(semantic_context_packet.get("semantic_contract_validation") or {}).get("valid"):
-        target_valid = False
-    if not isinstance(semantic_context_packet.get("semantic_coverage_target"), dict):
-        target_valid = False
-    if not legacy_target.get("target_valid"):
         target_valid = False
 
     selected_chunk_provenance = [
@@ -1617,13 +1815,13 @@ def _build_retrieval_preparation(
                 candidate_term_sources[term].append(source_label)
 
     combined_candidate_terms: list[str] = []
-    for term in raw_lexical_terms + extraction_hint_terms + coverage_target_terms + compiler_plan_terms:
+    for term in raw_lexical_terms + compiler_plan_terms + extraction_hint_terms + coverage_target_terms:
         if term not in combined_candidate_terms:
             combined_candidate_terms.append(term)
 
     model_proposed_only_terms = [
         term
-        for term in extraction_hint_terms + coverage_target_terms + compiler_plan_terms
+        for term in compiler_plan_terms + extraction_hint_terms + coverage_target_terms
         if "raw_user_input" not in candidate_term_sources.get(term, [])
     ]
     return {
@@ -1646,22 +1844,9 @@ def _build_semantic_context_packet(
     turn_id: int,
     semantic_extraction: SemanticExtractionArtifacts,
 ) -> dict[str, Any]:
-    semantic_payload, semantic_coverage_target = _extract_semantic_outputs(
+    semantic_payload, extracted_semantic_coverage_target = _extract_semantic_outputs(
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
-    )
-    semantic_payload, resolved_referent_repair_diagnostics = _repair_resolved_referents_from_deterministic_candidates(
-        user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        semantic_payload=semantic_payload,
-    )
-    semantic_coverage_target, semantic_coverage_target_diagnostics, adequacy_reasons = _repair_semantic_coverage_target_anchors(
-        user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
-        semantic_payload=semantic_payload,
-        semantic_coverage_target=semantic_coverage_target,
     )
     semantic_compiler_packet, semantic_compiler_reasons = _build_semantic_compiler_packet(
         user_input=user_input,
@@ -1669,61 +1854,57 @@ def _build_semantic_context_packet(
         semantic_payload=semantic_payload,
         isolated_packet=semantic_extraction.isolated_packet,
         contextual_packet=semantic_extraction.contextual_packet,
-        semantic_coverage_target=semantic_coverage_target,
+        semantic_coverage_target=(
+            extracted_semantic_coverage_target if isinstance(extracted_semantic_coverage_target, dict) else None
+        ),
+    )
+    compiler_validation_reasons = _validate_semantic_compiler_packet(
+        semantic_compiler_packet,
+        raw_user_input=user_input,
+    )
+
+    legacy_semantic_payload, resolved_referent_repair_diagnostics = _repair_resolved_referents_from_deterministic_candidates(
+        user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        semantic_payload=semantic_payload,
+    )
+    legacy_semantic_coverage_target, semantic_coverage_target_diagnostics, adequacy_reasons = _repair_semantic_coverage_target_anchors(
+        user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        isolated_packet=semantic_extraction.isolated_packet,
+        contextual_packet=semantic_extraction.contextual_packet,
+        semantic_payload=legacy_semantic_payload,
+        semantic_coverage_target=extracted_semantic_coverage_target,
     )
     referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
-        payload=semantic_payload,
+        payload=legacy_semantic_payload,
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
-    ) if semantic_payload else ([], {
+    ) if legacy_semantic_payload else ([], {
         "deterministic_followup_detection": _detect_followup_signals(user_input, prior_thread_state),
         "deterministic_referent_targets": [],
         "model_referent_targets": [],
         "disagreements": [],
         "requires_referent_resolution": False,
     })
-    contract_reasons = _validate_semantic_context_payload(
-        semantic_payload,
+    legacy_contract_reasons = _validate_semantic_context_payload(
+        legacy_semantic_payload,
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
-    ) if semantic_payload else [
+    ) if legacy_semantic_payload else [
         "semantic extraction parsed but failed contract validation",
     ]
-    compiler_required_prior_anchors = {
-        str(anchor.get("label") or "").strip()
-        for anchor in _list_or_empty(_dict_or_empty(semantic_compiler_packet.get("semantic_target")).get("required_anchors"))
-        if isinstance(anchor, dict) and str(anchor.get("source") or "") == "prior_thread_state"
-    }
-    if compiler_required_prior_anchors:
-        contract_reasons = [
-            reason
-            for reason in contract_reasons
-            if not (
-                reason.startswith("semantic_coverage_target must_preserve does not include required resolved referent:")
-                and any(anchor in reason for anchor in compiler_required_prior_anchors)
-            )
-        ]
-    if referent_validation_reasons:
-        for reason in referent_validation_reasons:
-            if reason not in contract_reasons:
-                contract_reasons.append(reason)
-    for reason in adequacy_reasons:
-        if reason not in contract_reasons:
-            contract_reasons.append(reason)
-    for reason in semantic_compiler_reasons:
-        if reason not in contract_reasons:
-            contract_reasons.append(reason)
-    if compiler_required_prior_anchors:
-        contract_reasons = [
-            reason
-            for reason in contract_reasons
-            if not (
-                reason.startswith("semantic_coverage_target must_preserve does not include required resolved referent:")
-                and any(anchor in reason for anchor in compiler_required_prior_anchors)
-            )
-        ]
+    legacy_warnings: list[str] = []
+    for reason in legacy_contract_reasons + referent_validation_reasons + adequacy_reasons:
+        if reason not in legacy_warnings:
+            legacy_warnings.append(reason)
+
+    semantic_coverage_target = _build_legacy_compatibility_target_from_compiler(semantic_compiler_packet)
+    if semantic_coverage_target is None and isinstance(legacy_semantic_coverage_target, dict):
+        semantic_coverage_target = legacy_semantic_coverage_target
+
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
-    resolved_referents = _list_or_empty(semantic_payload.get("resolved_referents"))
+    resolved_referents = _list_or_empty(legacy_semantic_payload.get("resolved_referents"))
     referential_followup_detection = followup_detection
     retrieval_preparation = _build_retrieval_preparation(
         user_input=user_input,
@@ -1740,20 +1921,31 @@ def _build_semantic_context_packet(
         "resolved_referents": resolved_referents,
         "referential_followup_detection": referential_followup_detection,
         "semantic_compiler_packet": semantic_compiler_packet,
-        "perturbation_nodes": _list_or_empty(semantic_payload.get("perturbation_nodes")),
-        "contextual_salt_nodes": _list_or_empty(semantic_payload.get("contextual_salt_nodes")),
-        "perturbation_semantic_graph": _dict_or_empty(semantic_payload.get("perturbation_semantic_graph")),
+        "perturbation_nodes": _list_or_empty(legacy_semantic_payload.get("perturbation_nodes")),
+        "contextual_salt_nodes": _list_or_empty(legacy_semantic_payload.get("contextual_salt_nodes")),
+        "perturbation_semantic_graph": _dict_or_empty(legacy_semantic_payload.get("perturbation_semantic_graph")),
         "semantic_coverage_target": semantic_coverage_target,
         "semantic_coverage_target_diagnostics": semantic_coverage_target_diagnostics,
-        "activation_hints": _dict_or_empty(semantic_payload.get("activation_hints")),
-        "limitations": _list_or_empty(semantic_payload.get("limitations")),
+        "activation_hints": _dict_or_empty(legacy_semantic_payload.get("activation_hints")),
+        "limitations": _list_or_empty(legacy_semantic_payload.get("limitations")),
         "resolved_referent_repair_diagnostics": resolved_referent_repair_diagnostics,
         "referent_resolution_diagnostics": referent_diagnostics,
         "extracted_lexical_query_terms": list(retrieval_preparation["raw_lexical_terms"]),
         "retrieval_preparation": retrieval_preparation,
         "semantic_contract_validation": {
-            "valid": not contract_reasons,
-            "reasons": contract_reasons,
+            "valid": not compiler_validation_reasons,
+            "reasons": compiler_validation_reasons,
+        },
+        "legacy_semantic_extraction_diagnostics": {
+            "legacy_contract_validation": {
+                "valid": not legacy_warnings,
+                "reasons": legacy_warnings,
+            },
+            "legacy_payload_diagnostics": legacy_contract_reasons,
+            "legacy_compatibility_warnings": legacy_warnings,
+            "legacy_semantic_coverage_target": legacy_semantic_coverage_target,
+            "resolved_referent_repair_diagnostics": resolved_referent_repair_diagnostics,
+            "referent_resolution_diagnostics": referent_diagnostics,
         },
         "semantic_extraction": {
             "isolated": semantic_extraction.isolated_packet,
@@ -2662,8 +2854,13 @@ def _build_semantic_traversal_manifest(
         "thread_id": semantic_context_packet["thread_id"],
         "turn_id": semantic_context_packet["turn_id"],
         "semantic_coverage_target_hash": (
-            sha256_json(semantic_context_packet["semantic_coverage_target"])
-            if isinstance(semantic_context_packet.get("semantic_coverage_target"), dict)
+            sha256_json(semantic_context_packet["semantic_compiler_packet"])
+            if isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict)
+            else None
+        ),
+        "semantic_compiler_packet_hash": (
+            sha256_json(semantic_context_packet["semantic_compiler_packet"])
+            if isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict)
             else None
         ),
         "activated_region_hash": activated_semantic_regions.get("activated_region_hash"),
@@ -2935,6 +3132,8 @@ def _build_synthesis_context_packet(
         "raw_user_input": user_input,
         "prior_thread_state": prior_thread_state,
         "visible_transcript_tail": thread_document["messages"][-6:],
+        "semantic_compiler_packet": semantic_context_packet.get("semantic_compiler_packet"),
+        "legacy_semantic_extraction_diagnostics": semantic_context_packet.get("legacy_semantic_extraction_diagnostics", {}),
         "semantic_extraction": semantic_context_packet["semantic_extraction"],
         "semantic_context_packet": semantic_context_packet,
         "semantic_traversal_manifest": semantic_traversal_manifest,
@@ -2947,8 +3146,10 @@ def _build_synthesis_context_packet(
             "Respond directly to the latest raw user input.",
             "Preserve continuity with the prior thread state.",
             "Do not emit a user-facing answer when the runtime outcome is blocked.",
+            "Treat semantic_compiler_packet as the primary semantic target object.",
             "Use retrieved material only when it has been approved for synthesis.",
             "Do not invent retrieval results or claim thesis-valid traversal when blocked.",
+            "Do not decide evidence validity or perform retrieval inside the final synthesis step.",
         ],
     }
 

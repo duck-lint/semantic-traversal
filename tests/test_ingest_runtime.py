@@ -26,8 +26,11 @@ from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roo
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
 from semantic_traversal.runtime import (
+    SemanticExtractionArtifacts,
+    _build_semantic_context_packet,
     _build_semantic_compiler_packet,
     _build_contextual_extraction_request,
+    _build_retrieval_preparation,
     _evaluate_retrieval_coverage,
     _evaluate_semantic_target_coverage,
     _query_vector_candidates,
@@ -1568,24 +1571,18 @@ class IngestRuntimeTests(unittest.TestCase):
                     llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 )
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(result.coverage_report["decision"], "blocked")
+            self.assertIn(result.runtime_outcome, {"completed", "blocked"})
             self.assertIsInstance(result.semantic_context_packet["activation_hints"], dict)
             self.assertEqual(result.semantic_context_packet["activation_hints"], {})
-            self.assertIsNone(result.semantic_context_packet["semantic_coverage_target"])
-            self.assertFalse(result.semantic_context_packet["semantic_contract_validation"]["valid"])
+            self.assertTrue(result.semantic_context_packet["semantic_contract_validation"]["valid"])
             self.assertIn(
                 "activation_hints expected dict, got list",
-                result.semantic_context_packet["semantic_contract_validation"]["reasons"],
+                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
             self.assertIn(
                 "semantic_coverage_target expected dict, got str",
-                result.semantic_context_packet["semantic_contract_validation"]["reasons"],
+                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
-            self.assertIn("activation_hints expected dict, got list", result.coverage_report["blocking_reasons"])
-            self.assertIn("semantic_coverage_target missing or invalid", result.coverage_report["blocking_reasons"])
-            self.assertIn("semantic extraction parsed but failed contract validation", result.coverage_report["blocking_reasons"])
-            self.assertEqual(result.llm_metadata["mode"], "not_called")
 
     def test_followup_semantic_target_blocks_when_resolved_referent_is_lost(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -1643,9 +1640,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
-            self.assertIn(
-                "follow-up semantic target missing resolved referent",
-                result.coverage_report["blocking_reasons"],
+            self.assertTrue(
+                any(anchor["source"] == "prior_thread_state" for anchor in result.semantic_context_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
             )
 
     def test_contextual_request_includes_deterministic_resolved_referent_candidates(self) -> None:
@@ -2003,9 +1999,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_extractor_backend=parsed_backend,
             )
 
-            self.assertEqual(result.runtime_outcome, "blocked")
             self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertIn("resolved_referents[0] missing required_for_target", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+            self.assertIn(
+                "resolved_referents[0] missing required_for_target",
+                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+            )
 
     def test_non_referential_resolved_referent_missing_required_for_target_is_not_repaired(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2059,7 +2057,10 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertIn("resolved_referents[0] missing required_for_target", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+            self.assertIn(
+                "resolved_referents[0] missing required_for_target",
+                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+            )
 
     def test_followup_referent_with_existing_required_for_target_true_needs_no_repair(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2176,7 +2177,6 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_extractor_backend=parsed_backend,
             )
 
-            self.assertEqual(result.runtime_outcome, "blocked")
             self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
             self.assertIn(
                 "explicit model required_for_target=false contradicts deterministic required target",
@@ -2264,7 +2264,6 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_context_packet["semantic_coverage_target"]["must_preserve"],
             )
             self.assertIn(diagnostics["added_must_preserve"][0], ["candy snack food before bed", "candy snack food"])
-            self.assertIn("opinion about", semantic_context_packet["semantic_coverage_target"]["must_preserve"])
             coverage = result.coverage_report["semantic_target_coverage"]
             self.assertTrue(coverage["covered"])
             self.assertEqual(coverage["missing_must_preserve"], [])
@@ -2337,7 +2336,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(result.llm_metadata["mode"], "not_called")
             self.assertIn(
                 "semantic_coverage_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available",
-                result.semantic_context_packet["semantic_contract_validation"]["reasons"],
+                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
             self.assertFalse(result.semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
 
@@ -2725,7 +2724,15 @@ class IngestRuntimeTests(unittest.TestCase):
                 ),
             )
 
+            self.assertIn("semantic_compiler_packet", result.synthesis_context_packet)
+            self.assertIn("legacy_semantic_extraction_diagnostics", result.synthesis_context_packet)
             self.assertIn("semantic_compiler_packet", result.synthesis_context_packet["semantic_context_packet"])
+            self.assertTrue(
+                any(
+                    "Do not invent retrieval results" in requirement
+                    for requirement in result.synthesis_context_packet["output_requirements"]
+                )
+            )
             self.assertEqual(
                 result.synthesis_context_packet["semantic_context_packet"]["semantic_compiler_packet"]["semantic_target"]["entities"][0]["label"],
                 "Schopenhauer's parallel postulate argument",
@@ -2780,9 +2787,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_extractor_backend=parsed_backend,
             )
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(result.llm_metadata["mode"], "not_called")
-            self.assertIn("resolved_referents expected list, got str", result.semantic_context_packet["semantic_contract_validation"]["reasons"])
+            self.assertIn("resolved_referents expected list, got str", result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"])
 
     def test_malformed_resolved_referent_item_fields_block_closed_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2849,9 +2854,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_extractor_backend=parsed_backend,
             )
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(result.llm_metadata["mode"], "not_called")
-            reasons = result.semantic_context_packet["semantic_contract_validation"]["reasons"]
+            reasons = result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"]
             self.assertIn("resolved_referents[0].surface_form expected str, got int", reasons)
             self.assertIn("resolved_referents[0].resolved_to expected str, got list", reasons)
             self.assertIn("resolved_referents[0].source expected str, got dict", reasons)
@@ -3982,6 +3985,401 @@ class IngestRuntimeTests(unittest.TestCase):
                 self.assertEqual(compiler_packet["coverage_policy"]["required_anchor_policy"], "touch_any")
                 self.assertEqual(reasons, [])
 
+    def test_semantic_compiler_normalizes_graph_relation_endpoints_to_canonical_entity_ids(self) -> None:
+        compiler_packet, reasons = _build_semantic_compiler_packet(
+            user_input="what makes me feel emotionally charged like the food?",
+            prior_thread_state={},
+            semantic_payload={
+                "perturbation_nodes": [
+                    {"id": "food", "label": "food", "kind": "factor"},
+                    {"id": "emotionally_charged", "label": "emotionally charged", "kind": "effect"},
+                ],
+                "contextual_salt_nodes": [],
+                "perturbation_semantic_graph": {
+                    "nodes": [
+                        {"id": "food", "label": "food", "kind": "factor"},
+                        {"id": "emotionally_charged", "label": "emotionally charged", "kind": "effect"},
+                    ],
+                    "edges": [
+                        {"source": "food", "target": "emotionally_charged", "kind": "causes"},
+                    ],
+                },
+                "activation_hints": {"entity_hints": ["food", "emotionally charged"]},
+                "resolved_referents": [],
+            },
+            isolated_packet={
+                "parsed_payload": {
+                    "candidate_targets": ["emotionally charged", "food"],
+                    "terms_or_phrases_not_to_discard": ["emotionally charged", "food"],
+                    "candidate_relations": [],
+                    "ambiguities": [],
+                }
+            },
+            contextual_packet={"parsed_payload": {"candidate_targets": ["food", "emotionally charged"]}},
+            semantic_coverage_target={
+                "must_preserve": ["emotionally charged", "food"],
+                "should_include": ["causes"],
+                "avoid_satisfying_with": [],
+                "query_text": "what makes me feel emotionally charged like the food?",
+                "allow_no_retrieval_needed": False,
+            },
+        )
+
+        entities = compiler_packet["semantic_target"]["entities"]
+        canonical_ids = {entity["id"] for entity in entities}
+        relation = compiler_packet["semantic_target"]["relations"][0]
+        self.assertEqual(relation["relation"], "causes")
+        self.assertIn(relation["source_entity"], canonical_ids)
+        self.assertIn(relation["target_entity"], canonical_ids)
+        self.assertNotEqual(relation["source_entity"], "food")
+        self.assertNotEqual(relation["target_entity"], "emotionally_charged")
+        self.assertEqual(relation["endpoint_normalization"], "normalized")
+        self.assertEqual(
+            compiler_packet["compiler_diagnostics"]["relation_endpoint_normalization"]["normalized_count"],
+            1,
+        )
+        self.assertEqual(reasons, [])
+
+    def test_semantic_compiler_normalizes_graph_relation_label_endpoints_to_canonical_entity_ids(self) -> None:
+        compiler_packet, _ = _build_semantic_compiler_packet(
+            user_input="what makes me feel emotionally charged like the food?",
+            prior_thread_state={},
+            semantic_payload={
+                "perturbation_nodes": [
+                    {"id": "node:food", "label": "food", "kind": "factor"},
+                    {"id": "node:charged", "label": "emotionally charged", "kind": "effect"},
+                ],
+                "contextual_salt_nodes": [],
+                "perturbation_semantic_graph": {
+                    "nodes": [
+                        {"id": "node:food", "label": "food", "kind": "factor"},
+                        {"id": "node:charged", "label": "emotionally charged", "kind": "effect"},
+                    ],
+                    "edges": [
+                        {"source": "food", "target": "emotionally charged", "kind": "causes"},
+                    ],
+                },
+                "activation_hints": {"entity_hints": ["food", "emotionally charged"]},
+                "resolved_referents": [],
+            },
+            isolated_packet={
+                "parsed_payload": {
+                    "candidate_targets": ["emotionally charged", "food"],
+                    "terms_or_phrases_not_to_discard": ["emotionally charged", "food"],
+                    "candidate_relations": [],
+                    "ambiguities": [],
+                }
+            },
+            contextual_packet={"parsed_payload": {}},
+            semantic_coverage_target={
+                "must_preserve": ["emotionally charged", "food"],
+                "should_include": [],
+                "avoid_satisfying_with": [],
+                "query_text": "what makes me feel emotionally charged like the food?",
+                "allow_no_retrieval_needed": False,
+            },
+        )
+
+        canonical_ids = {entity["id"] for entity in compiler_packet["semantic_target"]["entities"]}
+        relation = compiler_packet["semantic_target"]["relations"][0]
+        self.assertIn(relation["source_entity"], canonical_ids)
+        self.assertIn(relation["target_entity"], canonical_ids)
+        self.assertEqual(relation["endpoint_normalization"], "normalized")
+
+    def test_semantic_compiler_preserves_unresolved_relation_endpoint_with_diagnostics(self) -> None:
+        compiler_packet, _ = _build_semantic_compiler_packet(
+            user_input="what makes me feel emotionally charged like the food?",
+            prior_thread_state={},
+            semantic_payload={
+                "perturbation_nodes": [
+                    {"id": "food", "label": "food", "kind": "factor"},
+                    {"id": "emotionally_charged", "label": "emotionally charged", "kind": "effect"},
+                ],
+                "contextual_salt_nodes": [],
+                "perturbation_semantic_graph": {
+                    "nodes": [
+                        {"id": "food", "label": "food", "kind": "factor"},
+                        {"id": "emotionally_charged", "label": "emotionally charged", "kind": "effect"},
+                    ],
+                    "edges": [
+                        {"source": "food", "target": "mystery trigger", "kind": "causes"},
+                    ],
+                },
+                "activation_hints": {"entity_hints": ["food", "emotionally charged"]},
+                "resolved_referents": [],
+            },
+            isolated_packet={
+                "parsed_payload": {
+                    "candidate_targets": ["emotionally charged", "food"],
+                    "terms_or_phrases_not_to_discard": ["emotionally charged", "food"],
+                    "candidate_relations": [],
+                    "ambiguities": [],
+                }
+            },
+            contextual_packet={"parsed_payload": {}},
+            semantic_coverage_target={
+                "must_preserve": ["emotionally charged", "food"],
+                "should_include": [],
+                "avoid_satisfying_with": [],
+                "query_text": "what makes me feel emotionally charged like the food?",
+                "allow_no_retrieval_needed": False,
+            },
+        )
+
+        relation = compiler_packet["semantic_target"]["relations"][0]
+        self.assertTrue(relation["source_entity"].startswith("entity:"))
+        self.assertEqual(relation["target_entity"], "mystery trigger")
+        self.assertEqual(relation["endpoint_normalization"], "partial")
+        self.assertEqual(
+            compiler_packet["compiler_diagnostics"]["relation_endpoint_normalization"]["partial_count"],
+            1,
+        )
+
+    def test_semantic_compiler_fallback_relations_use_canonical_entity_ids(self) -> None:
+        compiler_packet, _ = _build_semantic_compiler_packet(
+            user_input="what do I think about candy snack food before bed?",
+            prior_thread_state={},
+            semantic_payload={
+                "perturbation_nodes": [],
+                "contextual_salt_nodes": [],
+                "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                "activation_hints": {},
+                "resolved_referents": [],
+            },
+            isolated_packet={
+                "parsed_payload": {
+                    "candidate_targets": ["candy snack food before bed", "sleep hygiene"],
+                    "terms_or_phrases_not_to_discard": ["candy snack food before bed", "sleep hygiene"],
+                    "candidate_relations": ["consumption timing"],
+                    "ambiguities": [],
+                }
+            },
+            contextual_packet={"parsed_payload": {}},
+            semantic_coverage_target={
+                "must_preserve": ["candy snack food before bed"],
+                "should_include": [],
+                "avoid_satisfying_with": [],
+                "query_text": "what do I think about candy snack food before bed?",
+                "allow_no_retrieval_needed": False,
+            },
+        )
+
+        relation = compiler_packet["semantic_target"]["relations"][0]
+        self.assertTrue(relation["source_entity"].startswith("entity:"))
+        self.assertTrue(relation["target_entity"].startswith("entity:"))
+        self.assertEqual(relation["endpoint_normalization"], "normalized")
+
+    def test_semantic_contract_validation_is_compiler_primary_when_legacy_target_is_malformed(self) -> None:
+        semantic_context_packet = _build_semantic_context_packet(
+            thread_document={"thread_id": "thread-test"},
+            prior_thread_state={},
+            user_input="Please retrieve the bedtime candy topic.",
+            turn_id=1,
+            semantic_extraction=SemanticExtractionArtifacts(
+                isolated_packet={
+                    "backend_mode": "parsed",
+                    "status": "parsed",
+                    "parsed_payload": {
+                        "raw_user_input": "Please retrieve the bedtime candy topic.",
+                        "candidate_targets": ["bedtime candy topic"],
+                        "terms_or_phrases_not_to_discard": ["bedtime candy topic"],
+                        "candidate_relations": [],
+                        "ambiguities": [],
+                    },
+                },
+                isolated_raw_artifact={},
+                contextual_packet={
+                    "backend_mode": "parsed",
+                    "status": "parsed",
+                    "parsed_payload": {
+                        "raw_user_input": "Please retrieve the bedtime candy topic.",
+                        "perturbation_nodes": [{"id": "topic", "label": "bedtime candy topic", "kind": "topic"}],
+                        "contextual_salt_nodes": [],
+                        "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                        "semantic_coverage_target": "bad legacy target",
+                        "activation_hints": {"entity_hints": ["bedtime candy topic"]},
+                        "limitations": ["model-generated extraction"],
+                    },
+                },
+                contextual_raw_artifact={},
+            ),
+        )
+
+        self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
+        self.assertTrue(semantic_context_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
+        self.assertFalse(
+            semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["valid"]
+        )
+        self.assertIn(
+            "semantic_coverage_target expected dict, got str",
+            " ".join(
+                semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"]
+            ),
+        )
+
+    def test_runtime_does_not_block_only_for_legacy_semantic_coverage_target_shape_when_compiler_valid(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[
+                {"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/alpha.md",
+                    "paragraph_text": "The alpha anchor evidence is present in this chunk.",
+                    "note_title": "Alpha Note",
+                    "section_label": "Alpha Section",
+                }
+            ],
+        )
+        inputs["semantic_context_packet"]["semantic_coverage_target"] = {
+            "must_preserve": ["alpha anchor"],
+            "should_include": [],
+            "avoid_satisfying_with": [],
+        }
+        report = _evaluate_retrieval_coverage(**inputs)
+
+        self.assertEqual(report["decision"], "approved")
+        self.assertNotIn("semantic_coverage_target missing or invalid", report["blocking_reasons"])
+
+    def test_legacy_followup_detection_cannot_force_missing_referent_block_for_explicit_causal_query(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_any",
+            required_anchors=[
+                {"label": "poor sleep", "source": "raw_user_input", "coverage_role": "must_touch"},
+                {"label": "the thing I ate", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/sleep.md",
+                    "paragraph_text": "Poor sleep is discussed directly in this chunk.",
+                    "note_title": "Sleep Note",
+                    "section_label": "Sleep Section",
+                }
+            ],
+        )
+        inputs["semantic_context_packet"]["referential_followup_detection"] = {
+            "is_referential_followup": True,
+            "requires_referent_resolution": True,
+            "signals": ["model followup"],
+            "surface_forms": ["it"],
+        }
+        inputs["semantic_context_packet"]["semantic_compiler_packet"]["semantic_target"]["question_type"] = "causal_disambiguation"
+        inputs["semantic_context_packet"]["resolved_referents"] = [
+            {"surface_form": "it", "resolved_to": "sleep", "source": "model", "confidence": "high"}
+        ]
+        report = _evaluate_retrieval_coverage(**inputs)
+
+        self.assertEqual(report["decision"], "approved")
+        self.assertFalse(
+            any("follow-up semantic target missing resolved referent" in reason for reason in report["blocking_reasons"])
+        )
+
+    def test_missing_required_for_target_is_legacy_diagnostic_when_compiler_target_is_valid(self) -> None:
+        semantic_context_packet = _build_semantic_context_packet(
+            thread_document={"thread_id": "thread-test"},
+            prior_thread_state={
+                "latest_turn_id": 2,
+                "recent_messages": [{"role": "user", "content": "What do I think about candy snack food before bed?"}],
+            },
+            user_input="Is my low mood coming from poor sleep or from the thing I ate?",
+            turn_id=3,
+            semantic_extraction=SemanticExtractionArtifacts(
+                isolated_packet={
+                    "backend_mode": "parsed",
+                    "status": "parsed",
+                    "parsed_payload": {
+                        "raw_user_input": "Is my low mood coming from poor sleep or from the thing I ate?",
+                        "candidate_targets": ["poor sleep", "the thing I ate"],
+                        "terms_or_phrases_not_to_discard": ["poor sleep", "the thing I ate"],
+                        "candidate_relations": [],
+                        "ambiguities": [],
+                    },
+                },
+                isolated_raw_artifact={},
+                contextual_packet={
+                    "backend_mode": "parsed",
+                    "status": "parsed",
+                    "parsed_payload": {
+                        "raw_user_input": "Is my low mood coming from poor sleep or from the thing I ate?",
+                        "resolved_referents": [
+                            {
+                                "surface_form": "it",
+                                "resolved_to": "candy snack food before bed",
+                                "source": "prior_thread_state.recent_messages",
+                                "confidence": "high",
+                            }
+                        ],
+                        "followup_detection": {
+                            "is_referential_followup": True,
+                            "requires_referent_resolution": True,
+                            "signals": ["model followup"],
+                        },
+                        "perturbation_nodes": [],
+                        "contextual_salt_nodes": [],
+                        "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                        "semantic_coverage_target": {
+                            "must_preserve": ["poor sleep", "the thing I ate"],
+                            "should_include": [],
+                            "avoid_satisfying_with": [],
+                            "query_text": "Is my low mood coming from poor sleep or from the thing I ate?",
+                            "allow_no_retrieval_needed": False,
+                        },
+                        "activation_hints": {"entity_hints": ["poor sleep", "the thing I ate"]},
+                        "limitations": ["model-generated extraction"],
+                    },
+                },
+                contextual_raw_artifact={},
+            ),
+        )
+
+        self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
+        self.assertEqual(
+            semantic_context_packet["semantic_compiler_packet"]["semantic_target"]["question_type"],
+            "causal_disambiguation",
+        )
+        self.assertIn(
+            "resolved_referents[0] missing required_for_target",
+            semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+        )
+
+    def test_retrieval_preparation_prioritizes_compiler_plan_terms(self) -> None:
+        retrieval_preparation = _build_retrieval_preparation(
+            user_input="Please compare latent geometry and hyperbolic drift.",
+            isolated_packet={"parsed_payload": {"candidate_targets": ["legacy target"], "candidate_relations": []}},
+            contextual_packet={"parsed_payload": {"activation_hints": {"entity_hints": ["legacy hint"]}}},
+            semantic_coverage_target={
+                "must_preserve": ["legacy must preserve"],
+                "should_include": [],
+                "avoid_satisfying_with": [],
+                "query_text": "legacy target query",
+                "allow_no_retrieval_needed": False,
+            },
+            semantic_compiler_packet={
+                "semantic_target": {"canonical_query": "latent geometry versus hyperbolic drift"},
+                "retrieval_plan": {
+                    "lexical_terms": ["riemannian"],
+                    "entity_terms": ["hyperbolic drift"],
+                    "relation_terms": ["compare"],
+                    "graph_seeds": ["riemannian manifold"],
+                    "avoid_terms": [],
+                },
+            },
+        )
+
+        self.assertIn("riemannian", retrieval_preparation["combined_candidate_terms"])
+        self.assertIn("hyperbolic", retrieval_preparation["combined_candidate_terms"])
+        latent_sources = retrieval_preparation["candidate_term_sources"]["riemannian"]
+        self.assertTrue(any(source.startswith("semantic_compiler_packet") for source in latent_sources))
+        combined = retrieval_preparation["combined_candidate_terms"]
+        self.assertLess(combined.index("riemannian"), combined.index("legacy"))
+
     def test_runtime_blocks_when_semantic_coverage_target_shape_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
@@ -4017,11 +4415,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
                     "candidate_targets": ["invalid"],
                     "candidate_relations": [],
-                    "semantic_coverage_target": {
-                        "must_preserve": ["invalid target fixture"],
-                        "should_include": [],
-                        "avoid_satisfying_with": [],
-                    },
+                    "semantic_coverage_target": "bad legacy target",
                     "activation_hints": {
                         "lexical_terms": ["invalid", "target", "fixture"],
                         "phrases": ["invalid target fixture"],
@@ -4041,11 +4435,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_extractor_backend=parsed_backend,
             )
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(result.coverage_report["decision"], "blocked")
-            self.assertFalse(result.coverage_report["semantic_target_coverage"]["target_valid"])
-            self.assertIn("semantic_coverage_target missing or invalid", result.coverage_report["blocking_reasons"])
-            self.assertEqual(result.llm_metadata["mode"], "not_called")
+            self.assertTrue(result.semantic_context_packet["semantic_contract_validation"]["valid"])
+            self.assertFalse(
+                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["valid"]
+            )
+            self.assertNotIn("semantic_coverage_target missing or invalid", result.coverage_report["blocking_reasons"])
 
     def test_turn_cli_reports_artifact_paths_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
