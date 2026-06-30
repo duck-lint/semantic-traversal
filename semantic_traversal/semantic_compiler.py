@@ -110,7 +110,7 @@ def extract_terms(text: str) -> list[str]:
 
 def _default_limitations() -> list[str]:
     return [
-        "model-generated extraction",
+        "model-generated compiler-stage output",
         "additive only",
         "not authoritative",
     ]

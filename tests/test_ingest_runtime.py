@@ -30,10 +30,10 @@ from semantic_traversal.runtime import (
     classify_semantic_question_shape,
     _build_turn_compilation_packet,
     _build_semantic_compiler_packet,
-    _build_contextual_extraction_request,
+    _build_contextual_compiler_request,
     _build_retrieval_preparation,
     _evaluate_retrieval_coverage,
-    _evaluate_semantic_target_coverage,
+    _evaluate_semantic_compiler_alignment,
     _query_vector_candidates,
     run_thread_turn,
 )
@@ -271,13 +271,6 @@ def _minimal_compiler_coverage_inputs(
                 }
             },
             "semantic_contract_validation": {"valid": True, "reasons": []},
-            "semantic_target": {
-                "must_preserve": [str(anchor["label"]) for anchor in required_anchors],
-                "should_include": [],
-                "avoid_satisfying_with": list(avoid_terms),
-                "query_text": "alignment test query",
-                "allow_no_retrieval_needed": not requires_retrieval,
-            },
             "semantic_compiler_packet": {
                 "raw_user_input": "alignment test query",
                 "semantic_target": {
@@ -504,8 +497,8 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
         packet_json = prompt.split("Packet:\n", 1)[1] if "Packet:\n" in prompt else "{}"
         packet = json.loads(packet_json)
         raw_user_input = str(packet.get("raw_user_input") or "")
-        extractor_thread_context = packet.get("extractor_thread_context") or packet.get("prior_thread_state") or {}
-        recent_messages = list(extractor_thread_context.get("recent_user_messages") or [])
+        compiler_thread_context = packet.get("compiler_thread_context") or packet.get("prior_thread_state") or {}
+        recent_messages = list(compiler_thread_context.get("recent_user_messages") or [])
         deterministic_referent_candidates = list(packet.get("deterministic_resolved_referent_candidates") or [])
         terms = ["candy", "snack", "food", "bed"]
         followup_detection = {
@@ -538,7 +531,7 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
                 },
                 "semantic_target": "candy snack food before bed",
                 "activation_hints": ["candy", "snack", "food", "bed"],
-                "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
             }
             return {"response": json.dumps(response_payload)}
         response_payload = {
@@ -569,7 +562,7 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
                 "temporal_hints": ["yesterday"],
                 "entity_hints": ["dream recall"],
             },
-            "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+            "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
         }
         return {"response": json.dumps(response_payload)}
 
@@ -637,6 +630,18 @@ class IngestRuntimeTests(unittest.TestCase):
             "semantic_coverage_target",
             "isolated_semantic_extraction",
             "contextual_semantic_extraction",
+            "isolated_extraction",
+            "contextual_extraction",
+            "extractor_thread_context",
+            "extraction_confidence",
+            "legacy_semantic",
+            "legacy_contract",
+            "legacy_payload",
+            "legacy_compatibility",
+            "compatibility_target",
+            "semantic coverage target",
+            "semantic extraction",
+            "model-generated extraction",
         ]
         hits: list[str] = []
         for root in scan_roots:
@@ -1357,7 +1362,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(turn_compilation_packet["raw_user_input"], user_input)
             self.assertEqual(synthesis_context_packet["raw_user_input"], user_input)
 
-    def test_extraction_raw_user_input_mismatch_is_diagnostic(self) -> None:
+    def test_compiler_stage_raw_user_input_mismatch_is_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             stub_backend = StubSemanticCompilerBackend(
@@ -1371,8 +1376,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["candy"],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "raw_user_input": "ALSO WRONG",
@@ -1392,8 +1397,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     },
                     "delta_from_isolated_read": {"added_by_context": [], "removed_or_deemphasized_by_context": [], "unchanged": []},
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -1414,7 +1419,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(contextual_packet["parsed_payload"]["raw_user_input"], "Please retrieve the candy snack food before bed note.")
             self.assertTrue(contextual_packet["diagnostics"]["raw_user_input_validation"]["raw_user_input_repaired"])
 
-    def test_extraction_missing_raw_user_input_is_diagnostic(self) -> None:
+    def test_compiler_stage_missing_raw_user_input_is_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             stub_backend = StubSemanticCompilerBackend(
@@ -1427,8 +1432,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["candy"],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "contextual_user_intent": "missing raw input contextual pass",
@@ -1447,8 +1452,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     },
                     "delta_from_isolated_read": {"added_by_context": [], "removed_or_deemphasized_by_context": [], "unchanged": []},
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -1490,8 +1495,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["candy"],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "raw_user_input": "",
@@ -1515,8 +1520,8 @@ class IngestRuntimeTests(unittest.TestCase):
                         "unchanged": ["candy"],
                     },
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -1528,7 +1533,7 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             retrieval_preparation = result.turn_compilation_packet["retrieval_preparation"]
-            self.assertIn("candy", retrieval_preparation["extraction_hint_terms"])
+            self.assertIn("candy", retrieval_preparation["compiler_hint_terms"])
             self.assertIn("snack", retrieval_preparation["raw_lexical_terms"])
             self.assertIn("food", retrieval_preparation["raw_lexical_terms"])
             self.assertIn("before", retrieval_preparation["raw_lexical_terms"])
@@ -1536,7 +1541,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertIn("food", retrieval_preparation["combined_candidate_terms"])
             self.assertEqual(retrieval_preparation["candidate_term_sources"]["snack"], ["raw_user_input"])
 
-    def test_extraction_hint_harvesting_is_pruned(self) -> None:
+    def test_compiler_stage_hint_harvesting_is_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             stub_backend = StubSemanticCompilerBackend(
@@ -1550,7 +1555,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["usefulkeep"],
                     "ambiguities": ["junkambiguity"],
-                    "extraction_confidence": "low",
+                    "compiler_confidence": "low",
                     "limitations": ["junklimitation"],
                 },
                 contextual_payload={
@@ -1579,7 +1584,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "unchanged": ["junkunchanged"],
                     },
                     "ambiguities": ["junkambiguitycontext"],
-                    "extraction_confidence": "low",
+                    "compiler_confidence": "low",
                     "limitations": ["junklimitationcontext"],
                 },
             )
@@ -1592,20 +1597,20 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             retrieval_preparation = result.turn_compilation_packet["retrieval_preparation"]
-            extraction_hint_terms = set(retrieval_preparation["extraction_hint_terms"])
-            self.assertIn("usefultarget", extraction_hint_terms)
-            self.assertIn("usefulrelation", extraction_hint_terms)
-            self.assertIn("usefulkeep", extraction_hint_terms)
-            self.assertIn("helpfullexical", extraction_hint_terms)
-            self.assertIn("helpfulphrase", extraction_hint_terms)
-            self.assertIn("helpfulrelationhint", extraction_hint_terms)
-            self.assertIn("helpfulentity", extraction_hint_terms)
-            self.assertNotIn("junklimitation", extraction_hint_terms)
-            self.assertNotIn("junkambiguity", extraction_hint_terms)
-            self.assertNotIn("junkdelta", extraction_hint_terms)
-            self.assertNotIn("junkavoid", extraction_hint_terms)
-            self.assertNotIn("junkmustpreserve", extraction_hint_terms)
-            self.assertNotIn("junkneighbor", extraction_hint_terms)
+            compiler_hint_terms = set(retrieval_preparation["compiler_hint_terms"])
+            self.assertIn("usefultarget", compiler_hint_terms)
+            self.assertIn("usefulrelation", compiler_hint_terms)
+            self.assertIn("usefulkeep", compiler_hint_terms)
+            self.assertIn("helpfullexical", compiler_hint_terms)
+            self.assertIn("helpfulphrase", compiler_hint_terms)
+            self.assertIn("helpfulrelationhint", compiler_hint_terms)
+            self.assertIn("helpfulentity", compiler_hint_terms)
+            self.assertNotIn("junklimitation", compiler_hint_terms)
+            self.assertNotIn("junkambiguity", compiler_hint_terms)
+            self.assertNotIn("junkdelta", compiler_hint_terms)
+            self.assertNotIn("junkavoid", compiler_hint_terms)
+            self.assertNotIn("junkmustpreserve", compiler_hint_terms)
+            self.assertNotIn("junkneighbor", compiler_hint_terms)
             self.assertIn("targetanchor", retrieval_preparation["raw_lexical_terms"])
             self.assertIn("targetanchor", retrieval_preparation["combined_candidate_terms"])
             self.assertEqual(
@@ -1635,19 +1640,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 )
 
             self.assertIn(result.runtime_outcome, {"completed", "blocked"})
-            self.assertIsInstance(result.turn_compilation_packet["activation_hints"], dict)
-            self.assertEqual(result.turn_compilation_packet["activation_hints"], {})
-            self.assertTrue(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
-            self.assertIn(
-                "activation_hints expected dict, got list",
-                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
-            )
-            self.assertIn(
-                "semantic_target expected dict, got str",
-                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
-            )
+            self.assertIn("semantic_compiler_packet", result.turn_compilation_packet)
+            self.assertIn("question_shape_classification", result.turn_compilation_packet["semantic_compiler_packet"]["compiler_diagnostics"])
 
-    def test_followup_semantic_target_blocks_when_resolved_referent_is_lost(self) -> None:
+    def test_followup_compiler_target_blocks_when_resolved_referent_is_lost(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1689,7 +1685,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -1705,7 +1701,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(result.llm_metadata["mode"], "not_called")
 
     def test_contextual_request_includes_deterministic_resolved_referent_candidates(self) -> None:
-        request_packet = _build_contextual_extraction_request(
+        request_packet = _build_contextual_compiler_request(
             user_input="I wonder if there's anything specific about how it makes me feel?",
             prior_thread_state={
                 "latest_turn_id": 1,
@@ -1730,7 +1726,7 @@ class IngestRuntimeTests(unittest.TestCase):
         )
 
     def test_non_referential_contextual_request_does_not_include_referent_candidate_pressure(self) -> None:
-        request_packet = _build_contextual_extraction_request(
+        request_packet = _build_contextual_compiler_request(
             user_input="What do I think about candy snack food before bed?",
             prior_thread_state={
                 "latest_turn_id": 0,
@@ -1741,12 +1737,12 @@ class IngestRuntimeTests(unittest.TestCase):
         )
 
         self.assertIn("prior_thread_state", request_packet)
-        self.assertNotIn("extractor_thread_context", request_packet)
+        self.assertNotIn("compiler_thread_context", request_packet)
         self.assertNotIn("deterministic_resolved_referent_candidates", request_packet)
         self.assertNotIn("Use deterministic_resolved_referent_candidates", request_packet["instruction"])
 
-    def test_contextual_request_uses_compact_extractor_thread_context_without_duplicate_assistant_prose_for_referential_followup(self) -> None:
-        request_packet = _build_contextual_extraction_request(
+    def test_contextual_request_uses_compact_compiler_thread_context_without_duplicate_assistant_prose_for_referential_followup(self) -> None:
+        request_packet = _build_contextual_compiler_request(
             user_input="I wonder if there's anything specific about how it makes me feel?",
             prior_thread_state={
                 "latest_turn_id": 1,
@@ -1769,21 +1765,21 @@ class IngestRuntimeTests(unittest.TestCase):
         )
 
         self.assertNotIn("prior_thread_state", request_packet)
-        extractor_thread_context = request_packet["extractor_thread_context"]
-        self.assertEqual(extractor_thread_context["latest_turn_id"], 1)
+        compiler_thread_context = request_packet["compiler_thread_context"]
+        self.assertEqual(compiler_thread_context["latest_turn_id"], 1)
         self.assertEqual(
-            extractor_thread_context["recent_user_messages"],
+            compiler_thread_context["recent_user_messages"],
             ["What do I think about candy snack food before bed?"],
         )
-        self.assertNotIn("latest_assistant_response", extractor_thread_context)
+        self.assertNotIn("latest_assistant_response", compiler_thread_context)
         self.assertEqual(
-            extractor_thread_context["recent_semantic_trajectory"],
+            compiler_thread_context["recent_semantic_trajectory"],
             ["What do I think about candy snack food before bed?"],
         )
 
     def test_non_referential_contextual_prompt_omits_referent_candidate_instruction_text(self) -> None:
         prompt = _build_ollama_prompt(
-            packet=_build_contextual_extraction_request(
+            packet=_build_contextual_compiler_request(
                 user_input="What do I think about candy snack food before bed?",
                 prior_thread_state={
                     "latest_turn_id": 0,
@@ -1797,7 +1793,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_referential_followup_prompt_includes_referent_candidate_instruction_text(self) -> None:
         prompt = _build_ollama_prompt(
-            packet=_build_contextual_extraction_request(
+            packet=_build_contextual_compiler_request(
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 prior_thread_state={
                     "latest_turn_id": 1,
@@ -1841,7 +1837,7 @@ class IngestRuntimeTests(unittest.TestCase):
         self.assertTrue(detection["requires_referent_resolution"])
         self.assertIn("how it makes me feel", detection["referential_signals"])
 
-    def test_followup_semantic_target_contract_validation_passes_when_resolved_referent_is_anchored(self) -> None:
+    def test_followup_compiler_target_contract_validation_passes_when_resolved_referent_is_anchored(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1899,7 +1895,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "signals": ["how it makes me feel"],
                         "surface_forms": ["it"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -1913,14 +1909,13 @@ class IngestRuntimeTests(unittest.TestCase):
 
             turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
             self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
-            self.assertEqual(turn_compilation_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
-            self.assertFalse(turn_compilation_packet["semantic_target_diagnostics"]["repaired"])
+            self.assertEqual(turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
             self.assertNotIn(
                 "semantic_target must_preserve does not include required resolved referent: candy snack food before bed",
                 result.coverage_report["blocking_reasons"],
             )
 
-    def test_followup_missing_required_for_target_is_repaired_from_agreeing_deterministic_candidate(self) -> None:
+    def test_followup_compiler_target_with_agreeing_candidate_preserves_resolved_referent_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1958,6 +1953,7 @@ class IngestRuntimeTests(unittest.TestCase):
                             "resolved_to": "candy snack food before bed",
                             "source": "prior_thread_state.recent_messages",
                             "confidence": "high",
+                            "required_for_target": True,
                         }
                     ],
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
@@ -1978,7 +1974,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -1992,14 +1988,13 @@ class IngestRuntimeTests(unittest.TestCase):
 
             packet = result.turn_compilation_packet
             self.assertTrue(packet["semantic_contract_validation"]["valid"])
-            self.assertTrue(packet["resolved_referents"][0]["required_for_target"])
-            self.assertTrue(packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertEqual(packet["compiler_stage_diagnostics"]["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
             self.assertEqual(
-                packet["resolved_referent_repair_diagnostics"]["repair_type"],
-                "filled_required_for_target_from_deterministic_candidate",
+                packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"][0]["label"],
+                "candy snack food before bed",
             )
 
-    def test_followup_disagreeing_model_referent_missing_required_for_target_is_not_repaired(self) -> None:
+    def test_followup_compiler_target_with_disagreeing_candidate_preserves_model_referent_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2022,6 +2017,7 @@ class IngestRuntimeTests(unittest.TestCase):
                             "resolved_to": "late night sugar",
                             "source": "prior_thread_state.recent_messages",
                             "confidence": "high",
+                            "required_for_target": True,
                         }
                     ],
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
@@ -2042,7 +2038,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2054,13 +2050,19 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertIn(
-                "resolved_referents[0] missing required_for_target",
-                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
+            self.assertFalse(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
+            self.assertFalse(
+                result.turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["valid"]
+            )
+            self.assertTrue(
+                result.turn_compilation_packet["compiler_stage_diagnostics"]["referent_resolution_diagnostics"]["disagreements"]
+            )
+            self.assertEqual(
+                result.turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"][0]["resolved_to"],
+                "late night sugar",
             )
 
-    def test_non_referential_resolved_referent_missing_required_for_target_is_not_repaired(self) -> None:
+    def test_non_referential_compiler_target_preserves_model_referent_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2080,6 +2082,7 @@ class IngestRuntimeTests(unittest.TestCase):
                             "resolved_to": "fixture note",
                             "source": "prior_thread_state.recent_messages",
                             "confidence": "high",
+                            "required_for_target": False,
                         }
                     ],
                     "perturbation_nodes": [{"id": "node:fixture", "label": "fixture", "kind": "lexical_term"}],
@@ -2100,7 +2103,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": ["fixture note"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2111,13 +2114,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertIn(
-                "resolved_referents[0] missing required_for_target",
-                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
+            self.assertTrue(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
+            self.assertEqual(
+                result.turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"][0]["resolved_to"],
+                "fixture note",
             )
 
-    def test_followup_referent_with_existing_required_for_target_true_needs_no_repair(self) -> None:
+    def test_followup_referent_with_required_anchor_preserves_anchor_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2161,7 +2164,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2173,8 +2176,8 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertTrue(result.turn_compilation_packet["resolved_referents"][0]["required_for_target"])
+            self.assertTrue(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
+            self.assertTrue(result.turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"][0]["required_for_target"])
 
     def test_followup_referent_with_explicit_false_is_not_flipped_to_true(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2220,7 +2223,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2232,14 +2235,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertIn(
-                "explicit model required_for_target=false contradicts deterministic required target",
-                result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["reason"],
-            )
-            self.assertFalse(result.turn_compilation_packet["resolved_referents"][0]["required_for_target"])
+            self.assertFalse(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
+            self.assertFalse(result.turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"][0]["required_for_target"])
 
-    def test_non_referential_generic_semantic_target_is_repaired_with_concrete_anchor(self) -> None:
+    def test_non_referential_compiler_target_includes_concrete_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2273,8 +2272,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["candy snack food", "before bed"],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "raw_user_input": "What do I think about candy snack food before bed?",
@@ -2296,7 +2295,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": ["before bed"],
                         "entity_hints": ["candy snack food"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -2308,30 +2307,16 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
-            diagnostics = turn_compilation_packet["semantic_target_diagnostics"]
             self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
-            self.assertTrue(diagnostics["repaired"])
-            self.assertEqual(diagnostics["repair_type"], "added_concrete_anchor_to_must_preserve")
-            self.assertIn("opinion about", diagnostics["original_must_preserve"])
-            self.assertIn("consumption timing", diagnostics["original_must_preserve"])
             self.assertIn(
-                diagnostics["added_must_preserve"][0],
-                turn_compilation_packet["semantic_target"]["must_preserve"],
+                "candy snack food before bed",
+                [anchor["label"] for anchor in turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"]],
             )
-            self.assertIn(diagnostics["added_must_preserve"][0], ["candy snack food before bed", "candy snack food"])
-            coverage = result.coverage_report["semantic_target_coverage"]
-            self.assertTrue(coverage["covered"])
-            self.assertEqual(coverage["missing_must_preserve"], [])
-            self.assertNotIn(
-                "semantic coverage target missing required evidence: opinion about",
-                result.coverage_report["blocking_reasons"],
-            )
-            self.assertNotIn(
-                "semantic coverage target missing required evidence: consumption timing",
-                result.coverage_report["blocking_reasons"],
-            )
+            coverage = result.coverage_report["semantic_compiler_alignment"]
+            self.assertIn("candy snack food before bed", coverage["anchor_alignment"]["aligned_anchors"])
+            self.assertEqual(coverage["anchor_alignment"]["missing_anchors"], [])
 
-    def test_generic_only_semantic_target_without_concrete_candidates_fails_closed(self) -> None:
+    def test_generic_only_compiler_target_without_concrete_candidates_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2353,8 +2338,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": [],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "raw_user_input": "What is the relationship between?",
@@ -2376,7 +2361,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -2389,13 +2374,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
-            self.assertIn(
-                "semantic_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available",
-                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
-            )
-            self.assertFalse(result.turn_compilation_packet["semantic_target_diagnostics"]["repaired"])
 
-    def test_already_good_non_referential_semantic_target_is_unchanged(self) -> None:
+    def test_already_good_non_referential_compiler_target_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2417,8 +2397,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["candy snack food before bed"],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "raw_user_input": "What do I think about candy snack food before bed?",
@@ -2440,7 +2420,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": ["before bed"],
                         "entity_hints": ["candy snack food before bed"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -2451,10 +2431,8 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            diagnostics = result.turn_compilation_packet["semantic_target_diagnostics"]
-            self.assertFalse(diagnostics["repaired"])
             self.assertEqual(
-                result.turn_compilation_packet["semantic_target"]["must_preserve"],
+                [anchor["label"] for anchor in result.turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"]],
                 ["candy snack food before bed"],
             )
 
@@ -2494,8 +2472,8 @@ class IngestRuntimeTests(unittest.TestCase):
                     "implicit_needs_or_pressures": [],
                     "terms_or_phrases_not_to_discard": ["Schopenhauer's parallel postulate argument"],
                     "ambiguities": [],
-                    "extraction_confidence": "low",
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
                 contextual_payload={
                     "raw_user_input": "What do I think about Schopenhauer's parallel postulate argument?",
@@ -2517,7 +2495,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": ["Schopenhauer's parallel postulate argument"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 },
             )
             result = run_thread_turn(
@@ -2530,9 +2508,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertIn(
                 "Schopenhauer's parallel postulate argument",
-                result.turn_compilation_packet["semantic_target"]["must_preserve"],
+                [anchor["label"] for anchor in result.turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"]],
             )
-            self.assertTrue(result.turn_compilation_packet["semantic_target_diagnostics"]["repaired"])
 
     def test_semantic_compiler_packet_drives_first_turn_runtime_with_provenance_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2567,7 +2544,7 @@ class IngestRuntimeTests(unittest.TestCase):
             compiler_packet = result.turn_compilation_packet["semantic_compiler_packet"]
             self.assertEqual(compiler_packet["raw_user_input"], "What do I think about candy snack food before bed?")
             self.assertTrue(compiler_packet["semantic_target"]["required_anchors"])
-            self.assertEqual(result.coverage_report["semantic_target_coverage"]["coverage_mode"], "provenance_alignment")
+            self.assertEqual(result.coverage_report["semantic_compiler_alignment"]["coverage_mode"], "provenance_alignment")
             self.assertIn(result.coverage_report["decision"], {"approved", "blocked"})
             if result.coverage_report["decision"] == "approved":
                 self.assertEqual(result.runtime_outcome, "completed")
@@ -2650,7 +2627,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": ["candy snack food before bed", "sleep quality"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2726,7 +2703,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": ["food", "sleep quality"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2770,8 +2747,8 @@ class IngestRuntimeTests(unittest.TestCase):
                         "implicit_needs_or_pressures": [],
                         "terms_or_phrases_not_to_discard": ["Schopenhauer's parallel postulate argument"],
                         "ambiguities": [],
-                        "extraction_confidence": "low",
-                        "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                        "compiler_confidence": "low",
+                        "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                     },
                     contextual_payload={
                         "raw_user_input": "What do I think about Schopenhauer's parallel postulate argument?",
@@ -2793,13 +2770,13 @@ class IngestRuntimeTests(unittest.TestCase):
                             "temporal_hints": [],
                             "entity_hints": ["Schopenhauer's parallel postulate argument"],
                         },
-                        "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                        "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                     },
                 ),
             )
 
             self.assertIn("semantic_compiler_packet", result.synthesis_context_packet)
-            self.assertIn("legacy_semantic_compiler_diagnostics", result.synthesis_context_packet)
+            self.assertIn("compiler_stage_diagnostics", result.synthesis_context_packet)
             self.assertIn("semantic_compiler_packet", result.synthesis_context_packet["turn_compilation_packet"])
             self.assertTrue(
                 any(
@@ -2850,7 +2827,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "signals": ["how it makes me feel"],
                         "surface_forms": ["it"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2861,7 +2838,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertIn("resolved_referents expected list, got str", result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"])
+            self.assertIn("resolved_referents expected list, got str", result.turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["reasons"])
 
     def test_malformed_resolved_referent_item_fields_block_closed_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2916,7 +2893,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "signals": ["how it makes me feel"],
                         "surface_forms": ["it"],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -2928,7 +2905,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            reasons = result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"]
+            reasons = result.turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["reasons"]
             self.assertIn("resolved_referents[0].surface_form expected str, got int", reasons)
             self.assertIn("resolved_referents[0].resolved_to expected str, got list", reasons)
             self.assertIn("resolved_referents[0].source expected str, got dict", reasons)
@@ -2966,8 +2943,8 @@ class IngestRuntimeTests(unittest.TestCase):
             turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
             contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
             self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
-            self.assertTrue(turn_compilation_packet["resolved_referents"])
-            self.assertEqual(turn_compilation_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
+            self.assertTrue(turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"])
+            self.assertEqual(turn_compilation_packet["compiler_stage_diagnostics"]["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
             self.assertIsNotNone(_OllamaFixtureHandler.last_generate_payload)
             self.assertNotIn("format", _OllamaFixtureHandler.last_generate_payload)
             self.assertEqual(
@@ -3042,7 +3019,7 @@ class IngestRuntimeTests(unittest.TestCase):
                             "required_for_target": True,
                         }
                     ],
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -3122,7 +3099,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertTrue(result.retrieval_packet["selected_chunks"])
             self.assertTrue(any("disabled" in reason for reason in result.blocking_reasons))
 
-    def test_non_referential_contextual_extraction_request_packet_preserves_prior_thread_state(self) -> None:
+    def test_non_referential_contextual_compiler_request_packet_preserves_prior_thread_state(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             first_turn = run_thread_turn(
@@ -3144,7 +3121,7 @@ class IngestRuntimeTests(unittest.TestCase):
             contextual_packet = _load_turn_artifact(second_turn.contextual_semantic_compiler_packet_path)
             request_packet = contextual_packet["request_packet"]
             self.assertIn("prior_thread_state", request_packet)
-            self.assertNotIn("extractor_thread_context", request_packet)
+            self.assertNotIn("compiler_thread_context", request_packet)
             self.assertNotIn("deterministic_resolved_referent_candidates", request_packet)
             prior_thread_state = request_packet["prior_thread_state"]
             self.assertEqual(prior_thread_state["latest_turn_id"], 1)
@@ -3303,8 +3280,8 @@ class IngestRuntimeTests(unittest.TestCase):
             coverage_report = _load_turn_artifact(result.coverage_report_path)
             ledger = read_ledger(result.thread_ledger_path)
 
-            self.assertEqual(result.turn_compilation_packet["extracted_lexical_query_terms"], [])
-            self.assertEqual(turn_compilation_packet["extracted_lexical_query_terms"], [])
+            self.assertEqual(result.turn_compilation_packet["retrieval_preparation"]["raw_lexical_terms"], [])
+            self.assertEqual(turn_compilation_packet["retrieval_preparation"]["raw_lexical_terms"], [])
             self.assertFalse(semantic_traversal_manifest["query_terms_available"])
             self.assertEqual(retrieval_packet["retrieval_observation"], "matched_chunks")
             self.assertTrue(retrieval_packet["selected_chunks"])
@@ -3385,9 +3362,9 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "completed")
             self.assertEqual(result.coverage_report["decision"], "approved")
-            self.assertTrue(result.coverage_report["semantic_target_coverage"]["covered"])
-            self.assertTrue(result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["covered"])
-            self.assertEqual(result.coverage_report["semantic_target_coverage"]["must_preserve"][0]["evidence"][0]["field"], "paragraph_text")
+            self.assertTrue(result.coverage_report["semantic_compiler_alignment"]["covered"])
+            self.assertTrue(result.coverage_report["semantic_compiler_alignment"]["anchor_alignment"]["aligned_anchors"])
+            self.assertTrue(result.coverage_report["semantic_compiler_alignment"]["selected_chunk_provenance"][0]["has_provenance"])
             self.assertEqual(result.llm_metadata["mode"], "stub")
             self.assertIsNotNone(result.assistant_response)
             self.assertTrue(result.semantic_traversal_manifest["selected_chunk_ids"])
@@ -3435,61 +3412,27 @@ class IngestRuntimeTests(unittest.TestCase):
                     self.assertNotIn("hop_count", candidate)
                     self.assertNotIn("edge_types", candidate)
 
-    def test_semantic_target_coverage_blocks_when_must_preserve_evidence_is_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
-            repo_root = _prepared_repo_root(repo_dir)
-            (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
-            _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
-            run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
-
-            parsed_backend = _ParsedSemanticCompilerBackend(
-                contextual_payload={
-                    "raw_user_input": "Please retrieve the candy snack food before bed note and check the unseen phrase.",
-                    "contextual_user_intent": "coverage miss",
-                    "thread_relevant_context": [],
-                    "semantic_pressure": None,
-                    "perturbation_nodes": [{"id": "node:candy", "label": "candy", "kind": "lexical_term"}],
-                    "contextual_salt_nodes": [],
-                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "candidate_targets": ["candy", "unseen"],
-                    "candidate_relations": [],
-                    "semantic_target": {
-                        "must_preserve": ["unseen phrase alpha"],
-                        "should_include": ["midnight orchard"],
-                        "avoid_satisfying_with": [],
-                        "query_text": "Please retrieve the candy snack food before bed note and check the unseen phrase.",
-                        "allow_no_retrieval_needed": False,
-                    },
-                    "activation_hints": {
-                        "lexical_terms": ["candy", "snack", "food", "bed"],
-                        "phrases": ["candy snack food before bed"],
-                        "conceptual_neighbors": [],
-                        "relation_hints": [],
-                        "temporal_hints": [],
-                        "entity_hints": [],
-                    },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+    def test_semantic_compiler_alignment_blocks_when_required_anchor_evidence_is_missing(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[
+                {
+                    "label": "unseen phrase alpha",
+                    "source": "raw_user_input",
+                    "coverage_role": "must_touch",
+                    "anchor_kind": "current_turn_phrase",
                 }
-            )
-            result = run_thread_turn(
-                repo_root=repo_root,
-                data_root=Path(data_dir),
-                user_input="Please retrieve the candy snack food before bed note and check the unseen phrase.",
-                llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_compiler_backend=parsed_backend,
-            )
+            ],
+            selected_chunks=[],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
 
-            coverage_report = _load_turn_artifact(result.coverage_report_path)
+        self.assertEqual(report["decision"], "blocked")
+        self.assertFalse(report["semantic_compiler_alignment"]["covered"])
+        self.assertIn("unseen phrase alpha", report["semantic_compiler_alignment"]["anchor_alignment"]["missing_anchors"])
+        self.assertIn("required anchor not aligned: unseen phrase alpha", report["blocking_reasons"])
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(coverage_report["decision"], "blocked")
-            self.assertFalse(coverage_report["semantic_target_coverage"]["covered"])
-            self.assertIn("unseen phrase alpha", coverage_report["semantic_target_coverage"]["missing_must_preserve"])
-            self.assertIn("required anchor not aligned: unseen phrase alpha", coverage_report["blocking_reasons"])
-            self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
-            self.assertEqual(result.llm_metadata["mode"], "not_called")
-
-    def test_semantic_target_coverage_blocks_when_avoid_target_is_present(self) -> None:
+    def test_semantic_compiler_alignment_blocks_when_avoid_target_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             _write_markdown_fixture(
@@ -3540,7 +3483,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -3555,13 +3498,12 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.runtime_outcome, "completed")
             self.assertEqual(coverage_report["decision"], "approved")
-            self.assertIn("dream recall", coverage_report["semantic_target_coverage"]["present_avoid_satisfying_with"])
-            self.assertIn("dream recall", coverage_report["semantic_target_coverage"]["avoid_term_audit"]["present_avoid_terms"])
-            self.assertIn("avoid term present alongside aligned anchors: dream recall", coverage_report["semantic_target_coverage"]["diagnostic_gaps"])
+            self.assertIn("dream recall", coverage_report["semantic_compiler_alignment"]["avoid_term_audit"]["present_avoid_terms"])
+            self.assertIn("avoid term present alongside aligned anchors: dream recall", coverage_report["semantic_compiler_alignment"]["diagnostic_gaps"])
             self.assertEqual(coverage_report["blocking_reasons"], [])
             self.assertEqual(result.llm_metadata["mode"], "stub")
 
-    def test_semantic_target_coverage_reports_metadata_evidence(self) -> None:
+    def test_semantic_compiler_alignment_reports_metadata_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             _write_markdown_fixture(
@@ -3612,7 +3554,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -3623,267 +3565,34 @@ class IngestRuntimeTests(unittest.TestCase):
                 semantic_compiler_backend=parsed_backend,
             )
 
-            coverage_target = result.coverage_report["semantic_target_coverage"]
+            coverage_target = result.coverage_report["semantic_compiler_alignment"]
 
             self.assertEqual(result.runtime_outcome, "completed")
             self.assertEqual(result.coverage_report["decision"], "approved")
-            self.assertTrue(coverage_target["must_preserve"][0]["covered"])
-            self.assertEqual(coverage_target["must_preserve"][0]["evidence"][0]["field"], "section_label")
-            self.assertIn("midnight orchard", coverage_target["missing_should_include"])
+            self.assertIn("Fixture Corpus Beta", coverage_target["anchor_alignment"]["aligned_anchors"])
+            self.assertTrue(coverage_target["selected_chunk_provenance"][0]["has_provenance"])
 
-    def test_semantic_target_coverage_returns_false_for_empty_retrieval(self) -> None:
-        report = _evaluate_semantic_target_coverage(
-            turn_compilation_packet={
-                "semantic_target": {
-                    "must_preserve": ["candy snack food before bed"],
-                    "should_include": ["dream"],
-                    "avoid_satisfying_with": ["avoid this"],
-                    "query_text": "candy snack food before bed",
-                    "allow_no_retrieval_needed": False,
-                }
-            },
-            semantic_traversal_manifest={},
-            retrieval_packet={"selected_chunks": []},
+    def test_semantic_compiler_alignment_returns_false_for_empty_retrieval(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "candy snack food before bed", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[],
         )
-        self.assertFalse(report["covered"])
-        self.assertEqual(report["missing_must_preserve"], ["candy snack food before bed"])
-        self.assertEqual(report["missing_should_include"], ["dream"])
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertFalse(report["semantic_compiler_alignment"]["covered"])
+        self.assertEqual(report["semantic_compiler_alignment"]["anchor_alignment"]["missing_anchors"], ["candy snack food before bed"])
+        self.assertIn("required anchor not aligned: candy snack food before bed", report["semantic_compiler_alignment"]["blocking_gaps"])
 
-    def test_semantic_target_coverage_accepts_required_resolved_referent_as_discourse_anchor_evidence(self) -> None:
-        report = _evaluate_semantic_target_coverage(
-            turn_compilation_packet={
-                "resolved_referents": [
-                    {
-                        "surface_form": "it",
-                        "resolved_to": "candy snack food before bed",
-                        "source": "prior_thread_state.recent_messages",
-                        "confidence": "high",
-                        "required_for_target": True,
-                    }
-                ],
-                "referent_resolution_diagnostics": {
-                    "deterministic_followup_detection": {
-                        "is_referential_followup": True,
-                        "requires_referent_resolution": True,
-                    },
-                    "deterministic_referent_targets": ["candy snack food before bed"],
-                    "model_referent_targets": ["candy snack food before bed"],
-                    "disagreements": [],
-                    "requires_referent_resolution": True,
-                },
-                "semantic_target": {
-                    "must_preserve": ["candy snack food before bed"],
-                    "should_include": ["sleep quality"],
-                    "avoid_satisfying_with": [],
-                    "query_text": "I wonder if there's anything specific about how it makes me feel?",
-                    "allow_no_retrieval_needed": False,
-                },
-            },
-            semantic_traversal_manifest={},
-            retrieval_packet={
-                "selected_chunks": [
-                    {
-                        "chunk_id": "chunk-1",
-                        "paragraph_text": "This retrieved evidence discusses sleep hygiene without naming the bedtime candy phrase exactly.",
-                        "note_title": "Fixture",
-                        "section_label": "Section",
-                        "relative_path": "fixture.md",
-                        "note_path": "fixture.md",
-                        "section_path": [],
-                        "frontmatter": {},
-                    }
-                ]
-            },
+    def test_semantic_compiler_alignment_rejects_invalid_target_shape(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[{"label": "alpha", "source": "raw_user_input", "coverage_role": "must_touch"}],
+            selected_chunks=[],
         )
-        self.assertTrue(report["covered"])
-        self.assertEqual(
-            report["evaluation_mode"],
-            "deterministic_retrieved_evidence_match_with_discourse_anchor_evidence",
-        )
-        self.assertEqual(report["must_preserve"][0]["match_type"], "resolved_referent_discourse_anchor")
-        self.assertEqual(report["must_preserve"][0]["evidence"][0]["resolved_to"], "candy snack food before bed")
-        self.assertTrue(report["must_preserve"][0]["evidence"][0]["deterministic_model_agreement"])
-        self.assertIn("sleep quality", report["missing_should_include"])
-
-    def test_semantic_target_coverage_does_not_auto_cover_resolved_referent_anchor_when_diagnostics_disagree(self) -> None:
-        report = _evaluate_semantic_target_coverage(
-            turn_compilation_packet={
-                "resolved_referents": [
-                    {
-                        "surface_form": "it",
-                        "resolved_to": "candy snack food before bed",
-                        "source": "prior_thread_state.recent_messages",
-                        "confidence": "high",
-                        "required_for_target": True,
-                    }
-                ],
-                "referent_resolution_diagnostics": {
-                    "deterministic_referent_targets": ["late night sugar"],
-                    "model_referent_targets": ["candy snack food before bed"],
-                    "disagreements": [
-                        "deterministic resolved referent candidate missing from model output: late night sugar"
-                    ],
-                    "requires_referent_resolution": True,
-                },
-                "semantic_target": {
-                    "must_preserve": ["candy snack food before bed"],
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "I wonder if there's anything specific about how it makes me feel?",
-                    "allow_no_retrieval_needed": False,
-                },
-            },
-            semantic_traversal_manifest={},
-            retrieval_packet={"selected_chunks": []},
-        )
-        self.assertFalse(report["covered"])
-        self.assertEqual(report["missing_must_preserve"], ["candy snack food before bed"])
-        self.assertFalse(report["must_preserve"][0]["covered"])
-
-    def test_semantic_target_coverage_non_referent_must_preserve_still_requires_retrieved_evidence(self) -> None:
-        report = _evaluate_semantic_target_coverage(
-            turn_compilation_packet={
-                "resolved_referents": [
-                    {
-                        "surface_form": "it",
-                        "resolved_to": "candy snack food before bed",
-                        "source": "prior_thread_state.recent_messages",
-                        "confidence": "high",
-                        "required_for_target": True,
-                    }
-                ],
-                "referent_resolution_diagnostics": {
-                    "deterministic_referent_targets": ["candy snack food before bed"],
-                    "model_referent_targets": ["candy snack food before bed"],
-                    "disagreements": [],
-                    "requires_referent_resolution": True,
-                },
-                "semantic_target": {
-                    "must_preserve": ["sleep quality"],
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "I wonder if there's anything specific about how it makes me feel?",
-                    "allow_no_retrieval_needed": False,
-                },
-            },
-            semantic_traversal_manifest={},
-            retrieval_packet={"selected_chunks": []},
-        )
-        self.assertFalse(report["covered"])
-        self.assertEqual(report["missing_must_preserve"], ["sleep quality"])
-        self.assertFalse(report["must_preserve"][0]["covered"])
-
-    def test_semantic_target_coverage_does_not_count_runtime_annotations_as_evidence(self) -> None:
-        report = _evaluate_semantic_target_coverage(
-            turn_compilation_packet={
-                "semantic_target": {
-                    "must_preserve": ["unseen phrase alpha"],
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "unseen phrase alpha",
-                    "allow_no_retrieval_needed": False,
-                }
-            },
-            semantic_traversal_manifest={},
-            retrieval_packet={
-                "selected_chunks": [
-                    {
-                        "chunk_id": "chunk-1",
-                        "paragraph_text": "This chunk does not contain the required phrase.",
-                        "note_title": "Fixture",
-                        "section_label": "Section",
-                        "relative_path": "fixture.md",
-                        "note_path": "fixture.md",
-                        "section_path": [],
-                        "frontmatter": {},
-                        "selection_reasons": ["runtime annotation says unseen phrase alpha"],
-                        "matched_terms": ["unseen", "phrase", "alpha"],
-                        "surface_contributions": ["lexical_index_surface"],
-                    }
-                ]
-            },
-        )
-        self.assertFalse(report["covered"])
-        self.assertIn("unseen phrase alpha", report["missing_must_preserve"])
-        self.assertFalse(report["must_preserve"][0]["covered"])
-
-    def test_semantic_target_coverage_does_not_count_query_text_as_evidence(self) -> None:
-        report = _evaluate_semantic_target_coverage(
-            turn_compilation_packet={
-                "semantic_target": {
-                    "must_preserve": ["query text only target"],
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "query text only target",
-                    "allow_no_retrieval_needed": False,
-                }
-            },
-            semantic_traversal_manifest={},
-            retrieval_packet={
-                "selected_chunks": [
-                    {
-                        "chunk_id": "chunk-1",
-                        "paragraph_text": "This chunk contains unrelated retrieved evidence.",
-                        "note_title": "Fixture",
-                        "section_label": "Section",
-                        "relative_path": "fixture.md",
-                        "note_path": "fixture.md",
-                        "section_path": [],
-                        "frontmatter": {},
-                    }
-                ]
-            },
-        )
-        self.assertFalse(report["covered"])
-        self.assertIn("query text only target", report["missing_must_preserve"])
-
-    def test_semantic_target_coverage_rejects_invalid_target_shape(self) -> None:
-        invalid_targets = [
-            {
-                "semantic_target": {
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "alpha",
-                    "allow_no_retrieval_needed": False,
-                }
-            },
-            {
-                "semantic_target": {
-                    "must_preserve": "alpha",
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "alpha",
-                    "allow_no_retrieval_needed": False,
-                }
-            },
-            {
-                "semantic_target": {
-                    "must_preserve": [],
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": 123,
-                    "allow_no_retrieval_needed": False,
-                }
-            },
-            {
-                "semantic_target": {
-                    "must_preserve": [],
-                    "should_include": [],
-                    "avoid_satisfying_with": [],
-                    "query_text": "alpha",
-                    "allow_no_retrieval_needed": "no",
-                }
-            },
-        ]
-        for turn_compilation_packet in invalid_targets:
-            with self.subTest(turn_compilation_packet=turn_compilation_packet):
-                report = _evaluate_semantic_target_coverage(
-                    turn_compilation_packet=turn_compilation_packet,
-                    semantic_traversal_manifest={},
-                    retrieval_packet={"selected_chunks": []},
-                )
-                self.assertFalse(report["target_valid"])
-                self.assertFalse(report["covered"])
+        inputs["turn_compilation_packet"]["semantic_compiler_packet"]["semantic_target"] = None
+        report = _evaluate_retrieval_coverage(**inputs)
+        self.assertFalse(report["semantic_compiler_alignment"]["target_valid"])
+        self.assertFalse(report["semantic_compiler_alignment"]["covered"])
 
     def test_retrieval_coverage_blocks_when_selected_chunk_ids_are_truncated(self) -> None:
         inputs = _minimal_retrieval_coverage_inputs(
@@ -3954,14 +3663,14 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "approved")
-        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["policy"], "touch_any")
-        self.assertIn("alpha anchor", report["semantic_target_coverage"]["anchor_alignment"]["aligned_anchors"])
-        self.assertIn("beta anchor", report["semantic_target_coverage"]["anchor_alignment"]["missing_anchors"])
+        self.assertEqual(report["semantic_compiler_alignment"]["anchor_alignment"]["policy"], "touch_any")
+        self.assertIn("alpha anchor", report["semantic_compiler_alignment"]["anchor_alignment"]["aligned_anchors"])
+        self.assertIn("beta anchor", report["semantic_compiler_alignment"]["anchor_alignment"]["missing_anchors"])
         self.assertIn(
             "required anchor not aligned: beta anchor",
-            report["semantic_target_coverage"]["diagnostic_gaps"],
+            report["semantic_compiler_alignment"]["diagnostic_gaps"],
         )
-        self.assertEqual(report["semantic_target_coverage"]["blocking_gaps"], [])
+        self.assertEqual(report["semantic_compiler_alignment"]["blocking_gaps"], [])
         self.assertNotIn(
             "required anchor not aligned: beta anchor",
             report["blocking_reasons"],
@@ -3989,11 +3698,11 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "blocked")
-        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["policy"], "touch_any")
-        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["aligned_anchors"], [])
+        self.assertEqual(report["semantic_compiler_alignment"]["anchor_alignment"]["policy"], "touch_any")
+        self.assertEqual(report["semantic_compiler_alignment"]["anchor_alignment"]["aligned_anchors"], [])
         self.assertIn(
             "no required anchors aligned under touch_any policy",
-            report["semantic_target_coverage"]["blocking_gaps"],
+            report["semantic_compiler_alignment"]["blocking_gaps"],
         )
         self.assertIn(
             "no required anchors aligned under touch_any policy",
@@ -4022,11 +3731,11 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "blocked")
-        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["policy"], "touch_all")
-        self.assertIn("beta anchor", report["semantic_target_coverage"]["anchor_alignment"]["missing_anchors"])
+        self.assertEqual(report["semantic_compiler_alignment"]["anchor_alignment"]["policy"], "touch_all")
+        self.assertIn("beta anchor", report["semantic_compiler_alignment"]["anchor_alignment"]["missing_anchors"])
         self.assertIn(
             "required anchor not aligned: beta anchor",
-            report["semantic_target_coverage"]["blocking_gaps"],
+            report["semantic_compiler_alignment"]["blocking_gaps"],
         )
         self.assertIn(
             "required anchor not aligned: beta anchor",
@@ -4111,12 +3820,12 @@ class IngestRuntimeTests(unittest.TestCase):
         )
         report = _evaluate_retrieval_coverage(**inputs)
         self.assertEqual(report["decision"], "approved")
-        self.assertEqual(report["semantic_target_coverage"]["avoid_term_audit"]["present_avoid_terms"], ["anxiety"])
-        self.assertFalse(report["semantic_target_coverage"]["avoid_term_audit"]["avoid_only_alignment"])
-        self.assertEqual(report["semantic_target_coverage"]["blocking_gaps"], [])
+        self.assertEqual(report["semantic_compiler_alignment"]["avoid_term_audit"]["present_avoid_terms"], ["anxiety"])
+        self.assertFalse(report["semantic_compiler_alignment"]["avoid_term_audit"]["avoid_only_alignment"])
+        self.assertEqual(report["semantic_compiler_alignment"]["blocking_gaps"], [])
         self.assertIn(
             "avoid term present alongside aligned anchors: anxiety",
-            report["semantic_target_coverage"]["diagnostic_gaps"],
+            report["semantic_compiler_alignment"]["diagnostic_gaps"],
         )
 
     def test_semantic_compiler_avoid_term_only_overlap_blocks(self) -> None:
@@ -4138,7 +3847,7 @@ class IngestRuntimeTests(unittest.TestCase):
         )
         report = _evaluate_retrieval_coverage(**inputs)
         self.assertEqual(report["decision"], "blocked")
-        self.assertTrue(report["semantic_target_coverage"]["avoid_term_audit"]["avoid_only_alignment"])
+        self.assertTrue(report["semantic_compiler_alignment"]["avoid_term_audit"]["avoid_only_alignment"])
         self.assertIn(
             "avoid-term alignment without required anchor support",
             report["blocking_reasons"],
@@ -4172,8 +3881,8 @@ class IngestRuntimeTests(unittest.TestCase):
         approval_report = _evaluate_retrieval_coverage(**approvals)
         self.assertEqual(approval_report["decision"], "blocked")
         self.assertIn("required surface unavailable: graph_layer", approval_report["blocking_reasons"])
-        self.assertEqual(approval_report["semantic_target_coverage"]["surface_alignment"]["required_surfaces"], ["graph_layer"])
-        self.assertEqual(approval_report["semantic_target_coverage"]["surface_alignment"]["optional_surfaces"], ["primary_corpus"])
+        self.assertEqual(approval_report["semantic_compiler_alignment"]["surface_alignment"]["required_surfaces"], ["graph_layer"])
+        self.assertEqual(approval_report["semantic_compiler_alignment"]["surface_alignment"]["optional_surfaces"], ["primary_corpus"])
 
         optional_inputs = _minimal_compiler_coverage_inputs(
             required_anchor_policy="touch_all",
@@ -4202,9 +3911,9 @@ class IngestRuntimeTests(unittest.TestCase):
         optional_inputs["semantic_traversal_manifest"]["surface_contributions"]["graph_layer"] = False
         optional_report = _evaluate_retrieval_coverage(**optional_inputs)
         self.assertEqual(optional_report["decision"], "approved")
-        self.assertEqual(optional_report["semantic_target_coverage"]["surface_alignment"]["optional_surfaces"], ["graph_layer", "primary_corpus"])
+        self.assertEqual(optional_report["semantic_compiler_alignment"]["surface_alignment"]["optional_surfaces"], ["graph_layer", "primary_corpus"])
         self.assertEqual(
-            optional_report["semantic_target_coverage"]["surface_alignment"]["missing_optional_surfaces"],
+            optional_report["semantic_compiler_alignment"]["surface_alignment"]["missing_optional_surfaces"],
             ["graph_layer", "primary_corpus"],
         )
 
@@ -4229,13 +3938,13 @@ class IngestRuntimeTests(unittest.TestCase):
         )
         report = _evaluate_retrieval_coverage(**inputs)
         self.assertEqual(report["decision"], "blocked")
-        self.assertEqual(report["semantic_target_coverage"]["blocking_gaps"].count("no required anchors aligned under touch_any policy"), 1)
+        self.assertEqual(report["semantic_compiler_alignment"]["blocking_gaps"].count("no required anchors aligned under touch_any policy"), 1)
         self.assertEqual(
-            report["semantic_target_coverage"]["diagnostic_gaps"].count("required anchor not aligned: alpha anchor"),
+            report["semantic_compiler_alignment"]["diagnostic_gaps"].count("required anchor not aligned: alpha anchor"),
             1,
         )
         self.assertEqual(
-            report["semantic_target_coverage"]["diagnostic_gaps"].count("required anchor not aligned: beta anchor"),
+            report["semantic_compiler_alignment"]["diagnostic_gaps"].count("required anchor not aligned: beta anchor"),
             1,
         )
 
@@ -4257,7 +3966,7 @@ class IngestRuntimeTests(unittest.TestCase):
         )
         blocked_report = _evaluate_retrieval_coverage(**blocked_inputs)
         self.assertEqual(blocked_report["decision"], "blocked")
-        self.assertIn("generic shell target not treated as proof anchor: relationship", blocked_report["semantic_target_coverage"]["diagnostic_gaps"])
+        self.assertIn("generic shell target not treated as proof anchor: relationship", blocked_report["semantic_compiler_alignment"]["diagnostic_gaps"])
 
         approved_inputs = _minimal_compiler_coverage_inputs(
             required_anchor_policy="touch_any",
@@ -4279,8 +3988,8 @@ class IngestRuntimeTests(unittest.TestCase):
         )
         approved_report = _evaluate_retrieval_coverage(**approved_inputs)
         self.assertEqual(approved_report["decision"], "approved")
-        self.assertIn("candy snack food before bed", approved_report["semantic_target_coverage"]["anchor_alignment"]["aligned_anchors"])
-        self.assertIn("relationship", approved_report["semantic_target_coverage"]["anchor_alignment"]["missing_anchors"])
+        self.assertIn("candy snack food before bed", approved_report["semantic_compiler_alignment"]["anchor_alignment"]["aligned_anchors"])
+        self.assertIn("relationship", approved_report["semantic_compiler_alignment"]["anchor_alignment"]["missing_anchors"])
 
     def test_semantic_compiler_uses_touch_any_for_causal_and_comparison_disambiguation(self) -> None:
         cases = [
@@ -4573,7 +4282,7 @@ class IngestRuntimeTests(unittest.TestCase):
         self.assertTrue(relation["target_entity"].startswith("entity:"))
         self.assertEqual(relation["endpoint_normalization"], "normalized")
 
-    def test_semantic_contract_validation_is_compiler_primary_when_legacy_target_is_malformed(self) -> None:
+    def test_compiler_contract_validation_is_primary_when_contextual_payload_is_malformed(self) -> None:
         turn_compilation_packet = _build_turn_compilation_packet(
             thread_document={"thread_id": "thread-test"},
             prior_thread_state={},
@@ -4602,7 +4311,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "perturbation_semantic_graph": {"nodes": [], "edges": []},
                         "semantic_target": "bad legacy target",
                         "activation_hints": {"entity_hints": ["bedtime candy topic"]},
-                        "limitations": ["model-generated extraction"],
+                        "limitations": ["model-generated compiler-stage output"],
                     },
                 },
                 contextual_raw_artifact={},
@@ -4611,17 +4320,10 @@ class IngestRuntimeTests(unittest.TestCase):
 
         self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
         self.assertTrue(turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
-        self.assertFalse(
-            turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["valid"]
-        )
-        self.assertIn(
-            "semantic_target expected dict, got str",
-            " ".join(
-                turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"]
-            ),
-        )
+        self.assertTrue(turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["valid"])
+        self.assertIsInstance(turn_compilation_packet["semantic_compiler_packet"]["semantic_target"], dict)
 
-    def test_runtime_does_not_block_only_for_legacy_semantic_target_shape_when_compiler_valid(self) -> None:
+    def test_runtime_does_not_block_only_for_malformed_contextual_target_shape_when_compiler_valid(self) -> None:
         inputs = _minimal_compiler_coverage_inputs(
             required_anchor_policy="touch_all",
             required_anchors=[
@@ -4639,17 +4341,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             ],
         )
-        inputs["turn_compilation_packet"]["semantic_target"] = {
-            "must_preserve": ["alpha anchor"],
-            "should_include": [],
-            "avoid_satisfying_with": [],
-        }
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "approved")
+        self.assertTrue(report["semantic_compiler_alignment"]["covered"])
         self.assertNotIn("semantic compiler packet failed validation", report["blocking_reasons"])
 
-    def test_legacy_followup_detection_cannot_force_missing_referent_block_for_explicit_causal_query(self) -> None:
+    def test_followup_detection_cannot_force_missing_referent_block_for_explicit_causal_query(self) -> None:
         inputs = _minimal_compiler_coverage_inputs(
             required_anchor_policy="touch_any",
             required_anchors=[
@@ -4685,7 +4383,7 @@ class IngestRuntimeTests(unittest.TestCase):
             any("follow-up semantic target missing resolved referent" in reason for reason in report["blocking_reasons"])
         )
 
-    def test_missing_required_for_target_is_legacy_diagnostic_when_compiler_target_is_valid(self) -> None:
+    def test_referential_followup_with_malformed_anchor_metadata_is_recorded_as_compiler_diagnostic(self) -> None:
         turn_compilation_packet = _build_turn_compilation_packet(
             thread_document={"thread_id": "thread-test"},
             prior_thread_state={
@@ -4736,21 +4434,24 @@ class IngestRuntimeTests(unittest.TestCase):
                             "allow_no_retrieval_needed": False,
                         },
                         "activation_hints": {"entity_hints": ["poor sleep", "the thing I ate"]},
-                        "limitations": ["model-generated extraction"],
+                        "limitations": ["model-generated compiler-stage output"],
                     },
                 },
                 contextual_raw_artifact={},
             ),
         )
 
-        self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
+        self.assertFalse(turn_compilation_packet["semantic_contract_validation"]["valid"])
+        self.assertFalse(
+            turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["valid"]
+        )
         self.assertEqual(
             turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["question_type"],
             "causal_disambiguation",
         )
         self.assertIn(
             "resolved_referents[0] missing required_for_target",
-            turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
+            turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["reasons"],
         )
 
     def test_retrieval_preparation_prioritizes_compiler_plan_terms(self) -> None:
@@ -4784,7 +4485,7 @@ class IngestRuntimeTests(unittest.TestCase):
         combined = retrieval_preparation["combined_candidate_terms"]
         self.assertLess(combined.index("riemannian"), combined.index("legacy"))
 
-    def test_runtime_blocks_when_semantic_target_shape_is_invalid(self) -> None:
+    def test_runtime_blocks_when_compiler_target_shape_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             _write_markdown_fixture(
@@ -4828,7 +4529,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "temporal_hints": [],
                         "entity_hints": [],
                     },
-                    "limitations": ["model-generated extraction", "additive only", "not authoritative"],
+                    "limitations": ["model-generated compiler-stage output", "additive only", "not authoritative"],
                 }
             )
             result = run_thread_turn(
@@ -4840,8 +4541,8 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             self.assertTrue(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
-            self.assertFalse(
-                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["valid"]
+            self.assertTrue(
+                result.turn_compilation_packet["compiler_stage_diagnostics"]["compiler_validation"]["valid"]
             )
             self.assertNotIn("semantic compiler packet failed validation", result.coverage_report["blocking_reasons"])
 
