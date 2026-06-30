@@ -14,6 +14,7 @@ from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .semantic_compiler import (
+    FOLLOWUP_EXPLETIVE_PATTERNS,
     SemanticCompilerResponse,
     SemanticCompilerBackend,
     _detect_followup_signals,
@@ -148,6 +149,29 @@ GENERIC_RELATION_WORDS = {
     "topic",
     "view",
 }
+
+CAUSAL_DISAMBIGUATION_PATTERNS = (
+    (re.compile(r"\bcoming from\b", re.IGNORECASE), "coming from"),
+    (re.compile(r"\bcaused by\b", re.IGNORECASE), "caused by"),
+    (re.compile(r"\bcome from\b", re.IGNORECASE), "come from"),
+    (re.compile(r"\bdue to\b", re.IGNORECASE), "due to"),
+    (re.compile(r"\bfrom\b", re.IGNORECASE), "from"),
+    (re.compile(r"\bmake(?:s|d)?\b", re.IGNORECASE), "make"),
+    (re.compile(r"\bcause(?:s|d)?\b", re.IGNORECASE), "cause"),
+    (re.compile(r"\btrigger(?:s|ed)?\b", re.IGNORECASE), "trigger"),
+    (re.compile(r"\baffect(?:s|ed)?\b", re.IGNORECASE), "affect"),
+    (re.compile(r"\bbecause\b", re.IGNORECASE), "because"),
+)
+
+COMPARISON_DISAMBIGUATION_PATTERNS = (
+    (re.compile(r"\bcloser to\b", re.IGNORECASE), "closer to"),
+    (re.compile(r"\bmore likely\b", re.IGNORECASE), "more likely"),
+    (re.compile(r"\bcompare\b", re.IGNORECASE), "compare"),
+    (re.compile(r"\bversus\b", re.IGNORECASE), "versus"),
+    (re.compile(r"\bvs\.?\b", re.IGNORECASE), "vs"),
+    (re.compile(r"\bwhich is\b", re.IGNORECASE), "which is"),
+    (re.compile(r"\bwhich\b", re.IGNORECASE), "which"),
+)
 
 RAW_TOPIC_FRAME_PATTERNS = (
     re.compile(r"^(?:what|how)\s+do\s+(?:i|you|we|they)\s+(?:think|feel|view|see|assess)\s+about\s+(.+)$", re.IGNORECASE),
@@ -416,16 +440,130 @@ def _normalize_compiler_question_type(
     entity_labels: list[str],
     followup_detection: dict[str, Any],
 ) -> str:
-    lowered = user_input.lower()
-    if " or " in lowered and ("make" in lowered or "cause" in lowered or "from" in lowered):
-        return "causal_disambiguation"
-    if " or " in lowered and len(entity_labels) >= 2:
-        return "comparison_disambiguation"
-    if followup_detection.get("requires_referent_resolution"):
-        return "referential_followup"
-    if lowered.startswith(("what", "how", "why")):
-        return "focused_inquiry"
-    return "open_inquiry"
+    classification = classify_semantic_question_shape(
+        raw_user_input=user_input,
+        prior_thread_state={},
+        candidate_entities=list(entity_labels),
+        deterministic_followup_detection=followup_detection,
+    )
+    return str(classification.get("question_type") or "open_inquiry")
+
+
+def classify_semantic_question_shape(
+    *,
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+    candidate_entities: list[str],
+    deterministic_followup_detection: dict[str, Any],
+) -> dict[str, Any]:
+    lowered = raw_user_input.lower()
+    has_recent_context = bool(
+        prior_thread_state.get("recent_messages")
+        or prior_thread_state.get("recent_user_messages")
+        or prior_thread_state.get("recent_semantic_trajectory")
+    )
+    raw_topic_terms = {
+        term
+        for term in _extract_lexical_query_terms(raw_user_input)
+        if term not in GENERIC_RELATION_WORDS
+    }
+    concrete_candidates: list[str] = []
+    for candidate in candidate_entities:
+        if not isinstance(candidate, str):
+            continue
+        cleaned = candidate.strip()
+        if not cleaned or _is_generic_relation_shell(cleaned, raw_topic_terms=raw_topic_terms):
+            continue
+        if cleaned not in concrete_candidates:
+            concrete_candidates.append(cleaned)
+
+    signals: list[dict[str, Any]] = []
+    limits: list[str] = []
+    question_type = "open_inquiry"
+    confidence = "low"
+    requires_prior_referent = False
+    disambiguation_basis = "default_open_inquiry"
+
+    def add_signal(kind: str, surface: str) -> None:
+        if not any(signal.get("kind") == kind and signal.get("surface") == surface for signal in signals):
+            signals.append({"kind": kind, "surface": surface})
+
+    causal_signals = [surface for pattern, surface in CAUSAL_DISAMBIGUATION_PATTERNS if pattern.search(lowered)]
+    comparison_signals = [surface for pattern, surface in COMPARISON_DISAMBIGUATION_PATTERNS if pattern.search(lowered)]
+    for surface in causal_signals:
+        add_signal("causal_probe", surface)
+    for surface in comparison_signals:
+        add_signal("comparison_probe", surface)
+
+    explicit_concrete_candidates = bool(concrete_candidates)
+    contrastive_or = bool(re.search(r"\bor\b", lowered)) and len(concrete_candidates) >= 2
+    if contrastive_or:
+        add_signal("contrastive_or", "or")
+    has_explicit_disambiguation = bool(causal_signals or comparison_signals or contrastive_or)
+    expletive_it_pattern = any(pattern.search(lowered) for pattern in FOLLOWUP_EXPLETIVE_PATTERNS)
+    has_deterministic_referential_followup = bool(deterministic_followup_detection.get("requires_referent_resolution"))
+
+    if has_deterministic_referential_followup and has_recent_context and not expletive_it_pattern and not (
+        comparison_signals or contrastive_or
+    ):
+        question_type = "referential_followup"
+        confidence = "high" if deterministic_followup_detection.get("referential_signals") else "medium"
+        requires_prior_referent = True
+        disambiguation_basis = "deictic_followup_requires_prior_anchor"
+        for signal in deterministic_followup_detection.get("referential_signals") or []:
+            add_signal("referential_followup", str(signal))
+    elif causal_signals and len(concrete_candidates) >= 2:
+        question_type = "causal_disambiguation"
+        confidence = "high" if len(concrete_candidates) >= 2 else "medium"
+        disambiguation_basis = "explicit_contrastive_causal_query"
+    elif (comparison_signals or contrastive_or) and len(concrete_candidates) >= 2:
+        question_type = "comparison_disambiguation"
+        confidence = "high" if len(concrete_candidates) >= 2 else "medium"
+        disambiguation_basis = "explicit_comparison_query"
+    elif lowered.startswith(
+        (
+            "what",
+            "how",
+            "why",
+            "which",
+            "who",
+            "where",
+            "when",
+            "is",
+            "are",
+            "do",
+            "does",
+            "did",
+            "can",
+            "could",
+            "would",
+            "should",
+            "will",
+            "tell me about",
+            "tell me ",
+        )
+    ):
+        question_type = "focused_inquiry" if explicit_concrete_candidates else "open_inquiry"
+        confidence = "medium" if explicit_concrete_candidates else "low"
+        disambiguation_basis = "focused_current_turn_inquiry" if explicit_concrete_candidates else "broad_open_inquiry"
+    else:
+        confidence = "medium" if explicit_concrete_candidates else "low"
+        if has_explicit_disambiguation and not explicit_concrete_candidates:
+            limits.append("explicit disambiguation cues present but no concrete current-turn anchors were available")
+
+    if has_deterministic_referential_followup and question_type != "referential_followup":
+        limits.append("deterministic referential follow-up downgraded in favor of explicit current-turn disambiguation")
+    if expletive_it_pattern and has_recent_context:
+        limits.append("expletive it phrase treated as non-referential")
+
+    return {
+        "question_type": question_type,
+        "confidence": confidence,
+        "signals": signals,
+        "requires_prior_referent": requires_prior_referent,
+        "disambiguation_basis": disambiguation_basis,
+        "limits": limits,
+    }
 
 
 def _infer_entity_role(label: str, *, nodes_by_label: dict[str, dict[str, Any]]) -> str:
@@ -618,6 +756,13 @@ def _build_semantic_compiler_packet(
             seen_entities.add(normalized)
             candidate_entities.append(candidate)
 
+    question_shape_classification = classify_semantic_question_shape(
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        candidate_entities=candidate_entities,
+        deterministic_followup_detection=followup_detection,
+    )
+
     referent_diagnostics = _validate_resolved_referents(
         payload=semantic_payload,
         raw_user_input=user_input,
@@ -662,8 +807,10 @@ def _build_semantic_compiler_packet(
     )
 
     disambiguation_options: list[dict[str, Any]] = []
-    if " or " in user_input.lower() and len(entities) >= 2:
-        for entity in entities[:2]:
+    if question_shape_classification["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} and entities:
+        for entity in entities[:3]:
+            if _is_generic_relation_shell(str(entity.get("label") or ""), raw_topic_terms={term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}):
+                continue
             disambiguation_options.append(
                 {
                     "label": entity["label"],
@@ -673,7 +820,8 @@ def _build_semantic_compiler_packet(
             )
 
     required_anchors: list[dict[str, Any]] = []
-    if followup_detection.get("requires_referent_resolution"):
+    raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
+    if question_shape_classification["question_type"] == "referential_followup":
         for target in _list_or_empty(referent_diagnostics.get("deterministic_referent_targets")):
             if isinstance(target, str) and target.strip():
                 required_anchors.append(
@@ -681,22 +829,31 @@ def _build_semantic_compiler_packet(
                         "label": target,
                         "source": "prior_thread_state",
                         "coverage_role": "must_touch",
+                        "anchor_kind": "prior_thread_referent",
                     }
                 )
     if not required_anchors:
         non_generic_must_preserve = []
         if isinstance(semantic_target, dict):
-            raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
             for candidate in _list_or_empty(semantic_target.get("must_preserve")):
                 if isinstance(candidate, str) and candidate.strip() and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms):
                     non_generic_must_preserve.append(candidate.strip())
-        anchor_seed_candidates = non_generic_must_preserve or concrete_candidates or candidate_entities
-        for candidate in anchor_seed_candidates[:2]:
+        filtered_candidate_entities = [
+            candidate
+            for candidate in candidate_entities
+            if isinstance(candidate, str)
+            and candidate.strip()
+            and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms)
+        ]
+        anchor_seed_candidates = non_generic_must_preserve or concrete_candidates or filtered_candidate_entities
+        selected_anchor_kind = "current_turn_entity" if question_shape_classification["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} else "current_turn_phrase"
+        for candidate in anchor_seed_candidates[:3]:
             required_anchors.append(
                 {
                     "label": candidate,
                     "source": "raw_user_input",
                     "coverage_role": "must_touch",
+                    "anchor_kind": selected_anchor_kind,
                 }
             )
 
@@ -713,11 +870,7 @@ def _build_semantic_compiler_packet(
             or isolated_payload.get("probable_user_intent")
             or user_input
         ),
-        "question_type": _normalize_compiler_question_type(
-            user_input=user_input,
-            entity_labels=[entity["label"] for entity in entities],
-            followup_detection=followup_detection,
-        ),
+        "question_type": str(question_shape_classification["question_type"]),
         "canonical_query": str(semantic_target.get("query_text") if isinstance(semantic_target, dict) else user_input) or user_input,
         "entities": entities,
         "relations": relations,
@@ -754,6 +907,7 @@ def _build_semantic_compiler_packet(
             "retrieval/provenance remain runtime-owned",
         ],
         "compiler_diagnostics": {
+            "question_shape_classification": question_shape_classification,
             "deterministic_followup_detection": followup_detection,
             "model_followup_detection": _dict_or_empty(semantic_payload.get("followup_detection")),
             "referent_resolution_diagnostics": referent_diagnostics,
@@ -1079,7 +1233,7 @@ def _validate_semantic_context_payload(
 ) -> list[str]:
     reasons: list[str] = []
     if payload.get("raw_user_input") != raw_user_input:
-        reasons.append("semantic extraction did not preserve raw_user_input")
+        reasons.append("semantic compiler payload did not preserve raw_user_input")
     required_fields = {
         "perturbation_nodes": list,
         "contextual_salt_nodes": list,
@@ -1357,6 +1511,10 @@ def _evaluate_semantic_compiler_alignment(
         }
         for chunk in selected_chunks
     ]
+    surface_statuses = {
+        str(surface_name): ("activated" if bool(is_activated) else "blocked")
+        for surface_name, is_activated in dict(semantic_traversal_manifest.get("surface_contributions") or {}).items()
+    }
     selected_text = " ".join(
         " ".join(
             [
@@ -1498,23 +1656,75 @@ def _evaluate_semantic_compiler_alignment(
         elif isinstance(avoid_term, str):
             avoid_results.append({"target": avoid_term, "present": False, "match_type": None, "evidence": []})
 
-    missing_required_surfaces = [
+    compiler_required_surfaces = [str(item) for item in _list_or_empty(coverage_policy.get("required_surfaces")) if str(item).strip()]
+    if compiler_required_surfaces:
+        required_surface_names = compiler_required_surfaces
+    else:
+        required_surface_names = [
+            surface_name
+            for surface_name, required in config.coverage_require_surface_contributions.items()
+            if required and surface_name not in {"primary_corpus", "graph_layer"}
+        ]
+    required_surface_names = [
         surface_name
-        for surface_name, required in config.coverage_require_surface_contributions.items()
-        if required and not dict(semantic_traversal_manifest.get("surface_contributions") or {}).get(surface_name)
+        for surface_name in required_surface_names
+        if surface_name not in {"primary_corpus", "graph_layer"}
     ]
+    compiler_optional_surfaces = [str(item) for item in _list_or_empty(coverage_policy.get("optional_surfaces")) if str(item).strip()]
+    if compiler_optional_surfaces:
+        optional_surface_names = compiler_optional_surfaces
+    else:
+        optional_surface_names = [
+            surface_name
+            for surface_name, required in config.coverage_require_surface_contributions.items()
+            if not required or surface_name in {"primary_corpus", "graph_layer"}
+        ]
+    for surface_name in ("primary_corpus", "graph_layer"):
+        if surface_name not in optional_surface_names:
+            optional_surface_names = list(optional_surface_names) + [surface_name]
+    available_surfaces = sorted(surface_name for surface_name, status in surface_statuses.items() if status == "activated")
+    missing_required_surfaces = [surface_name for surface_name in required_surface_names if surface_statuses.get(surface_name) != "activated"]
+    missing_optional_surfaces = [surface_name for surface_name in optional_surface_names if surface_statuses.get(surface_name) != "activated"]
+    for surface_name in missing_required_surfaces:
+        diagnostic_gaps.append(f"required surface unavailable: {surface_name}")
+        blocking_gaps.append(f"required surface unavailable: {surface_name}")
     required_policy = str(coverage_policy.get("required_anchor_policy") or "touch_all")
-    anchor_alignment_satisfied = (
-        all(item.get("aligned") for item in required_anchor_alignment)
-        if required_policy == "touch_all"
-        else any(item.get("aligned") for item in required_anchor_alignment) if required_anchor_alignment else False
-    )
+    aligned_required_anchors = [item for item in required_anchor_alignment if item.get("aligned")]
+    missing_required_anchor_labels = [str(item.get("label") or "") for item in required_anchor_alignment if not item.get("aligned")]
+    if required_anchor_alignment:
+        if required_policy == "touch_all":
+            anchor_alignment_satisfied = all(item.get("aligned") for item in required_anchor_alignment)
+        else:
+            anchor_alignment_satisfied = any(item.get("aligned") for item in required_anchor_alignment)
+    else:
+        anchor_alignment_satisfied = False
+    anchor_alignment = {
+        "policy": required_policy,
+        "required_anchors": [item.get("label") for item in required_anchor_alignment],
+        "aligned_anchors": [item.get("label") for item in aligned_required_anchors],
+        "missing_anchors": [label for label in missing_required_anchor_labels if label],
+    }
+    surface_alignment = {
+        "required_surfaces": required_surface_names,
+        "optional_surfaces": optional_surface_names,
+        "available_surfaces": available_surfaces,
+        "missing_required_surfaces": missing_required_surfaces,
+        "missing_optional_surfaces": missing_optional_surfaces,
+    }
+    requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
+    if not required_anchor_alignment and requires_retrieval:
+        diagnostic_gaps.append("no required anchors compiled for coverage")
+        blocking_gaps.append("no required anchors compiled for coverage")
     if required_policy == "touch_all":
-        for label in missing_required_anchors:
-            blocking_gaps.append(f"required anchor not aligned: {label}")
+        for label in missing_required_anchor_labels:
+            if label:
+                diagnostic_gaps.append(f"required anchor not aligned: {label}")
+                blocking_gaps.append(f"required anchor not aligned: {label}")
     elif required_anchor_alignment and not anchor_alignment_satisfied:
         blocking_gaps.append("no required anchors aligned under touch_any policy")
-    requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
+        for label in missing_required_anchor_labels:
+            if label:
+                diagnostic_gaps.append(f"required anchor not aligned: {label}")
     provenance_present = all(item["has_provenance"] for item in selected_chunk_provenance) if selected_chunk_provenance else False
     covered = (
         target_present
@@ -1528,6 +1738,8 @@ def _evaluate_semantic_compiler_alignment(
         "target_present": target_present,
         "target_valid": target_valid,
         "coverage_mode": "provenance_alignment",
+        "anchor_alignment": anchor_alignment,
+        "surface_alignment": surface_alignment,
         "required_anchor_alignment": required_anchor_alignment,
         "retrieval_plan_alignment": retrieval_plan_alignment,
         "selected_chunk_provenance": selected_chunk_provenance,
@@ -1845,6 +2057,7 @@ def _build_turn_compilation_packet(
     user_input: str,
     turn_id: int,
     semantic_compiler: SemanticCompilerArtifacts,
+    config: RuntimeConfig | None = None,
 ) -> dict[str, Any]:
     semantic_payload, extracted_semantic_target = _extract_semantic_outputs(
         isolated_packet=semantic_compiler.isolated_packet,
@@ -1860,6 +2073,27 @@ def _build_turn_compilation_packet(
             extracted_semantic_target if isinstance(extracted_semantic_target, dict) else None
         ),
     )
+    if config is not None:
+        coverage_policy = _dict_or_empty(semantic_compiler_packet.get("coverage_policy"))
+        if coverage_policy:
+            normalized_coverage_policy = dict(coverage_policy)
+            if not _list_or_empty(normalized_coverage_policy.get("required_surfaces")) and not _list_or_empty(
+                normalized_coverage_policy.get("optional_surfaces")
+            ):
+                required_surfaces = [
+                    surface_name
+                    for surface_name, required in config.coverage_require_surface_contributions.items()
+                    if required and surface_name != "primary_corpus"
+                ]
+                optional_surfaces = [
+                    surface_name
+                    for surface_name, required in config.coverage_require_surface_contributions.items()
+                    if not required or surface_name == "primary_corpus"
+                ]
+                normalized_coverage_policy["required_surfaces"] = required_surfaces
+                normalized_coverage_policy["optional_surfaces"] = optional_surfaces
+                semantic_compiler_packet = dict(semantic_compiler_packet)
+                semantic_compiler_packet["coverage_policy"] = normalized_coverage_policy
     compiler_validation_reasons = _validate_semantic_compiler_packet(
         semantic_compiler_packet,
         raw_user_input=user_input,
@@ -1964,7 +2198,7 @@ def _build_turn_compilation_packet(
             "recent_semantic_trajectory": list(prior_thread_state.get("recent_semantic_trajectory") or []),
             "recent_messages": list(prior_thread_state.get("recent_messages") or [])[-4:],
         },
-        "explicit_limitation": "raw user input remains authoritative; semantic extraction is additive only",
+        "explicit_limitation": "raw user input remains authoritative; semantic compiler output is additive only",
     }
 
 
@@ -3022,7 +3256,7 @@ def _evaluate_retrieval_coverage(
     if backend_mode in {"disabled", "stub", "unavailable"}:
         reasons.append(f"semantic compiler backend `{backend_mode}` is not valid for the normal runtime")
     if contextual_status != "parsed":
-        reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
+        reasons.append(f"contextual semantic compiler packet did not produce a valid parsed result: {contextual_status}")
     contract_validation = dict(turn_compilation_packet.get("semantic_contract_validation") or {})
     if not contract_validation.get("valid"):
         reasons.extend(list(contract_validation.get("reasons") or []))
@@ -3035,11 +3269,11 @@ def _evaluate_retrieval_coverage(
     required_surface_contributions = config.coverage_require_surface_contributions
     if required_surface_contributions.get("lexical_index_surface") and surface_statuses.get("lexical_index_surface") == "blocked":
         reasons.append("lexical_index_surface unavailable")
-    if required_surface_contributions.get("primary_corpus") and surface_statuses.get("primary_corpus") == "blocked":
-        reasons.append("primary_corpus unavailable")
     if required_surface_contributions.get("vector_index_surface") and surface_statuses.get("vector_index_surface") != "activated":
         reasons.append("vector_index_surface unavailable or missing configured embeddings")
-    if required_surface_contributions.get("graph_layer") and surface_statuses.get("graph_layer") == "blocked":
+    if required_surface_contributions.get("graph_layer") and surface_statuses.get("graph_layer") == "blocked" and (
+        "graph_layer" in _list_or_empty((turn_compilation_packet.get("coverage_policy") or {}).get("required_surfaces"))
+    ):
         reasons.append("graph_layer unavailable")
     if required_surface_contributions.get("synthetic_nodes") and surface_statuses.get("synthetic_nodes") != "activated":
         reasons.append("synthetic_nodes surface required but unavailable")
@@ -3270,6 +3504,7 @@ def run_thread_turn(
         user_input=user_input,
         turn_id=turn_id,
         semantic_compiler=semantic_compiler,
+        config=config,
     )
     activated_semantic_regions = _build_latent_space_activation(
         repo_root=repo_root,

@@ -1,0 +1,219 @@
+[
+  {
+    "id": "causal_or_food_vs_affect",
+    "user_input": "Is this from the food or from being emotionally charged?",
+    "prior_thread_state": {
+      "latest_turn_id": 2,
+      "recent_messages": [
+        {
+          "role": "user",
+          "content": "I think something is causing this."
+        }
+      ],
+      "recent_user_messages": [
+        "I think something is causing this."
+      ]
+    },
+    "candidate_entities": [
+      "food",
+      "emotionally charged"
+    ],
+    "expected_question_type": "causal_disambiguation",
+    "expected_required_anchor_policy": "touch_any",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "food",
+      "emotionally charged"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "causal_reflux_sleep_debt_meds",
+    "user_input": "Did the tiredness come from sleep debt or the meds?",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "sleep debt",
+      "meds"
+    ],
+    "expected_question_type": "causal_disambiguation",
+    "expected_required_anchor_policy": "touch_any",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "sleep debt",
+      "meds"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "comparison_schopenhauer_kant",
+    "user_input": "Is this closer to Schopenhauer or Kant?",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "Schopenhauer",
+      "Kant"
+    ],
+    "expected_question_type": "comparison_disambiguation",
+    "expected_required_anchor_policy": "touch_any",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "Schopenhauer",
+      "Kant"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "comparison_retrieval_coverage",
+    "user_input": "Is the issue retrieval problem or coverage problem?",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "retrieval problem",
+      "coverage problem"
+    ],
+    "expected_question_type": "comparison_disambiguation",
+    "expected_required_anchor_policy": "touch_any",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "retrieval problem",
+      "coverage problem"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "referential_followup_connects",
+    "user_input": "Can you explain how that connects?",
+    "prior_thread_state": {
+      "latest_turn_id": 1,
+      "recent_messages": [
+        {
+          "role": "user",
+          "content": "I think dinner with tomato and onion triggered the reflux."
+        }
+      ],
+      "recent_user_messages": [
+        "I think dinner with tomato and onion triggered the reflux."
+      ]
+    },
+    "candidate_entities": [
+      "tomato and onion triggered the reflux"
+    ],
+    "expected_question_type": "referential_followup",
+    "expected_required_anchor_policy": "touch_all",
+    "expected_requires_prior_referent": true,
+    "must_include_required_anchor_labels": [
+      "tomato and onion triggered the reflux"
+    ],
+    "must_not_block_for_missing_prior_referent": false
+  },
+  {
+    "id": "expletive_it_possible",
+    "user_input": "Is it possible to run this locally?",
+    "prior_thread_state": {
+      "latest_turn_id": 1,
+      "recent_messages": [
+        {
+          "role": "user",
+          "content": "We should keep the runtime local."
+        }
+      ],
+      "recent_user_messages": [
+        "We should keep the runtime local."
+      ]
+    },
+    "candidate_entities": [
+      "run this locally"
+    ],
+    "expected_question_type": "focused_inquiry",
+    "expected_required_anchor_policy": "touch_all",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "run this locally"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "expletive_it_worth_graph_traversal",
+    "user_input": "Is it worth adding graph traversal now?",
+    "prior_thread_state": {
+      "latest_turn_id": 1,
+      "recent_messages": [
+        {
+          "role": "user",
+          "content": "We should keep the runtime simple."
+        }
+      ],
+      "recent_user_messages": [
+        "We should keep the runtime simple."
+      ]
+    },
+    "candidate_entities": [
+      "graph traversal"
+    ],
+    "expected_question_type": "focused_inquiry",
+    "expected_required_anchor_policy": "touch_all",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "graph traversal"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "generic_shell_relationship",
+    "user_input": "What is the relationship here?",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "relationship"
+    ],
+    "expected_question_type": "open_inquiry",
+    "expected_required_anchor_policy": "touch_all",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "exact_phrase_trap_candy",
+    "user_input": "Tell me about candy snack food before bed.",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "candy snack food before bed"
+    ],
+    "expected_question_type": "focused_inquiry",
+    "expected_required_anchor_policy": "touch_all",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "candy snack food before bed"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "lexical_overlap_false_approval",
+    "user_input": "Did anxiety cause reflux?",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "anxiety",
+      "reflux"
+    ],
+    "expected_question_type": "causal_disambiguation",
+    "expected_required_anchor_policy": "touch_any",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "anxiety",
+      "reflux"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  },
+  {
+    "id": "avoid_term_trap",
+    "user_input": "reflux after dinner",
+    "prior_thread_state": {},
+    "candidate_entities": [
+      "reflux after dinner"
+    ],
+    "expected_question_type": "open_inquiry",
+    "expected_required_anchor_policy": "touch_all",
+    "expected_requires_prior_referent": false,
+    "must_include_required_anchor_labels": [
+      "reflux after dinner"
+    ],
+    "must_not_block_for_missing_prior_referent": true
+  }
+]

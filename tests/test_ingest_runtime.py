@@ -27,6 +27,7 @@ from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
 from semantic_traversal.runtime import (
     SemanticCompilerArtifacts,
+    classify_semantic_question_shape,
     _build_turn_compilation_packet,
     _build_semantic_compiler_packet,
     _build_contextual_extraction_request,
@@ -186,6 +187,11 @@ def _chunks_for_note(manifest: dict[str, object], source_root_label: str, relati
 
 def _load_turn_artifact(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_adversarial_semantic_cases() -> list[dict[str, Any]]:
+    fixture_path = REPO_ROOT / "tests" / "fixtures" / "adversarial_semantic_cases.json"
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
 def _minimal_retrieval_coverage_inputs(selected_chunk_ids: list[str], retrieved_chunk_ids: list[str]) -> dict[str, Any]:
@@ -953,7 +959,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
             response = backend.extract_contextual({"raw_user_input": "hello", "instruction": "test"})
             self.assertEqual(response.status, "unavailable")
-            self.assertIn("unsupported semantic extraction provider", response.metadata.get("reason", ""))
+            self.assertIn("unsupported semantic compiler provider", response.metadata.get("reason", ""))
 
     def test_unsupported_provider_configuration_fails_closed_for_embeddings(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
@@ -2614,6 +2620,21 @@ class IngestRuntimeTests(unittest.TestCase):
                         "query_text": "I wonder if there's anything specific about how it makes me feel?",
                         "allow_no_retrieval_needed": False,
                     },
+                    "coverage_policy": {
+                        "requires_retrieval": True,
+                        "required_anchor_policy": "touch_all",
+                        "coverage_mode": "provenance_alignment",
+                        "block_on_missing_exact_phrase": False,
+                        "required_surfaces": [
+                            "lexical_index_surface",
+                            "vector_index_surface",
+                            "graph_layer",
+                        ],
+                        "optional_surfaces": [
+                            "primary_corpus",
+                            "synthetic_nodes",
+                        ],
+                    },
                     "activation_hints": {
                         "lexical_terms": ["emotionally", "charged", "sleep", "quality"],
                         "phrases": ["how it makes me feel"],
@@ -2637,7 +2658,11 @@ class IngestRuntimeTests(unittest.TestCase):
             compiler_packet = result.turn_compilation_packet["semantic_compiler_packet"]
             self.assertEqual(compiler_packet["semantic_target"]["question_type"], "referential_followup")
             self.assertTrue(any(anchor["source"] == "prior_thread_state" for anchor in compiler_packet["semantic_target"]["required_anchors"]))
-            self.assertEqual(result.coverage_report["decision"], "approved")
+            self.assertEqual(
+                result.coverage_report["decision"],
+                "approved",
+                msg=json.dumps(result.coverage_report, indent=2),
+            )
 
     def test_semantic_compiler_packet_treats_explicit_causal_disambiguation_as_nonreferential(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -3920,6 +3945,9 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "approved")
+        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["policy"], "touch_any")
+        self.assertIn("alpha anchor", report["semantic_target_coverage"]["anchor_alignment"]["aligned_anchors"])
+        self.assertIn("beta anchor", report["semantic_target_coverage"]["anchor_alignment"]["missing_anchors"])
         self.assertIn(
             "required anchor not aligned: beta anchor",
             report["semantic_target_coverage"]["diagnostic_gaps"],
@@ -3952,6 +3980,8 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "blocked")
+        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["policy"], "touch_any")
+        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["aligned_anchors"], [])
         self.assertIn(
             "no required anchors aligned under touch_any policy",
             report["semantic_target_coverage"]["blocking_gaps"],
@@ -3983,6 +4013,8 @@ class IngestRuntimeTests(unittest.TestCase):
         report = _evaluate_retrieval_coverage(**inputs)
 
         self.assertEqual(report["decision"], "blocked")
+        self.assertEqual(report["semantic_target_coverage"]["anchor_alignment"]["policy"], "touch_all")
+        self.assertIn("beta anchor", report["semantic_target_coverage"]["anchor_alignment"]["missing_anchors"])
         self.assertIn(
             "required anchor not aligned: beta anchor",
             report["semantic_target_coverage"]["blocking_gaps"],
@@ -4029,6 +4061,75 @@ class IngestRuntimeTests(unittest.TestCase):
                 self.assertEqual(compiler_packet["semantic_target"]["question_type"], expected_question_type)
                 self.assertEqual(compiler_packet["coverage_policy"]["required_anchor_policy"], "touch_any")
                 self.assertEqual(reasons, [])
+
+    def test_semantic_compiler_question_shape_and_anchor_policy_follow_adversarial_fixture(self) -> None:
+        for case in _load_adversarial_semantic_cases():
+            with self.subTest(case=case["id"]):
+                candidate_entities = list(case.get("candidate_entities") or [])
+                prior_thread_state = dict(case.get("prior_thread_state") or {})
+                semantic_payload = {
+                    "perturbation_nodes": [
+                        {"id": f"node:{index}", "label": entity, "kind": "topic"}
+                        for index, entity in enumerate(candidate_entities, start=1)
+                    ],
+                    "contextual_salt_nodes": [],
+                    "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                    "activation_hints": {"entity_hints": candidate_entities},
+                    "resolved_referents": [],
+                }
+                isolated_packet = {
+                    "parsed_payload": {
+                        "candidate_targets": candidate_entities,
+                        "terms_or_phrases_not_to_discard": candidate_entities,
+                        "candidate_relations": [],
+                        "ambiguities": [],
+                    }
+                }
+                contextual_packet = {
+                    "parsed_payload": {
+                        "candidate_targets": candidate_entities,
+                        "activation_hints": {"entity_hints": candidate_entities},
+                        "ambiguities": [],
+                    }
+                }
+                compiler_packet, reasons = _build_semantic_compiler_packet(
+                    user_input=str(case["user_input"]),
+                    prior_thread_state=prior_thread_state,
+                    semantic_payload=semantic_payload,
+                    isolated_packet=isolated_packet,
+                    contextual_packet=contextual_packet,
+                    semantic_target={
+                        "must_preserve": list(candidate_entities),
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": str(case["user_input"]),
+                        "allow_no_retrieval_needed": False,
+                    },
+                )
+
+                classification = compiler_packet["compiler_diagnostics"]["question_shape_classification"]
+                self.assertEqual(classification["question_type"], case["expected_question_type"])
+                self.assertEqual(classification["requires_prior_referent"], case["expected_requires_prior_referent"])
+                self.assertEqual(compiler_packet["semantic_target"]["question_type"], case["expected_question_type"])
+                self.assertEqual(
+                    compiler_packet["coverage_policy"]["required_anchor_policy"],
+                    case["expected_required_anchor_policy"],
+                )
+                self.assertIn("question_shape_classification", compiler_packet["compiler_diagnostics"])
+                if case["must_include_required_anchor_labels"]:
+                    required_labels = [anchor["label"] for anchor in compiler_packet["semantic_target"]["required_anchors"]]
+                    for required_label in case["must_include_required_anchor_labels"]:
+                        self.assertIn(required_label, required_labels)
+                if case["id"] == "generic_shell_relationship":
+                    self.assertEqual(compiler_packet["semantic_target"]["required_anchors"], [])
+                    self.assertIn("semantic compiler packet missing required anchors", reasons)
+                else:
+                    self.assertEqual(reasons, [])
+                if case["expected_question_type"] == "referential_followup":
+                    self.assertTrue(classification["requires_prior_referent"])
+                if case["id"].startswith("expletive_it_"):
+                    self.assertFalse(classification["requires_prior_referent"])
+                    self.assertNotEqual(classification["question_type"], "referential_followup")
 
     def test_semantic_compiler_normalizes_graph_relation_endpoints_to_canonical_entity_ids(self) -> None:
         compiler_packet, reasons = _build_semantic_compiler_packet(

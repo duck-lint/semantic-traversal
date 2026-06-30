@@ -508,7 +508,7 @@ class DisabledSemanticCompilerBackend:
             raw_response=None,
             metadata={
                 "backend_mode": self.mode_name,
-                "reason": "semantic extraction disabled",
+                "reason": "semantic compiler disabled",
             },
             diagnostics={},
             status="disabled",
@@ -520,7 +520,7 @@ class DisabledSemanticCompilerBackend:
             raw_response=None,
             metadata={
                 "backend_mode": self.mode_name,
-                "reason": "semantic extraction disabled",
+                "reason": "semantic compiler disabled",
             },
             diagnostics={},
             status="disabled",
@@ -579,7 +579,7 @@ class StubSemanticCompilerBackend:
         terms = extract_terms(raw_user_input)
         return {
             "raw_user_input": raw_user_input,
-            "probable_user_intent": "stub additive semantic extraction of the latest raw user message",
+            "probable_user_intent": "stub additive semantic compiler interpretation of the latest raw user message",
             "candidate_targets": terms[:3],
             "candidate_relations": terms[3:5],
             "question_shape": "question" if "?" in raw_user_input else None,
@@ -617,7 +617,7 @@ class StubSemanticCompilerBackend:
             avoid_satisfying_with = []
         return {
             "raw_user_input": raw_user_input,
-            "contextual_user_intent": "stub contextual hydration of the isolated semantic extraction",
+            "contextual_user_intent": "stub contextual hydration of the isolated semantic compiler output",
             "followup_detection": followup_detection,
             "resolved_referents": resolved_referents,
             "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms[:4]],
@@ -684,7 +684,7 @@ class OllamaSemanticCompilerBackend:
                 metadata={
                     "backend_mode": self.mode_name,
                     "base_url": self._base_url,
-                    "reason": "SEMANTIC_EXTRACTOR_MODEL not configured",
+                    "reason": "SEMANTIC_COMPILER_MODEL not configured",
                 },
                 diagnostics={},
                 status="unavailable",
@@ -743,7 +743,7 @@ class OllamaSemanticCompilerBackend:
                     "backend_mode": self.mode_name,
                     "base_url": self._base_url,
                     "model": self._model,
-                    "error": f"semantic extractor returned JSON {type(parsed_payload).__name__}; expected object",
+                    "error": f"semantic compiler returned JSON {type(parsed_payload).__name__}; expected object",
                 },
                 diagnostics={},
                 status="invalid_json",
@@ -811,19 +811,19 @@ def resolve_semantic_compiler_backend(
         if allow_test_backends:
             return DisabledSemanticCompilerBackend() if configured_mode == "disabled" else StubSemanticCompilerBackend()
         return UnavailableSemanticCompilerBackend(
-            reason=f"{configured_mode} semantic extraction is test-only and not valid for the normal runtime",
+            reason=f"{configured_mode} semantic compiler mode is test-only and not valid for the normal runtime",
             configured_mode=configured_mode,
         )
     if configured_mode and configured_mode != configured_provider:
         if configured_mode != "ollama":
             return UnavailableSemanticCompilerBackend(
-                reason=f"unsupported semantic extractor mode: {configured_mode}",
+                reason=f"unsupported semantic compiler mode: {configured_mode}",
                 configured_mode=configured_mode,
             )
     if configured_provider == "ollama":
         if not isinstance(configured_model, str) or not configured_model.strip():
             return UnavailableSemanticCompilerBackend(
-                reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
+                reason="SEMANTIC_COMPILER_MODEL is not configured for the normal runtime",
                 configured_mode=configured_provider,
             )
         return OllamaSemanticCompilerBackend(
@@ -832,6 +832,6 @@ def resolve_semantic_compiler_backend(
             timeout_seconds=timeout_seconds,
         )
     return UnavailableSemanticCompilerBackend(
-        reason=f"unsupported semantic extraction provider: {configured_provider}",
+        reason=f"unsupported semantic compiler provider: {configured_provider}",
         configured_mode=configured_provider,
     )
