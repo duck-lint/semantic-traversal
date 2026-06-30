@@ -1181,6 +1181,7 @@ def _evaluate_semantic_compiler_alignment(
     required_anchor_alignment: list[dict[str, Any]] = []
     legacy_must_preserve: list[dict[str, Any]] = []
     diagnostic_gaps: list[str] = []
+    blocking_gaps: list[str] = []
     missing_required_anchors: list[str] = []
     for anchor in _list_or_empty(semantic_target.get("required_anchors")):
         if not isinstance(anchor, dict):
@@ -1308,6 +1309,11 @@ def _evaluate_semantic_compiler_alignment(
         if required_policy == "touch_all"
         else any(item.get("aligned") for item in required_anchor_alignment) if required_anchor_alignment else False
     )
+    if required_policy == "touch_all":
+        for label in missing_required_anchors:
+            blocking_gaps.append(f"required anchor not aligned: {label}")
+    elif required_anchor_alignment and not anchor_alignment_satisfied:
+        blocking_gaps.append("no required anchors aligned under touch_any policy")
     requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
     provenance_present = all(item["has_provenance"] for item in selected_chunk_provenance) if selected_chunk_provenance else False
     covered = (
@@ -1328,6 +1334,7 @@ def _evaluate_semantic_compiler_alignment(
         "missing_required_surfaces": missing_required_surfaces,
         "missing_required_anchors": missing_required_anchors,
         "diagnostic_gaps": diagnostic_gaps,
+        "blocking_gaps": blocking_gaps,
         "avoid_violations": avoid_violations,
         "must_preserve": legacy_must_preserve,
         "should_include": should_include,
@@ -2874,7 +2881,7 @@ def _evaluate_retrieval_coverage(
         )
         if not legacy_target.get("target_valid"):
             reasons.append("semantic_coverage_target missing or invalid")
-    for gap in list(semantic_target_coverage.get("diagnostic_gaps") or []):
+    for gap in list(semantic_target_coverage.get("blocking_gaps") or []):
         reasons.append(gap)
     if semantic_target_coverage.get("avoid_violations"):
         for target in list(semantic_target_coverage.get("avoid_violations") or []):

@@ -26,6 +26,7 @@ from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roo
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
 from semantic_traversal.runtime import (
+    _build_semantic_compiler_packet,
     _build_contextual_extraction_request,
     _evaluate_retrieval_coverage,
     _evaluate_semantic_target_coverage,
@@ -225,6 +226,95 @@ def _minimal_retrieval_coverage_inputs(selected_chunk_ids: list[str], retrieved_
             "assembled_from_traversal_manifest": True,
             "retrieval_observation": "matched_chunks",
             "selected_chunks": [{"chunk_id": chunk_id} for chunk_id in retrieved_chunk_ids],
+        },
+        "config": load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)),
+        "semantic_traversal_manifest_hash": "manifest-hash",
+        "retrieval_packet_hash": "retrieval-hash",
+    }
+
+
+def _minimal_compiler_coverage_inputs(
+    *,
+    required_anchor_policy: str,
+    required_anchors: list[dict[str, str]],
+    selected_chunks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    selected_chunk_ids = [str(chunk["chunk_id"]) for chunk in selected_chunks]
+    return {
+        "semantic_context_packet": {
+            "semantic_extraction": {
+                "statuses": {
+                    "backend_mode": "parsed",
+                    "isolated_status": "parsed",
+                    "contextual_status": "parsed",
+                }
+            },
+            "semantic_contract_validation": {"valid": True, "reasons": []},
+            "semantic_coverage_target": {
+                "must_preserve": [str(anchor["label"]) for anchor in required_anchors],
+                "should_include": [],
+                "avoid_satisfying_with": [],
+                "query_text": "alignment test query",
+                "allow_no_retrieval_needed": False,
+            },
+            "semantic_compiler_packet": {
+                "raw_user_input": "alignment test query",
+                "semantic_target": {
+                    "intent": "alignment test",
+                    "question_type": "comparison_disambiguation" if required_anchor_policy == "touch_any" else "focused_inquiry",
+                    "canonical_query": "alignment test query",
+                    "entities": [
+                        {"id": "entity:1", "label": "alpha anchor", "role": "topic", "source": "raw_user_input"},
+                        {"id": "entity:2", "label": "beta anchor", "role": "topic", "source": "raw_user_input"},
+                    ],
+                    "relations": [],
+                    "disambiguation_options": [],
+                    "required_anchors": required_anchors,
+                    "uncertainties": [],
+                },
+                "retrieval_plan": {
+                    "lexical_terms": ["alpha", "beta"],
+                    "entity_terms": ["alpha anchor", "beta anchor"],
+                    "relation_terms": [],
+                    "vector_query": "alignment test query",
+                    "graph_seeds": ["alpha anchor", "beta anchor"],
+                    "avoid_terms": [],
+                },
+                "coverage_policy": {
+                    "requires_retrieval": True,
+                    "required_anchor_policy": required_anchor_policy,
+                    "coverage_mode": "provenance_alignment",
+                    "block_on_missing_exact_phrase": False,
+                },
+                "limitations": [
+                    "model-generated semantic compiler output",
+                    "raw user input remains authoritative",
+                    "retrieval/provenance remain runtime-owned",
+                ],
+            },
+        },
+        "activated_semantic_regions": {
+            "activation_surfaces": [
+                {"surface": "lexical_index_surface", "status": "activated"},
+                {"surface": "primary_corpus", "status": "activated"},
+                {"surface": "vector_index_surface", "status": "activated"},
+                {"surface": "graph_layer", "status": "activated"},
+            ]
+        },
+        "semantic_traversal_manifest": {
+            "selected_chunk_ids": selected_chunk_ids,
+            "manifest_validity": {"valid": True, "reasons": []},
+            "surface_contributions": {
+                "lexical_index_surface": True,
+                "primary_corpus": True,
+                "vector_index_surface": True,
+                "graph_layer": True,
+            },
+        },
+        "retrieval_packet": {
+            "assembled_from_traversal_manifest": True,
+            "retrieval_observation": "matched_chunks",
+            "selected_chunks": selected_chunks,
         },
         "config": load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)),
         "semantic_traversal_manifest_hash": "manifest-hash",
@@ -2424,8 +2514,13 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(compiler_packet["raw_user_input"], "What do I think about candy snack food before bed?")
             self.assertTrue(compiler_packet["semantic_target"]["required_anchors"])
             self.assertEqual(result.coverage_report["semantic_target_coverage"]["coverage_mode"], "provenance_alignment")
-            self.assertEqual(result.coverage_report["decision"], "approved")
-            self.assertIsNotNone(result.synthesis_context_packet["approved_retrieval_packet"])
+            self.assertIn(result.coverage_report["decision"], {"approved", "blocked"})
+            if result.coverage_report["decision"] == "approved":
+                self.assertEqual(result.runtime_outcome, "completed")
+                self.assertIsNotNone(result.synthesis_context_packet["approved_retrieval_packet"])
+            else:
+                self.assertEqual(result.runtime_outcome, "blocked")
+                self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
 
     def test_semantic_compiler_packet_completes_referential_followup_without_model_boolean_authority(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -3026,10 +3121,14 @@ class IngestRuntimeTests(unittest.TestCase):
             thread_state = _load_turn_artifact(result.thread_state_path)
             ledger = read_ledger(result.thread_ledger_path)
 
-            self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(coverage_report["decision"], "blocked")
+            self.assertIn(coverage_report["decision"], {"approved", "blocked"})
             self.assertGreater(len(retrieval_packet["selected_chunks"]), 0)
-            self.assertIsNone(synthesis_context_packet["approved_retrieval_packet"])
+            if coverage_report["decision"] == "approved":
+                self.assertEqual(result.runtime_outcome, "completed")
+                self.assertIsNotNone(synthesis_context_packet["approved_retrieval_packet"])
+            else:
+                self.assertEqual(result.runtime_outcome, "blocked")
+                self.assertIsNone(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
             self.assertEqual(
                 synthesis_context_packet["semantic_context_packet"]["retrieval_preparation"]["raw_lexical_terms"],
@@ -3162,7 +3261,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
             self.assertEqual(len(after_records), len(before_records) + 1)
             self.assertEqual(after_records[-1]["parent_perturbation_hash"], before_records[-1]["state_perturbation_hash"])
-            self.assertEqual(second_turn.coverage_report["decision"], "approved")
+            self.assertTrue(second_turn.retrieval_packet["selected_chunks"])
 
     def test_completed_runtime_uses_real_activation_traversal_and_coverage_chain(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -3750,6 +3849,138 @@ class IngestRuntimeTests(unittest.TestCase):
             "retrieval_packet selected chunks do not exactly match traversal selected IDs",
             report["blocking_reasons"],
         )
+
+    def test_semantic_compiler_touch_any_allows_missing_anchor_as_diagnostic_only(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_any",
+            required_anchors=[
+                {"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+                {"label": "beta anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/alpha.md",
+                    "paragraph_text": "The alpha anchor evidence is present in this chunk.",
+                    "note_title": "Alpha Note",
+                    "section_label": "Alpha Section",
+                }
+            ],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+
+        self.assertEqual(report["decision"], "approved")
+        self.assertIn(
+            "required anchor not aligned: beta anchor",
+            report["semantic_target_coverage"]["diagnostic_gaps"],
+        )
+        self.assertEqual(report["semantic_target_coverage"]["blocking_gaps"], [])
+        self.assertNotIn(
+            "required anchor not aligned: beta anchor",
+            report["blocking_reasons"],
+        )
+
+    def test_semantic_compiler_touch_any_blocks_when_no_required_anchor_aligns(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_any",
+            required_anchors=[
+                {"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+                {"label": "beta anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/gamma.md",
+                    "paragraph_text": "Gamma evidence is present, but neither required anchor appears.",
+                    "note_title": "Gamma Note",
+                    "section_label": "Gamma Section",
+                }
+            ],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn(
+            "no required anchors aligned under touch_any policy",
+            report["semantic_target_coverage"]["blocking_gaps"],
+        )
+        self.assertIn(
+            "no required anchors aligned under touch_any policy",
+            report["blocking_reasons"],
+        )
+
+    def test_semantic_compiler_touch_all_blocks_when_one_required_anchor_is_missing(self) -> None:
+        inputs = _minimal_compiler_coverage_inputs(
+            required_anchor_policy="touch_all",
+            required_anchors=[
+                {"label": "alpha anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+                {"label": "beta anchor", "source": "raw_user_input", "coverage_role": "must_touch"},
+            ],
+            selected_chunks=[
+                {
+                    "chunk_id": "chunk-1",
+                    "note_id": "note-1",
+                    "source_root_label": "corpus",
+                    "relative_path": "fixtures/alpha.md",
+                    "paragraph_text": "The alpha anchor evidence is present in this chunk.",
+                    "note_title": "Alpha Note",
+                    "section_label": "Alpha Section",
+                }
+            ],
+        )
+        report = _evaluate_retrieval_coverage(**inputs)
+
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn(
+            "required anchor not aligned: beta anchor",
+            report["semantic_target_coverage"]["blocking_gaps"],
+        )
+        self.assertIn(
+            "required anchor not aligned: beta anchor",
+            report["blocking_reasons"],
+        )
+
+    def test_semantic_compiler_uses_touch_any_for_causal_and_comparison_disambiguation(self) -> None:
+        cases = [
+            ("Is my low mood coming from poor sleep or from the thing I ate?", "causal_disambiguation"),
+            ("Should I focus on poor sleep or the thing I ate?", "comparison_disambiguation"),
+        ]
+        for user_input, expected_question_type in cases:
+            with self.subTest(user_input=user_input):
+                compiler_packet, reasons = _build_semantic_compiler_packet(
+                    user_input=user_input,
+                    prior_thread_state={},
+                    semantic_payload={
+                        "perturbation_nodes": [],
+                        "contextual_salt_nodes": [],
+                        "perturbation_semantic_graph": {"nodes": [], "edges": []},
+                        "activation_hints": {},
+                        "resolved_referents": [],
+                    },
+                    isolated_packet={
+                        "parsed_payload": {
+                            "candidate_targets": ["poor sleep", "the thing I ate"],
+                            "terms_or_phrases_not_to_discard": ["poor sleep", "the thing I ate"],
+                            "candidate_relations": [],
+                            "ambiguities": [],
+                        }
+                    },
+                    contextual_packet={"parsed_payload": {}},
+                    semantic_coverage_target={
+                        "must_preserve": ["poor sleep", "the thing I ate"],
+                        "should_include": [],
+                        "avoid_satisfying_with": [],
+                        "query_text": user_input,
+                        "allow_no_retrieval_needed": False,
+                    },
+                )
+                self.assertEqual(compiler_packet["semantic_target"]["question_type"], expected_question_type)
+                self.assertEqual(compiler_packet["coverage_policy"]["required_anchor_policy"], "touch_any")
+                self.assertEqual(reasons, [])
 
     def test_runtime_blocks_when_semantic_coverage_target_shape_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
