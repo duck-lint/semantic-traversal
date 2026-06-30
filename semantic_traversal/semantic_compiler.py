@@ -152,7 +152,7 @@ def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
                 "implicit_needs_or_pressures",
                 "terms_or_phrases_not_to_discard",
                 "ambiguities",
-                "extraction_confidence",
+                "compiler_confidence",
                 "limitations",
             ],
             "properties": {
@@ -165,7 +165,7 @@ def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
                 "implicit_needs_or_pressures": {"type": "array", "items": {"type": "string"}},
                 "terms_or_phrases_not_to_discard": {"type": "array", "items": {"type": "string"}},
                 "ambiguities": {"type": "array", "items": {"type": "string"}},
-                "extraction_confidence": {"type": "string"},
+                "compiler_confidence": {"type": "string"},
                 "limitations": {"type": "array", "items": {"type": "string"}},
             },
         }
@@ -275,7 +275,7 @@ def _isolated_json_skeleton() -> dict[str, Any]:
         "implicit_needs_or_pressures": [],
         "terms_or_phrases_not_to_discard": [],
         "ambiguities": [],
-        "extraction_confidence": "low",
+        "compiler_confidence": "low",
         "limitations": _default_limitations(),
     }
 
@@ -325,7 +325,7 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
     if mode == "isolated":
         skeleton = _isolated_json_skeleton()
         mode_instruction = (
-            "This is isolated extraction. Return a JSON object that matches the isolated schema exactly. "
+            "Compile isolated semantic structure from the raw user message. Return compiler-stage JSON only. "
             "Do not include contextual-only fields. Keep every field type correct."
         )
     else:
@@ -335,7 +335,7 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
             and packet["deterministic_followup_detection"].get("requires_referent_resolution")
         ) or bool(packet.get("deterministic_resolved_referent_candidates"))
         mode_instruction = (
-            "This is contextual extraction. Return a JSON object that matches the contextual schema exactly. "
+            "Hydrate the isolated compiler output with conversation context. Return compiler-stage JSON only. "
             "semantic_target must be an object, activation_hints must be an object, "
             "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
             "perturbation_semantic_graph must be an object with nodes and edges arrays. "
@@ -556,7 +556,7 @@ class StubSemanticCompilerBackend:
 
     def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
-        prior_thread_state = packet.get("extractor_thread_context") or packet.get("prior_thread_state") or {}
+        prior_thread_state = packet.get("compiler_thread_context") or packet.get("prior_thread_state") or {}
         isolated_payload = packet.get("isolated_semantic_compiler") or {}
         payload = self._contextual_payload or self._build_default_contextual_payload(
             raw_user_input=raw_user_input,
@@ -587,7 +587,7 @@ class StubSemanticCompilerBackend:
             "implicit_needs_or_pressures": [],
             "terms_or_phrases_not_to_discard": terms[:5],
             "ambiguities": [],
-            "extraction_confidence": "low",
+            "compiler_confidence": "low",
             "limitations": _default_limitations(),
         }
 
@@ -657,7 +657,7 @@ class StubSemanticCompilerBackend:
                 "unchanged": preserved_terms,
             },
             "ambiguities": [],
-            "extraction_confidence": "low",
+            "compiler_confidence": "low",
             "limitations": _default_limitations(),
         }
 
@@ -796,12 +796,12 @@ def resolve_semantic_compiler_backend(
     *,
     repo_root: Path,
     config: RuntimeConfig,
-    extractor_mode: str | None = None,
+    compiler_mode: str | None = None,
     model_override: str | None = None,
     base_url_override: str | None = None,
     allow_test_backends: bool = False,
 ) -> SemanticCompilerBackend:
-    configured_mode = extractor_mode.strip().lower() if isinstance(extractor_mode, str) and extractor_mode.strip() else None
+    configured_mode = compiler_mode.strip().lower() if isinstance(compiler_mode, str) and compiler_mode.strip() else None
     configured_provider = config.semantic_compiler_provider.strip().lower()
     configured_model = model_override or config.semantic_compiler_model
     configured_base_url = base_url_override or config.semantic_compiler_base_url
