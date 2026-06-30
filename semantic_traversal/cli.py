@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from .hashing import sha256_json
 from .config import load_runtime_config
 from .ingest import (
     build_default_source_roots,
@@ -13,7 +14,7 @@ from .ingest import (
     run_ingest,
 )
 from .llm import resolve_llm_backend
-from .semantic_extraction import resolve_semantic_extractor_backend
+from .semantic_compiler import resolve_semantic_compiler_backend
 from .runtime import run_thread_turn
 
 
@@ -63,7 +64,7 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     config = load_runtime_config(repo_root=repo_root, config_path=args.config)
     data_root = Path(args.data_root).resolve() if args.data_root else config.data_root
     llm_backend = resolve_llm_backend(repo_root=repo_root, config=config, llm_mode=args.llm_mode, model_override=args.model)
-    semantic_extractor_backend = resolve_semantic_extractor_backend(
+    semantic_compiler_backend = resolve_semantic_compiler_backend(
         repo_root=repo_root,
         config=config,
     )
@@ -74,7 +75,7 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         llm_backend=llm_backend,
         thread_id=args.thread_id,
         config=config,
-        semantic_extractor_backend=semantic_extractor_backend,
+        semantic_compiler_backend=semantic_compiler_backend,
     )
     payload = {
         "thread_id": result.thread_id,
@@ -83,23 +84,26 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
         "runtime_outcome": result.runtime_outcome,
         "blocking_reasons": result.blocking_reasons,
         "llm_mode": result.llm_metadata.get("mode"),
-        "isolated_extraction_status": result.isolated_semantic_extraction_packet["status"],
-        "contextual_extraction_status": result.contextual_semantic_extraction_packet["status"],
+        "semantic_compiler_status": "valid" if result.turn_compilation_packet["semantic_contract_validation"]["valid"] else "invalid",
+        "isolated_compiler_status": result.isolated_semantic_compiler_packet["status"],
+        "contextual_compiler_status": result.contextual_semantic_compiler_packet["status"],
         "conversation_thread_path": str(result.conversation_thread_path),
         "thread_state_path": str(result.thread_state_path),
         "thread_ledger_path": str(result.thread_ledger_path),
         "turn_root": str(result.turn_root),
-        "isolated_semantic_extraction_packet_path": str(result.isolated_semantic_extraction_packet_path),
-        "isolated_semantic_extraction_raw_path": str(result.isolated_semantic_extraction_raw_path),
-        "contextual_semantic_extraction_packet_path": str(result.contextual_semantic_extraction_packet_path),
-        "contextual_semantic_extraction_raw_path": str(result.contextual_semantic_extraction_raw_path),
-        "semantic_context_packet_path": str(result.semantic_context_packet_path),
+        "semantic_compiler_packet_path": str(result.semantic_compiler_packet_path),
+        "isolated_semantic_compiler_packet_path": str(result.isolated_semantic_compiler_packet_path),
+        "isolated_semantic_compiler_raw_path": str(result.isolated_semantic_compiler_raw_path),
+        "contextual_semantic_compiler_packet_path": str(result.contextual_semantic_compiler_packet_path),
+        "contextual_semantic_compiler_raw_path": str(result.contextual_semantic_compiler_raw_path),
+        "turn_compilation_packet_path": str(result.turn_compilation_packet_path),
         "semantic_traversal_manifest_path": str(result.semantic_traversal_manifest_path),
         "retrieval_packet_path": str(result.retrieval_packet_path),
         "coverage_report_path": str(result.coverage_report_path),
         "synthesis_context_packet_path": str(result.synthesis_context_packet_path),
         "state_delta_path": str(result.state_delta_path),
         "coverage_decision": result.coverage_report.get("decision"),
+        "semantic_compiler_packet_hash": sha256_json(result.semantic_compiler_packet),
         "latest_thread_state_hash": result.next_thread_state["latest_thread_state_hash"],
         "latest_perturbation_hash": result.ledger_record["state_perturbation_hash"],
     }

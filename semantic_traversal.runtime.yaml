@@ -6,7 +6,7 @@ llm:
   model: "gpt-5.4-mini"
   max_output_tokens: 6000
 
-semantic_extraction:
+semantic_compiler:
   provider: "ollama"
   model: qwen3:8b
   base_url: "http://localhost:11434"

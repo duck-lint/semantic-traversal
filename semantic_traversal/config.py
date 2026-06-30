@@ -33,7 +33,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "model": str,
         "max_output_tokens": int,
     },
-    "semantic_extraction": {
+    "semantic_compiler": {
         "provider": str,
         "model": (str, type(None)),
         "base_url": str,
@@ -129,21 +129,21 @@ class RuntimeConfig:
         return int(self.raw["llm"]["max_output_tokens"])
 
     @property
-    def semantic_extraction_model(self) -> str | None:
-        value = self.raw["semantic_extraction"]["model"]
+    def semantic_compiler_model(self) -> str | None:
+        value = self.raw["semantic_compiler"]["model"]
         return None if value is None else str(value)
 
     @property
-    def semantic_extraction_provider(self) -> str:
-        return str(self.raw["semantic_extraction"]["provider"])
+    def semantic_compiler_provider(self) -> str:
+        return str(self.raw["semantic_compiler"]["provider"])
 
     @property
-    def semantic_extraction_base_url(self) -> str:
-        return str(self.raw["semantic_extraction"]["base_url"])
+    def semantic_compiler_base_url(self) -> str:
+        return str(self.raw["semantic_compiler"]["base_url"])
 
     @property
-    def semantic_extraction_request_timeout_seconds(self) -> int:
-        return int(self.raw["semantic_extraction"]["request_timeout_seconds"])
+    def semantic_compiler_request_timeout_seconds(self) -> int:
+        return int(self.raw["semantic_compiler"]["request_timeout_seconds"])
 
     @property
     def embedding_model(self) -> str:

@@ -13,13 +13,13 @@ from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
-from .semantic_extraction import (
-    SemanticExtractionResponse,
-    SemanticExtractorBackend,
+from .semantic_compiler import (
+    SemanticCompilerResponse,
+    SemanticCompilerBackend,
     _detect_followup_signals,
     _resolve_followup_referents,
     extract_terms as extract_semantic_terms,
-    resolve_semantic_extractor_backend,
+    resolve_semantic_compiler_backend,
 )
 from .storage import append_ledger_record, create_thread_paths, load_json, read_ledger, write_json
 
@@ -33,16 +33,17 @@ class TurnExecutionResult:
     conversation_thread_path: Path
     thread_state_path: Path
     thread_ledger_path: Path
-    semantic_context_packet_path: Path
+    semantic_compiler_packet_path: Path
+    turn_compilation_packet_path: Path
     semantic_traversal_manifest_path: Path
     retrieval_packet_path: Path
     coverage_report_path: Path
     synthesis_context_packet_path: Path
     state_delta_path: Path
-    isolated_semantic_extraction_packet_path: Path
-    isolated_semantic_extraction_raw_path: Path
-    contextual_semantic_extraction_packet_path: Path
-    contextual_semantic_extraction_raw_path: Path
+    isolated_semantic_compiler_packet_path: Path
+    isolated_semantic_compiler_raw_path: Path
+    contextual_semantic_compiler_packet_path: Path
+    contextual_semantic_compiler_raw_path: Path
     assistant_response: str | None
     llm_metadata: dict[str, Any]
     runtime_outcome: str
@@ -50,17 +51,18 @@ class TurnExecutionResult:
     prior_thread_state: dict[str, Any]
     next_thread_state: dict[str, Any]
     ledger_record: dict[str, Any]
-    semantic_context_packet: dict[str, Any]
+    semantic_compiler_packet: dict[str, Any]
+    turn_compilation_packet: dict[str, Any]
     semantic_traversal_manifest: dict[str, Any]
     retrieval_packet: dict[str, Any]
     coverage_report: dict[str, Any]
     synthesis_context_packet: dict[str, Any]
-    isolated_semantic_extraction_packet: dict[str, Any]
-    contextual_semantic_extraction_packet: dict[str, Any]
+    isolated_semantic_compiler_packet: dict[str, Any]
+    contextual_semantic_compiler_packet: dict[str, Any]
 
 
 @dataclass(frozen=True)
-class SemanticExtractionArtifacts:
+class SemanticCompilerArtifacts:
     isolated_packet: dict[str, Any]
     isolated_raw_artifact: dict[str, Any]
     contextual_packet: dict[str, Any]
@@ -267,10 +269,10 @@ def _extract_semantic_outputs(
     isolated_payload = isolated_packet.get("parsed_payload") if isinstance(isolated_packet.get("parsed_payload"), dict) else {}
     contextual_payload = contextual_packet.get("parsed_payload") if isinstance(contextual_packet.get("parsed_payload"), dict) else {}
     semantic_payload = contextual_payload or isolated_payload
-    semantic_coverage_target = semantic_payload.get("semantic_coverage_target") or semantic_payload.get("coverage_target")
+    semantic_target = semantic_payload.get("semantic_target") or semantic_payload.get("coverage_target")
     return (
         semantic_payload if isinstance(semantic_payload, dict) else {},
-        semantic_coverage_target if isinstance(semantic_coverage_target, dict) else None,
+        semantic_target if isinstance(semantic_target, dict) else None,
     )
 
 
@@ -290,13 +292,13 @@ def _normalize_semantic_text(value: Any) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
 
 
-def _semantic_target_includes_anchor(semantic_coverage_target: Any, anchor: str) -> bool:
-    if not isinstance(semantic_coverage_target, dict):
+def _semantic_target_includes_anchor(semantic_target: Any, anchor: str) -> bool:
+    if not isinstance(semantic_target, dict):
         return False
     normalized_anchor = _normalize_semantic_text(anchor)
     if not normalized_anchor:
         return False
-    for candidate in list(semantic_coverage_target.get("must_preserve") or []):
+    for candidate in list(semantic_target.get("must_preserve") or []):
         candidate_text = _normalize_semantic_text(candidate)
         if candidate_text and normalized_anchor in candidate_text:
             return True
@@ -575,7 +577,7 @@ def _build_semantic_compiler_packet(
     semantic_payload: dict[str, Any],
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
-    semantic_coverage_target: dict[str, Any] | None,
+    semantic_target: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], list[str]]:
     compiler_reasons: list[str] = []
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
@@ -588,7 +590,7 @@ def _build_semantic_compiler_packet(
         _list_or_empty(isolated_payload.get("candidate_targets")),
         _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")),
         _list_or_empty(contextual_payload.get("candidate_targets")),
-        _list_or_empty(_dict_or_empty(contextual_payload.get("semantic_coverage_target")).get("must_preserve")),
+        _list_or_empty(_dict_or_empty(contextual_payload.get("semantic_target")).get("must_preserve")),
         _list_or_empty(_dict_or_empty(contextual_payload.get("activation_hints")).get("entity_hints")),
     ):
         for item in source:
@@ -608,7 +610,7 @@ def _build_semantic_compiler_packet(
         isolated_packet=isolated_packet,
         contextual_packet=contextual_packet,
         semantic_payload=semantic_payload,
-        semantic_coverage_target=semantic_coverage_target,
+        semantic_target=semantic_target,
     )
     for candidate in concrete_candidates:
         normalized = _normalize_semantic_text(candidate)
@@ -683,9 +685,9 @@ def _build_semantic_compiler_packet(
                 )
     if not required_anchors:
         non_generic_must_preserve = []
-        if isinstance(semantic_coverage_target, dict):
+        if isinstance(semantic_target, dict):
             raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
-            for candidate in _list_or_empty(semantic_coverage_target.get("must_preserve")):
+            for candidate in _list_or_empty(semantic_target.get("must_preserve")):
                 if isinstance(candidate, str) and candidate.strip() and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms):
                     non_generic_must_preserve.append(candidate.strip())
         anchor_seed_candidates = non_generic_must_preserve or concrete_candidates or candidate_entities
@@ -702,8 +704,8 @@ def _build_semantic_compiler_packet(
     entity_terms = [entity["label"] for entity in entities]
     relation_terms = [str(relation.get("relation") or "") for relation in relations if str(relation.get("relation") or "").strip()]
     avoid_terms = []
-    if isinstance(semantic_coverage_target, dict):
-        avoid_terms = [str(item) for item in _list_or_empty(semantic_coverage_target.get("avoid_satisfying_with")) if str(item).strip()]
+    if isinstance(semantic_target, dict):
+        avoid_terms = [str(item) for item in _list_or_empty(semantic_target.get("avoid_satisfying_with")) if str(item).strip()]
 
     semantic_target = {
         "intent": str(
@@ -716,7 +718,7 @@ def _build_semantic_compiler_packet(
             entity_labels=[entity["label"] for entity in entities],
             followup_detection=followup_detection,
         ),
-        "canonical_query": str(semantic_coverage_target.get("query_text") if isinstance(semantic_coverage_target, dict) else user_input) or user_input,
+        "canonical_query": str(semantic_target.get("query_text") if isinstance(semantic_target, dict) else user_input) or user_input,
         "entities": entities,
         "relations": relations,
         "disambiguation_options": disambiguation_options,
@@ -736,7 +738,7 @@ def _build_semantic_compiler_packet(
         "avoid_terms": avoid_terms,
     }
     coverage_policy = {
-        "requires_retrieval": not bool(isinstance(semantic_coverage_target, dict) and semantic_coverage_target.get("allow_no_retrieval_needed")),
+        "requires_retrieval": not bool(isinstance(semantic_target, dict) and semantic_target.get("allow_no_retrieval_needed")),
         "required_anchor_policy": "touch_any" if semantic_target["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} else "touch_all",
         "coverage_mode": "provenance_alignment",
         "block_on_missing_exact_phrase": False,
@@ -821,7 +823,7 @@ def _collect_concrete_anchor_candidates(
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
     semantic_payload: dict[str, Any],
-    semantic_coverage_target: dict[str, Any] | None,
+    semantic_target: dict[str, Any] | None,
 ) -> list[str]:
     raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
     scored_candidates: list[tuple[int, str]] = []
@@ -861,8 +863,8 @@ def _collect_concrete_anchor_candidates(
     for candidate in _list_or_empty(activation_hints.get("entity_hints")):
         add_candidate(candidate, weight=30)
 
-    if isinstance(semantic_coverage_target, dict):
-        for candidate in _list_or_empty(semantic_coverage_target.get("should_include")):
+    if isinstance(semantic_target, dict):
+        for candidate in _list_or_empty(semantic_target.get("should_include")):
             add_candidate(candidate, weight=35)
 
     contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
@@ -875,14 +877,14 @@ def _collect_concrete_anchor_candidates(
 
 
 def _coverage_target_has_concrete_anchor(
-    semantic_coverage_target: dict[str, Any] | None,
+    semantic_target: dict[str, Any] | None,
     *,
     concrete_anchor_candidates: list[str],
     raw_topic_terms: set[str],
 ) -> bool:
-    if not isinstance(semantic_coverage_target, dict):
+    if not isinstance(semantic_target, dict):
         return False
-    must_preserve = _list_or_empty(semantic_coverage_target.get("must_preserve"))
+    must_preserve = _list_or_empty(semantic_target.get("must_preserve"))
     for target in must_preserve:
         if not isinstance(target, str):
             continue
@@ -893,14 +895,14 @@ def _coverage_target_has_concrete_anchor(
     return False
 
 
-def _repair_semantic_coverage_target_anchors(
+def _repair_semantic_target_anchors(
     *,
     user_input: str,
     prior_thread_state: dict[str, Any],
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
     semantic_payload: dict[str, Any],
-    semantic_coverage_target: dict[str, Any] | None,
+    semantic_target: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any], list[str]]:
     diagnostics = {
         "repaired": False,
@@ -911,17 +913,17 @@ def _repair_semantic_coverage_target_anchors(
         "generic_must_preserve_candidates": [],
         "reason": "",
     }
-    if not isinstance(semantic_coverage_target, dict):
+    if not isinstance(semantic_target, dict):
         diagnostics["reason"] = "legacy semantic coverage target missing or invalid"
-        return semantic_coverage_target, diagnostics, []
+        return semantic_target, diagnostics, []
 
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
     if followup_detection.get("requires_referent_resolution"):
         diagnostics["reason"] = "referential follow-up target repair not applied"
-        diagnostics["original_must_preserve"] = list(semantic_coverage_target.get("must_preserve") or [])
-        return semantic_coverage_target, diagnostics, []
+        diagnostics["original_must_preserve"] = list(semantic_target.get("must_preserve") or [])
+        return semantic_target, diagnostics, []
 
-    must_preserve = [str(item) for item in _list_or_empty(semantic_coverage_target.get("must_preserve"))]
+    must_preserve = [str(item) for item in _list_or_empty(semantic_target.get("must_preserve"))]
     diagnostics["original_must_preserve"] = must_preserve
     raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
     concrete_anchor_candidates = _collect_concrete_anchor_candidates(
@@ -929,7 +931,7 @@ def _repair_semantic_coverage_target_anchors(
         isolated_packet=isolated_packet,
         contextual_packet=contextual_packet,
         semantic_payload=semantic_payload,
-        semantic_coverage_target=semantic_coverage_target,
+        semantic_target=semantic_target,
     )
     diagnostics["concrete_anchor_candidates"] = concrete_anchor_candidates
     diagnostics["generic_must_preserve_candidates"] = [
@@ -939,16 +941,16 @@ def _repair_semantic_coverage_target_anchors(
     ]
 
     if _coverage_target_has_concrete_anchor(
-        semantic_coverage_target,
+        semantic_target,
         concrete_anchor_candidates=concrete_anchor_candidates,
         raw_topic_terms=raw_topic_terms,
     ):
         diagnostics["reason"] = "must_preserve already contains a concrete anchor"
-        return semantic_coverage_target, diagnostics, []
+        return semantic_target, diagnostics, []
 
     if concrete_anchor_candidates:
         strongest_anchor = concrete_anchor_candidates[0]
-        updated_target = dict(semantic_coverage_target)
+        updated_target = dict(semantic_target)
         updated_target["must_preserve"] = [strongest_anchor] + must_preserve
         diagnostics["repaired"] = True
         diagnostics["repair_type"] = "added_concrete_anchor_to_must_preserve"
@@ -956,8 +958,8 @@ def _repair_semantic_coverage_target_anchors(
         diagnostics["reason"] = "must_preserve contained only generic relation shells; added strongest concrete anchor"
         return updated_target, diagnostics, []
 
-    diagnostics["reason"] = "semantic_coverage_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available"
-    return semantic_coverage_target, diagnostics, [diagnostics["reason"]]
+    diagnostics["reason"] = "semantic_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available"
+    return semantic_target, diagnostics, [diagnostics["reason"]]
 
 
 def _validate_resolved_referents(
@@ -1039,8 +1041,8 @@ def _validate_resolved_referents(
                 reasons.append("follow-up semantic target missing required resolved referent")
             for resolved_referent in required_referents:
                 resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
-                if resolved_to and not _semantic_target_includes_anchor(payload.get("semantic_coverage_target"), resolved_to):
-                    reasons.append(f"semantic_coverage_target must_preserve does not include required resolved referent: {resolved_to}")
+                if resolved_to and not _semantic_target_includes_anchor(payload.get("semantic_target"), resolved_to):
+                    reasons.append(f"semantic_target must_preserve does not include required resolved referent: {resolved_to}")
 
     if deterministic_targets and model_targets:
         missing_from_model = [target for target in deterministic_targets if target not in model_targets]
@@ -1082,7 +1084,7 @@ def _validate_semantic_context_payload(
         "perturbation_nodes": list,
         "contextual_salt_nodes": list,
         "perturbation_semantic_graph": dict,
-        "semantic_coverage_target": dict,
+        "semantic_target": dict,
         "activation_hints": dict,
         "limitations": list,
     }
@@ -1269,13 +1271,13 @@ def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict
 def _match_target_to_resolved_referent_anchor(
     target: str,
     *,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
 ) -> dict[str, Any] | None:
     normalized_target = _normalize_resolved_referent_value(target)
     if not normalized_target:
         return None
 
-    referent_diagnostics = _dict_or_empty(semantic_context_packet.get("referent_resolution_diagnostics"))
+    referent_diagnostics = _dict_or_empty(turn_compilation_packet.get("referent_resolution_diagnostics"))
     disagreements = _list_or_empty(referent_diagnostics.get("disagreements"))
     if disagreements:
         return None
@@ -1284,7 +1286,7 @@ def _match_target_to_resolved_referent_anchor(
     model_targets = set(_list_or_empty(referent_diagnostics.get("model_referent_targets")))
     diagnostics_available = bool(referent_diagnostics)
 
-    for resolved_referent in _list_or_empty(semantic_context_packet.get("resolved_referents")):
+    for resolved_referent in _list_or_empty(turn_compilation_packet.get("resolved_referents")):
         if not isinstance(resolved_referent, dict):
             continue
         if resolved_referent.get("required_for_target") is not True:
@@ -1310,8 +1312,8 @@ def _match_target_to_resolved_referent_anchor(
     return None
 
 
-def _is_deemphasized_generic_must_preserve_target(target: str, *, semantic_context_packet: dict[str, Any]) -> bool:
-    diagnostics = _dict_or_empty(semantic_context_packet.get("semantic_coverage_target_diagnostics"))
+def _is_deemphasized_generic_must_preserve_target(target: str, *, turn_compilation_packet: dict[str, Any]) -> bool:
+    diagnostics = _dict_or_empty(turn_compilation_packet.get("semantic_target_diagnostics"))
     if not diagnostics.get("repaired"):
         return False
     generic_candidates = [str(item) for item in _list_or_empty(diagnostics.get("generic_must_preserve_candidates"))]
@@ -1321,18 +1323,18 @@ def _is_deemphasized_generic_must_preserve_target(target: str, *, semantic_conte
 
 def _evaluate_semantic_compiler_alignment(
     *,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
     config: RuntimeConfig,
 ) -> dict[str, Any]:
-    compiler_packet = _dict_or_empty(semantic_context_packet.get("semantic_compiler_packet"))
-    legacy_semantic_context_packet = dict(semantic_context_packet)
-    legacy_diagnostics = _dict_or_empty(semantic_context_packet.get("legacy_semantic_extraction_diagnostics"))
-    if isinstance(legacy_diagnostics.get("legacy_semantic_coverage_target"), dict):
-        legacy_semantic_context_packet["semantic_coverage_target"] = legacy_diagnostics["legacy_semantic_coverage_target"]
+    compiler_packet = _dict_or_empty(turn_compilation_packet.get("semantic_compiler_packet"))
+    legacy_turn_compilation_packet = dict(turn_compilation_packet)
+    legacy_diagnostics = _dict_or_empty(turn_compilation_packet.get("legacy_semantic_compiler_diagnostics"))
+    if isinstance(legacy_diagnostics.get("legacy_semantic_target"), dict):
+        legacy_turn_compilation_packet["semantic_target"] = legacy_diagnostics["legacy_semantic_target"]
     legacy_target = _evaluate_semantic_target_coverage(
-        semantic_context_packet=legacy_semantic_context_packet,
+        turn_compilation_packet=legacy_turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
     )
@@ -1342,7 +1344,7 @@ def _evaluate_semantic_compiler_alignment(
     selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
     target_present = bool(compiler_packet)
     target_valid = bool(semantic_target and retrieval_plan and coverage_policy)
-    if not dict(semantic_context_packet.get("semantic_contract_validation") or {}).get("valid"):
+    if not dict(turn_compilation_packet.get("semantic_contract_validation") or {}).get("valid"):
         target_valid = False
 
     selected_chunk_provenance = [
@@ -1373,9 +1375,9 @@ def _evaluate_semantic_compiler_alignment(
         + _collect_string_terms(retrieval_plan.get("relation_terms"))
     )
 
-    referent_diagnostics = _dict_or_empty(semantic_context_packet.get("referent_resolution_diagnostics"))
+    referent_diagnostics = _dict_or_empty(turn_compilation_packet.get("referent_resolution_diagnostics"))
     deterministic_targets = set(_list_or_empty(referent_diagnostics.get("deterministic_referent_targets")))
-    resolved_referents = _list_or_empty(semantic_context_packet.get("resolved_referents"))
+    resolved_referents = _list_or_empty(turn_compilation_packet.get("resolved_referents"))
     required_anchor_alignment: list[dict[str, Any]] = []
     legacy_must_preserve: list[dict[str, Any]] = []
     diagnostic_gaps: list[str] = []
@@ -1546,13 +1548,13 @@ def _evaluate_semantic_compiler_alignment(
 
 def _evaluate_semantic_target_coverage(
     *,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
 ) -> dict[str, Any]:
-    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target")
+    semantic_target = turn_compilation_packet.get("semantic_target")
     selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
-    target_present = isinstance(semantic_coverage_target, dict)
+    target_present = isinstance(semantic_target, dict)
     target_valid = target_present
     must_preserve_results: list[dict[str, Any]] = []
     should_include_results: list[dict[str, Any]] = []
@@ -1583,30 +1585,30 @@ def _evaluate_semantic_target_coverage(
         }
 
     try:
-        target_hash = sha256_json(semantic_coverage_target)
+        target_hash = sha256_json(semantic_target)
     except Exception:
         target_hash = None
         target_valid = False
-    if not isinstance(semantic_coverage_target.get("must_preserve"), list):
+    if not isinstance(semantic_target.get("must_preserve"), list):
         target_valid = False
-    if not isinstance(semantic_coverage_target.get("should_include"), list):
+    if not isinstance(semantic_target.get("should_include"), list):
         target_valid = False
-    if not isinstance(semantic_coverage_target.get("avoid_satisfying_with"), list):
+    if not isinstance(semantic_target.get("avoid_satisfying_with"), list):
         target_valid = False
-    if "query_text" not in semantic_coverage_target or semantic_coverage_target.get("query_text") is None:
+    if "query_text" not in semantic_target or semantic_target.get("query_text") is None:
         target_valid = False
-    elif not isinstance(semantic_coverage_target.get("query_text"), str):
+    elif not isinstance(semantic_target.get("query_text"), str):
         target_valid = False
-    if "allow_no_retrieval_needed" not in semantic_coverage_target or semantic_coverage_target.get("allow_no_retrieval_needed") is None:
+    if "allow_no_retrieval_needed" not in semantic_target or semantic_target.get("allow_no_retrieval_needed") is None:
         target_valid = False
-    elif not isinstance(semantic_coverage_target.get("allow_no_retrieval_needed"), bool):
+    elif not isinstance(semantic_target.get("allow_no_retrieval_needed"), bool):
         target_valid = False
 
-    for target_value in list(semantic_coverage_target.get("must_preserve") or []):
+    for target_value in list(semantic_target.get("must_preserve") or []):
         target_text = str(target_value)
         discourse_anchor_evidence = _match_target_to_resolved_referent_anchor(
             target_text,
-            semantic_context_packet=semantic_context_packet,
+            turn_compilation_packet=turn_compilation_packet,
         )
         if discourse_anchor_evidence is not None:
             must_preserve_results.append(
@@ -1618,7 +1620,7 @@ def _evaluate_semantic_target_coverage(
                 }
             )
             continue
-        if _is_deemphasized_generic_must_preserve_target(target_text, semantic_context_packet=semantic_context_packet):
+        if _is_deemphasized_generic_must_preserve_target(target_text, turn_compilation_packet=turn_compilation_packet):
             must_preserve_results.append(
                 {
                     "target": target_text,
@@ -1662,7 +1664,7 @@ def _evaluate_semantic_target_coverage(
                 }
             )
 
-    for target_value in list(semantic_coverage_target.get("should_include") or []):
+    for target_value in list(semantic_target.get("should_include") or []):
         target_text = str(target_value)
         match = None
         for chunk in selected_chunks:
@@ -1694,7 +1696,7 @@ def _evaluate_semantic_target_coverage(
                 }
             )
 
-    for target_value in list(semantic_coverage_target.get("avoid_satisfying_with") or []):
+    for target_value in list(semantic_target.get("avoid_satisfying_with") or []):
         target_text = str(target_value)
         match = None
         for chunk in selected_chunks:
@@ -1748,7 +1750,7 @@ def _build_retrieval_preparation(
     user_input: str,
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
-    semantic_coverage_target: dict[str, Any] | None,
+    semantic_target: dict[str, Any] | None,
     semantic_compiler_packet: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     raw_lexical_terms = _extract_lexical_query_terms(user_input)
@@ -1766,19 +1768,19 @@ def _build_retrieval_preparation(
     )
     coverage_target_terms: list[str] = []
     compiler_plan_terms: list[str] = []
-    if isinstance(semantic_coverage_target, dict):
+    if isinstance(semantic_target, dict):
         for key in ("must_preserve", "should_include"):
-            for term in _collect_string_terms(semantic_coverage_target.get(key)):
+            for term in _collect_string_terms(semantic_target.get(key)):
                 if term not in coverage_target_terms:
                     coverage_target_terms.append(term)
-                if "semantic_coverage_target" not in candidate_term_sources.setdefault(term, []):
-                    candidate_term_sources[term].append("semantic_coverage_target")
-        query_text = semantic_coverage_target.get("query_text")
+                if "semantic_target" not in candidate_term_sources.setdefault(term, []):
+                    candidate_term_sources[term].append("semantic_target")
+        query_text = semantic_target.get("query_text")
         for term in _collect_string_terms(query_text):
             if term not in coverage_target_terms:
                 coverage_target_terms.append(term)
-            if "semantic_coverage_target.query_text" not in candidate_term_sources.setdefault(term, []):
-                candidate_term_sources[term].append("semantic_coverage_target.query_text")
+            if "semantic_target.query_text" not in candidate_term_sources.setdefault(term, []):
+                candidate_term_sources[term].append("semantic_target.query_text")
     if isinstance(semantic_compiler_packet, dict):
         retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
         for key in ("lexical_terms", "entity_terms", "relation_terms", "graph_seeds", "avoid_terms"):
@@ -1836,26 +1838,26 @@ def _build_retrieval_preparation(
     }
 
 
-def _build_semantic_context_packet(
+def _build_turn_compilation_packet(
     *,
     thread_document: dict[str, Any],
     prior_thread_state: dict[str, Any],
     user_input: str,
     turn_id: int,
-    semantic_extraction: SemanticExtractionArtifacts,
+    semantic_compiler: SemanticCompilerArtifacts,
 ) -> dict[str, Any]:
-    semantic_payload, extracted_semantic_coverage_target = _extract_semantic_outputs(
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
+    semantic_payload, extracted_semantic_target = _extract_semantic_outputs(
+        isolated_packet=semantic_compiler.isolated_packet,
+        contextual_packet=semantic_compiler.contextual_packet,
     )
     semantic_compiler_packet, semantic_compiler_reasons = _build_semantic_compiler_packet(
         user_input=user_input,
         prior_thread_state=prior_thread_state,
         semantic_payload=semantic_payload,
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
-        semantic_coverage_target=(
-            extracted_semantic_coverage_target if isinstance(extracted_semantic_coverage_target, dict) else None
+        isolated_packet=semantic_compiler.isolated_packet,
+        contextual_packet=semantic_compiler.contextual_packet,
+        semantic_target=(
+            extracted_semantic_target if isinstance(extracted_semantic_target, dict) else None
         ),
     )
     compiler_validation_reasons = _validate_semantic_compiler_packet(
@@ -1868,13 +1870,13 @@ def _build_semantic_context_packet(
         prior_thread_state=prior_thread_state,
         semantic_payload=semantic_payload,
     )
-    legacy_semantic_coverage_target, semantic_coverage_target_diagnostics, adequacy_reasons = _repair_semantic_coverage_target_anchors(
+    legacy_semantic_target, semantic_target_diagnostics, adequacy_reasons = _repair_semantic_target_anchors(
         user_input=user_input,
         prior_thread_state=prior_thread_state,
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
+        isolated_packet=semantic_compiler.isolated_packet,
+        contextual_packet=semantic_compiler.contextual_packet,
         semantic_payload=legacy_semantic_payload,
-        semantic_coverage_target=extracted_semantic_coverage_target,
+        semantic_target=extracted_semantic_target,
     )
     referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
         payload=legacy_semantic_payload,
@@ -1899,18 +1901,18 @@ def _build_semantic_context_packet(
         if reason not in legacy_warnings:
             legacy_warnings.append(reason)
 
-    semantic_coverage_target = _build_legacy_compatibility_target_from_compiler(semantic_compiler_packet)
-    if semantic_coverage_target is None and isinstance(legacy_semantic_coverage_target, dict):
-        semantic_coverage_target = legacy_semantic_coverage_target
+    semantic_target = _build_legacy_compatibility_target_from_compiler(semantic_compiler_packet)
+    if semantic_target is None and isinstance(legacy_semantic_target, dict):
+        semantic_target = legacy_semantic_target
 
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
     resolved_referents = _list_or_empty(legacy_semantic_payload.get("resolved_referents"))
     referential_followup_detection = followup_detection
     retrieval_preparation = _build_retrieval_preparation(
         user_input=user_input,
-        isolated_packet=semantic_extraction.isolated_packet,
-        contextual_packet=semantic_extraction.contextual_packet,
-        semantic_coverage_target=semantic_coverage_target,
+        isolated_packet=semantic_compiler.isolated_packet,
+        contextual_packet=semantic_compiler.contextual_packet,
+        semantic_target=semantic_target,
         semantic_compiler_packet=semantic_compiler_packet,
     )
     return {
@@ -1924,8 +1926,8 @@ def _build_semantic_context_packet(
         "perturbation_nodes": _list_or_empty(legacy_semantic_payload.get("perturbation_nodes")),
         "contextual_salt_nodes": _list_or_empty(legacy_semantic_payload.get("contextual_salt_nodes")),
         "perturbation_semantic_graph": _dict_or_empty(legacy_semantic_payload.get("perturbation_semantic_graph")),
-        "semantic_coverage_target": semantic_coverage_target,
-        "semantic_coverage_target_diagnostics": semantic_coverage_target_diagnostics,
+        "semantic_target": semantic_target,
+        "semantic_target_diagnostics": semantic_target_diagnostics,
         "activation_hints": _dict_or_empty(legacy_semantic_payload.get("activation_hints")),
         "limitations": _list_or_empty(legacy_semantic_payload.get("limitations")),
         "resolved_referent_repair_diagnostics": resolved_referent_repair_diagnostics,
@@ -1936,24 +1938,24 @@ def _build_semantic_context_packet(
             "valid": not compiler_validation_reasons,
             "reasons": compiler_validation_reasons,
         },
-        "legacy_semantic_extraction_diagnostics": {
+        "legacy_semantic_compiler_diagnostics": {
             "legacy_contract_validation": {
                 "valid": not legacy_warnings,
                 "reasons": legacy_warnings,
             },
             "legacy_payload_diagnostics": legacy_contract_reasons,
             "legacy_compatibility_warnings": legacy_warnings,
-            "legacy_semantic_coverage_target": legacy_semantic_coverage_target,
+            "legacy_semantic_target": legacy_semantic_target,
             "resolved_referent_repair_diagnostics": resolved_referent_repair_diagnostics,
             "referent_resolution_diagnostics": referent_diagnostics,
         },
-        "semantic_extraction": {
-            "isolated": semantic_extraction.isolated_packet,
-            "contextual": semantic_extraction.contextual_packet,
+        "semantic_compiler": {
+            "isolated": semantic_compiler.isolated_packet,
+            "contextual": semantic_compiler.contextual_packet,
             "statuses": {
-                "backend_mode": semantic_extraction.isolated_packet["backend_mode"],
-                "isolated_status": semantic_extraction.isolated_packet["status"],
-                "contextual_status": semantic_extraction.contextual_packet["status"],
+                "backend_mode": semantic_compiler.isolated_packet["backend_mode"],
+                "isolated_status": semantic_compiler.isolated_packet["status"],
+                "contextual_status": semantic_compiler.contextual_packet["status"],
             },
         },
         "prior_thread_state_context": {
@@ -2021,7 +2023,7 @@ def _build_contextual_extraction_request(
     *,
     user_input: str,
     prior_thread_state: dict[str, Any],
-    isolated_semantic_extraction: dict[str, Any] | None,
+    isolated_semantic_compiler: dict[str, Any] | None,
 ) -> dict[str, Any]:
     deterministic_followup_detection = _detect_followup_signals(user_input, prior_thread_state)
     base_instruction = (
@@ -2029,14 +2031,14 @@ def _build_contextual_extraction_request(
         "Return JSON only. "
         "Do not answer the user. Preserve the raw message. "
         "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
-        "semantic_coverage_target, activation_hints, and limitations."
+        "semantic_target, activation_hints, and limitations."
     )
     if not deterministic_followup_detection.get("requires_referent_resolution"):
         return {
             "mode": "contextual",
             "raw_user_input": user_input,
             "prior_thread_state": prior_thread_state,
-            "isolated_semantic_extraction": isolated_semantic_extraction or {},
+            "isolated_semantic_compiler": isolated_semantic_compiler or {},
             "instruction": base_instruction,
         }
 
@@ -2051,16 +2053,16 @@ def _build_contextual_extraction_request(
         "extractor_thread_context": _build_extractor_thread_context(prior_thread_state),
         "deterministic_followup_detection": deterministic_followup_detection,
         "deterministic_resolved_referent_candidates": deterministic_resolved_referent_candidates,
-        "isolated_semantic_extraction": isolated_semantic_extraction or {},
+        "isolated_semantic_compiler": isolated_semantic_compiler or {},
         "instruction": (
             "Hydrate the isolated extraction with conversation context. "
             "Return JSON only. "
             "Do not answer the user. Preserve the raw message. "
             "Use deterministic_resolved_referent_candidates when present. "
             "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-            "For referential follow-ups, semantic_coverage_target.must_preserve must include the resolved referent. "
+            "For referential follow-ups, semantic_target.must_preserve must include the resolved referent. "
             "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
-            "semantic_coverage_target, activation_hints, and limitations."
+            "semantic_target, activation_hints, and limitations."
         ),
     }
 
@@ -2071,7 +2073,7 @@ def _build_extraction_packet(
     turn_id: int,
     backend_mode: str,
     request_packet: dict[str, Any],
-    response: SemanticExtractionResponse,
+    response: SemanticCompilerResponse,
 ) -> dict[str, Any]:
     limitations = []
     if isinstance(response.parsed_payload, dict):
@@ -2103,7 +2105,7 @@ def _build_raw_response_artifact(
     turn_id: int,
     mode: str,
     backend_mode: str,
-    response: SemanticExtractionResponse,
+    response: SemanticCompilerResponse,
 ) -> dict[str, Any]:
     if response.raw_response is None:
         note = f"{backend_mode} backend did not emit a raw model response"
@@ -2122,14 +2124,14 @@ def _build_raw_response_artifact(
     }
 
 
-def _run_semantic_extraction(
+def _run_semantic_compiler(
     *,
     thread_id: str,
     turn_id: int,
     user_input: str,
     prior_thread_state: dict[str, Any],
-    backend: SemanticExtractorBackend,
-) -> SemanticExtractionArtifacts:
+    backend: SemanticCompilerBackend,
+) -> SemanticCompilerArtifacts:
     isolated_request = _build_isolated_extraction_request(user_input)
     isolated_response = backend.extract_isolated(isolated_request)
     isolated_packet = _build_extraction_packet(
@@ -2150,7 +2152,7 @@ def _run_semantic_extraction(
     contextual_request = _build_contextual_extraction_request(
         user_input=user_input,
         prior_thread_state=prior_thread_state,
-        isolated_semantic_extraction=isolated_response.parsed_payload,
+        isolated_semantic_compiler=isolated_response.parsed_payload,
     )
     contextual_response = backend.extract_contextual(contextual_request)
     contextual_packet = _build_extraction_packet(
@@ -2167,7 +2169,7 @@ def _run_semantic_extraction(
         backend_mode=backend.mode_name,
         response=contextual_response,
     )
-    return SemanticExtractionArtifacts(
+    return SemanticCompilerArtifacts(
         isolated_packet=isolated_packet,
         isolated_raw_artifact=isolated_raw_artifact,
         contextual_packet=contextual_packet,
@@ -2336,8 +2338,8 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     return numerator / (left_norm * right_norm)
 
 
-def _build_query_embedding_text(semantic_context_packet: dict[str, Any]) -> str:
-    semantic_compiler_packet = _dict_or_empty(semantic_context_packet.get("semantic_compiler_packet"))
+def _build_query_embedding_text(turn_compilation_packet: dict[str, Any]) -> str:
+    semantic_compiler_packet = _dict_or_empty(turn_compilation_packet.get("semantic_compiler_packet"))
     retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
     semantic_target = _dict_or_empty(semantic_compiler_packet.get("semantic_target"))
     if semantic_target or retrieval_plan:
@@ -2346,15 +2348,15 @@ def _build_query_embedding_text(semantic_context_packet: dict[str, Any]) -> str:
             " ".join(str(item) for item in list(retrieval_plan.get("entity_terms") or [])),
             " ".join(str(item) for item in list(retrieval_plan.get("relation_terms") or [])),
             " ".join(str(item) for item in list(retrieval_plan.get("lexical_terms") or [])),
-            str(semantic_context_packet.get("user_input") or ""),
+            str(turn_compilation_packet.get("user_input") or ""),
         ]
         return " ".join(part for part in parts if part).strip()
-    semantic_coverage_target = semantic_context_packet.get("semantic_coverage_target") or {}
+    semantic_target = turn_compilation_packet.get("semantic_target") or {}
     parts = [
-        str(semantic_coverage_target.get("query_text") or ""),
-        " ".join(str(item) for item in list(semantic_coverage_target.get("must_preserve") or [])),
-        " ".join(str(item) for item in list(semantic_coverage_target.get("should_include") or [])),
-        str(semantic_context_packet.get("user_input") or ""),
+        str(semantic_target.get("query_text") or ""),
+        " ".join(str(item) for item in list(semantic_target.get("must_preserve") or [])),
+        " ".join(str(item) for item in list(semantic_target.get("should_include") or [])),
+        str(turn_compilation_packet.get("user_input") or ""),
     ]
     return " ".join(part for part in parts if part).strip()
 
@@ -2616,11 +2618,11 @@ def _build_latent_space_activation(
     repo_root: Path,
     data_root: Path,
     config: RuntimeConfig,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     embedding_backend: EmbeddingBackend,
 ) -> dict[str, Any]:
     database_path = _database_path(config, data_root)
-    retrieval_preparation = dict(semantic_context_packet.get("retrieval_preparation") or {})
+    retrieval_preparation = dict(turn_compilation_packet.get("retrieval_preparation") or {})
     query_terms = list(retrieval_preparation.get("combined_candidate_terms") or [])
     activation_surfaces: list[dict[str, Any]] = []
     candidate_regions: dict[str, list[dict[str, Any]]] = {
@@ -2642,8 +2644,8 @@ def _build_latent_space_activation(
                 }
             )
         activated_regions = {
-            "thread_id": semantic_context_packet["thread_id"],
-            "turn_id": semantic_context_packet["turn_id"],
+            "thread_id": turn_compilation_packet["thread_id"],
+            "turn_id": turn_compilation_packet["turn_id"],
             "database_path": str(database_path),
             "query_terms": query_terms,
             "activation_surfaces": activation_surfaces,
@@ -2679,7 +2681,7 @@ def _build_latent_space_activation(
             }
         )
 
-        query_text = _build_query_embedding_text(semantic_context_packet)
+        query_text = _build_query_embedding_text(turn_compilation_packet)
         vector_candidates: list[dict[str, Any]] = []
         vector_status = "unavailable"
         if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
@@ -2738,8 +2740,8 @@ def _build_latent_space_activation(
         if surface["status"] not in {"activated", "no_matches", "no_query_terms", "no_expansion_matches", "no_seed_candidates"}:
             blocked_surfaces.append({"surface": surface["surface"], "reason": surface["reason"]})
     activated_regions = {
-        "thread_id": semantic_context_packet["thread_id"],
-        "turn_id": semantic_context_packet["turn_id"],
+        "thread_id": turn_compilation_packet["thread_id"],
+        "turn_id": turn_compilation_packet["turn_id"],
         "database_path": str(database_path),
         "query_terms": query_terms,
         "activation_surfaces": activation_surfaces,
@@ -2753,7 +2755,7 @@ def _build_latent_space_activation(
 
 def _build_semantic_traversal_manifest(
     *,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     activated_semantic_regions: dict[str, Any],
     config: RuntimeConfig,
 ) -> dict[str, Any]:
@@ -2842,20 +2844,20 @@ def _build_semantic_traversal_manifest(
         for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface", "graph_layer", "synthetic_nodes")
     }
     manifest_validity_reasons: list[str] = []
-    if not semantic_context_packet.get("semantic_contract_validation", {}).get("valid"):
+    if not turn_compilation_packet.get("semantic_contract_validation", {}).get("valid"):
         manifest_validity_reasons.append("semantic compiler packet failed validation")
-    if semantic_context_packet.get("perturbation_semantic_graph") is None:
+    if turn_compilation_packet.get("perturbation_semantic_graph") is None:
         manifest_validity_reasons.append("perturbation_semantic_graph missing")
-    if not isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict):
+    if not isinstance(turn_compilation_packet.get("semantic_compiler_packet"), dict):
         manifest_validity_reasons.append("semantic_compiler_packet missing")
     if not ranked_candidates:
         manifest_validity_reasons.append("semantic traversal produced no candidate regions")
     manifest = {
-        "thread_id": semantic_context_packet["thread_id"],
-        "turn_id": semantic_context_packet["turn_id"],
+        "thread_id": turn_compilation_packet["thread_id"],
+        "turn_id": turn_compilation_packet["turn_id"],
         "semantic_compiler_packet_hash": (
-            sha256_json(semantic_context_packet["semantic_compiler_packet"])
-            if isinstance(semantic_context_packet.get("semantic_compiler_packet"), dict)
+            sha256_json(turn_compilation_packet["semantic_compiler_packet"])
+            if isinstance(turn_compilation_packet.get("semantic_compiler_packet"), dict)
             else None
         ),
         "activated_region_hash": activated_semantic_regions.get("activated_region_hash"),
@@ -3003,7 +3005,7 @@ def _assemble_retrieval_packet(
 
 def _evaluate_retrieval_coverage(
     *,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     activated_semantic_regions: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
@@ -3011,7 +3013,7 @@ def _evaluate_retrieval_coverage(
     semantic_traversal_manifest_hash: str,
     retrieval_packet_hash: str,
 ) -> dict[str, Any]:
-    statuses = dict(semantic_context_packet.get("semantic_extraction", {}).get("statuses") or {})
+    statuses = dict(turn_compilation_packet.get("semantic_compiler", {}).get("statuses") or {})
     backend_mode = str(statuses.get("backend_mode") or "unknown")
     isolated_status = str(statuses.get("isolated_status") or "unknown")
     contextual_status = str(statuses.get("contextual_status") or "unknown")
@@ -3021,7 +3023,7 @@ def _evaluate_retrieval_coverage(
         reasons.append(f"semantic compiler backend `{backend_mode}` is not valid for the normal runtime")
     if contextual_status != "parsed":
         reasons.append(f"contextual semantic extraction did not produce a valid parsed result: {contextual_status}")
-    contract_validation = dict(semantic_context_packet.get("semantic_contract_validation") or {})
+    contract_validation = dict(turn_compilation_packet.get("semantic_contract_validation") or {})
     if not contract_validation.get("valid"):
         reasons.extend(list(contract_validation.get("reasons") or []))
         reasons.append("semantic compiler packet failed validation")
@@ -3059,7 +3061,7 @@ def _evaluate_retrieval_coverage(
     max_selected_chunks = config.coverage_max_selected_chunks
     allow_no_retrieval_needed = config.coverage_allow_no_retrieval_needed
     semantic_target_coverage = _evaluate_semantic_compiler_alignment(
-        semantic_context_packet=semantic_context_packet,
+        turn_compilation_packet=turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         config=config,
@@ -3071,7 +3073,7 @@ def _evaluate_retrieval_coverage(
     if semantic_target_coverage.get("avoid_violations"):
         for target in list(semantic_target_coverage.get("avoid_violations") or []):
             reasons.append(f"semantic compiler avoid term present in retrieved evidence: {target}")
-    target_allows_no_retrieval = not bool(_dict_or_empty(semantic_context_packet.get("semantic_compiler_packet")).get("coverage_policy", {}).get("requires_retrieval", True))
+    target_allows_no_retrieval = not bool(_dict_or_empty(turn_compilation_packet.get("semantic_compiler_packet")).get("coverage_policy", {}).get("requires_retrieval", True))
     if selected_chunk_count < min_selected_chunks and not (allow_no_retrieval_needed and target_allows_no_retrieval):
         reasons.append(f"selected chunk count below configured minimum: {selected_chunk_count} < {min_selected_chunks}")
     if selected_chunk_count > max_selected_chunks:
@@ -3080,8 +3082,8 @@ def _evaluate_retrieval_coverage(
     actual_surface_contributions = dict(semantic_traversal_manifest.get("surface_contributions") or {})
 
     decision = "approved" if not reasons else "blocked"
-    semantic_compiler_packet = semantic_context_packet.get("semantic_compiler_packet")
-    referent_resolution_diagnostics = dict(semantic_context_packet.get("referent_resolution_diagnostics") or {})
+    semantic_compiler_packet = turn_compilation_packet.get("semantic_compiler_packet")
+    referent_resolution_diagnostics = dict(turn_compilation_packet.get("referent_resolution_diagnostics") or {})
     return {
         "decision": decision,
         "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet) if isinstance(semantic_compiler_packet, dict) else None,
@@ -3107,7 +3109,7 @@ def _build_synthesis_context_packet(
     prior_thread_state: dict[str, Any],
     user_input: str,
     turn_id: int,
-    semantic_context_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
     coverage_report: dict[str, Any],
@@ -3120,10 +3122,10 @@ def _build_synthesis_context_packet(
         "raw_user_input": user_input,
         "prior_thread_state": prior_thread_state,
         "visible_transcript_tail": thread_document["messages"][-6:],
-        "semantic_compiler_packet": semantic_context_packet.get("semantic_compiler_packet"),
-        "legacy_semantic_extraction_diagnostics": semantic_context_packet.get("legacy_semantic_extraction_diagnostics", {}),
-        "semantic_extraction": semantic_context_packet["semantic_extraction"],
-        "semantic_context_packet": semantic_context_packet,
+        "semantic_compiler_packet": turn_compilation_packet.get("semantic_compiler_packet"),
+        "legacy_semantic_compiler_diagnostics": turn_compilation_packet.get("legacy_semantic_compiler_diagnostics", {}),
+        "semantic_compiler": turn_compilation_packet["semantic_compiler"],
+        "turn_compilation_packet": turn_compilation_packet,
         "semantic_traversal_manifest": semantic_traversal_manifest,
         "retrieval_packet": retrieval_packet,
         "approved_retrieval_packet": retrieval_packet if coverage_decision == "approved" else None,
@@ -3145,46 +3147,50 @@ def _build_synthesis_context_packet(
 def _persist_turn_artifacts(
     *,
     turn_root: Path,
-    semantic_context_packet: dict[str, Any],
+    semantic_compiler_packet: dict[str, Any],
+    turn_compilation_packet: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
     coverage_report: dict[str, Any],
     synthesis_context_packet: dict[str, Any],
     state_delta: dict[str, Any],
-    semantic_extraction: SemanticExtractionArtifacts,
+    semantic_compiler: SemanticCompilerArtifacts,
 ) -> dict[str, Path]:
     turn_root.mkdir(parents=True, exist_ok=True)
-    semantic_context_packet_path = turn_root / "semantic_context_packet.json"
+    semantic_compiler_packet_path = turn_root / "semantic_compiler_packet.json"
+    turn_compilation_packet_path = turn_root / "turn_compilation_packet.json"
     semantic_traversal_manifest_path = turn_root / "semantic_traversal_manifest.json"
     retrieval_packet_path = turn_root / "retrieval_packet.json"
     coverage_report_path = turn_root / "coverage_report.json"
     synthesis_context_packet_path = turn_root / "synthesis_context_packet.json"
     state_delta_path = turn_root / "state_delta.json"
-    isolated_semantic_extraction_packet_path = turn_root / "isolated_semantic_extraction_packet.json"
-    isolated_semantic_extraction_raw_path = turn_root / "isolated_semantic_extraction_raw.json"
-    contextual_semantic_extraction_packet_path = turn_root / "contextual_semantic_extraction_packet.json"
-    contextual_semantic_extraction_raw_path = turn_root / "contextual_semantic_extraction_raw.json"
-    write_json(semantic_context_packet_path, semantic_context_packet)
+    isolated_semantic_compiler_packet_path = turn_root / "isolated_semantic_compiler_packet.json"
+    isolated_semantic_compiler_raw_path = turn_root / "isolated_semantic_compiler_raw.json"
+    contextual_semantic_compiler_packet_path = turn_root / "contextual_semantic_compiler_packet.json"
+    contextual_semantic_compiler_raw_path = turn_root / "contextual_semantic_compiler_raw.json"
+    write_json(semantic_compiler_packet_path, semantic_compiler_packet)
+    write_json(turn_compilation_packet_path, turn_compilation_packet)
     write_json(semantic_traversal_manifest_path, semantic_traversal_manifest)
     write_json(retrieval_packet_path, retrieval_packet)
     write_json(coverage_report_path, coverage_report)
     write_json(synthesis_context_packet_path, synthesis_context_packet)
     write_json(state_delta_path, state_delta)
-    write_json(isolated_semantic_extraction_packet_path, semantic_extraction.isolated_packet)
-    write_json(isolated_semantic_extraction_raw_path, semantic_extraction.isolated_raw_artifact)
-    write_json(contextual_semantic_extraction_packet_path, semantic_extraction.contextual_packet)
-    write_json(contextual_semantic_extraction_raw_path, semantic_extraction.contextual_raw_artifact)
+    write_json(isolated_semantic_compiler_packet_path, semantic_compiler.isolated_packet)
+    write_json(isolated_semantic_compiler_raw_path, semantic_compiler.isolated_raw_artifact)
+    write_json(contextual_semantic_compiler_packet_path, semantic_compiler.contextual_packet)
+    write_json(contextual_semantic_compiler_raw_path, semantic_compiler.contextual_raw_artifact)
     return {
-        "semantic_context_packet_path": semantic_context_packet_path,
+        "semantic_compiler_packet_path": semantic_compiler_packet_path,
+        "turn_compilation_packet_path": turn_compilation_packet_path,
         "semantic_traversal_manifest_path": semantic_traversal_manifest_path,
         "retrieval_packet_path": retrieval_packet_path,
         "coverage_report_path": coverage_report_path,
         "synthesis_context_packet_path": synthesis_context_packet_path,
         "state_delta_path": state_delta_path,
-        "isolated_semantic_extraction_packet_path": isolated_semantic_extraction_packet_path,
-        "isolated_semantic_extraction_raw_path": isolated_semantic_extraction_raw_path,
-        "contextual_semantic_extraction_packet_path": contextual_semantic_extraction_packet_path,
-        "contextual_semantic_extraction_raw_path": contextual_semantic_extraction_raw_path,
+        "isolated_semantic_compiler_packet_path": isolated_semantic_compiler_packet_path,
+        "isolated_semantic_compiler_raw_path": isolated_semantic_compiler_raw_path,
+        "contextual_semantic_compiler_packet_path": contextual_semantic_compiler_packet_path,
+        "contextual_semantic_compiler_raw_path": contextual_semantic_compiler_raw_path,
     }
 
 
@@ -3234,7 +3240,7 @@ def run_thread_turn(
     llm_backend: LLMBackend,
     thread_id: str | None = None,
     config: RuntimeConfig | None = None,
-    semantic_extractor_backend: SemanticExtractorBackend | None = None,
+    semantic_compiler_backend: SemanticCompilerBackend | None = None,
     embedding_backend: EmbeddingBackend | None = None,
 ) -> TurnExecutionResult:
     resolved_config = config or load_runtime_config(repo_root=repo_root)
@@ -3248,32 +3254,32 @@ def run_thread_turn(
     parent_perturbation_hash = ledger_records[-1]["state_perturbation_hash"] if ledger_records else None
     prior_thread_state_hash = prior_thread_state.get("latest_thread_state_hash")
     turn_root = paths.turn_root(turn_id)
-    extractor_backend = semantic_extractor_backend or resolve_semantic_extractor_backend(repo_root=repo_root, config=resolved_config)
+    extractor_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(repo_root=repo_root, config=resolved_config)
     resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 
-    semantic_extraction = _run_semantic_extraction(
+    semantic_compiler = _run_semantic_compiler(
         thread_id=paths.thread_id,
         turn_id=turn_id,
         user_input=user_input,
         prior_thread_state=prior_thread_state,
         backend=extractor_backend,
     )
-    semantic_context_packet = _build_semantic_context_packet(
+    turn_compilation_packet = _build_turn_compilation_packet(
         thread_document=thread_document,
         prior_thread_state=prior_thread_state,
         user_input=user_input,
         turn_id=turn_id,
-        semantic_extraction=semantic_extraction,
+        semantic_compiler=semantic_compiler,
     )
     activated_semantic_regions = _build_latent_space_activation(
         repo_root=repo_root,
         data_root=data_root,
         config=resolved_config,
-        semantic_context_packet=semantic_context_packet,
+        turn_compilation_packet=turn_compilation_packet,
         embedding_backend=resolved_embedding_backend,
     )
     semantic_traversal_manifest = _build_semantic_traversal_manifest(
-        semantic_context_packet=semantic_context_packet,
+        turn_compilation_packet=turn_compilation_packet,
         activated_semantic_regions=activated_semantic_regions,
         config=resolved_config,
     )
@@ -3285,7 +3291,7 @@ def run_thread_turn(
     semantic_traversal_manifest_hash = sha256_json(semantic_traversal_manifest)
     retrieval_packet_hash = sha256_json(retrieval_packet)
     coverage_report = _evaluate_retrieval_coverage(
-        semantic_context_packet=semantic_context_packet,
+        turn_compilation_packet=turn_compilation_packet,
         activated_semantic_regions=activated_semantic_regions,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
@@ -3299,18 +3305,20 @@ def run_thread_turn(
         prior_thread_state=prior_thread_state,
         user_input=user_input,
         turn_id=turn_id,
-        semantic_context_packet=semantic_context_packet,
+        turn_compilation_packet=turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
     )
-    semantic_context_packet_hash = sha256_json(semantic_context_packet)
+    semantic_compiler_packet = turn_compilation_packet["semantic_compiler_packet"]
+    semantic_compiler_packet_hash = sha256_json(semantic_compiler_packet)
+    turn_compilation_packet_hash = sha256_json(turn_compilation_packet)
     coverage_report_hash = sha256_json(coverage_report)
     synthesis_context_packet_hash = sha256_json(synthesis_context_packet)
-    isolated_semantic_extraction_packet_hash = sha256_json(semantic_extraction.isolated_packet)
-    isolated_semantic_extraction_raw_hash = sha256_json(semantic_extraction.isolated_raw_artifact)
-    contextual_semantic_extraction_packet_hash = sha256_json(semantic_extraction.contextual_packet)
-    contextual_semantic_extraction_raw_hash = sha256_json(semantic_extraction.contextual_raw_artifact)
+    isolated_semantic_compiler_packet_hash = sha256_json(semantic_compiler.isolated_packet)
+    isolated_semantic_compiler_raw_hash = sha256_json(semantic_compiler.isolated_raw_artifact)
+    contextual_semantic_compiler_packet_hash = sha256_json(semantic_compiler.contextual_packet)
+    contextual_semantic_compiler_raw_hash = sha256_json(semantic_compiler.contextual_raw_artifact)
     coverage_decision = str(coverage_report.get("decision") or "blocked")
     runtime_outcome = "completed" if coverage_decision == "approved" else "blocked"
     blocking_reasons = list(coverage_report.get("blocking_reasons") or [])
@@ -3338,13 +3346,14 @@ def run_thread_turn(
 
     artifact_paths = _persist_turn_artifacts(
         turn_root=turn_root,
-        semantic_context_packet=semantic_context_packet,
+        semantic_compiler_packet=semantic_compiler_packet,
+        turn_compilation_packet=turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
         synthesis_context_packet=synthesis_context_packet,
         state_delta=state_delta,
-        semantic_extraction=semantic_extraction,
+        semantic_compiler=semantic_compiler,
     )
 
     user_message = {"role": "user", "content": user_input, "turn_id": turn_id, "timestamp": timestamp}
@@ -3368,11 +3377,12 @@ def run_thread_turn(
         "parent_perturbation_hash": parent_perturbation_hash,
         "prior_thread_state_hash": prior_thread_state_hash,
         "user_input_hash": sha256_text(user_input),
-        "isolated_semantic_extraction_packet_hash": isolated_semantic_extraction_packet_hash,
-        "isolated_semantic_extraction_raw_hash": isolated_semantic_extraction_raw_hash,
-        "contextual_semantic_extraction_packet_hash": contextual_semantic_extraction_packet_hash,
-        "contextual_semantic_extraction_raw_hash": contextual_semantic_extraction_raw_hash,
-        "semantic_context_packet_hash": semantic_context_packet_hash,
+        "isolated_semantic_compiler_packet_hash": isolated_semantic_compiler_packet_hash,
+        "isolated_semantic_compiler_raw_hash": isolated_semantic_compiler_raw_hash,
+        "contextual_semantic_compiler_packet_hash": contextual_semantic_compiler_packet_hash,
+        "contextual_semantic_compiler_raw_hash": contextual_semantic_compiler_raw_hash,
+        "semantic_compiler_packet_hash": semantic_compiler_packet_hash,
+        "turn_compilation_packet_hash": turn_compilation_packet_hash,
         "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
         "retrieval_packet_hash": retrieval_packet_hash,
         "coverage_report_hash": coverage_report_hash,
@@ -3404,16 +3414,17 @@ def run_thread_turn(
         conversation_thread_path=paths.conversation_thread_path,
         thread_state_path=paths.thread_state_path,
         thread_ledger_path=paths.thread_ledger_path,
-        semantic_context_packet_path=artifact_paths["semantic_context_packet_path"],
+        semantic_compiler_packet_path=artifact_paths["semantic_compiler_packet_path"],
+        turn_compilation_packet_path=artifact_paths["turn_compilation_packet_path"],
         semantic_traversal_manifest_path=artifact_paths["semantic_traversal_manifest_path"],
         retrieval_packet_path=artifact_paths["retrieval_packet_path"],
         coverage_report_path=artifact_paths["coverage_report_path"],
         synthesis_context_packet_path=artifact_paths["synthesis_context_packet_path"],
         state_delta_path=artifact_paths["state_delta_path"],
-        isolated_semantic_extraction_packet_path=artifact_paths["isolated_semantic_extraction_packet_path"],
-        isolated_semantic_extraction_raw_path=artifact_paths["isolated_semantic_extraction_raw_path"],
-        contextual_semantic_extraction_packet_path=artifact_paths["contextual_semantic_extraction_packet_path"],
-        contextual_semantic_extraction_raw_path=artifact_paths["contextual_semantic_extraction_raw_path"],
+        isolated_semantic_compiler_packet_path=artifact_paths["isolated_semantic_compiler_packet_path"],
+        isolated_semantic_compiler_raw_path=artifact_paths["isolated_semantic_compiler_raw_path"],
+        contextual_semantic_compiler_packet_path=artifact_paths["contextual_semantic_compiler_packet_path"],
+        contextual_semantic_compiler_raw_path=artifact_paths["contextual_semantic_compiler_raw_path"],
         assistant_response=assistant_response,
         llm_metadata=llm_metadata,
         runtime_outcome=runtime_outcome,
@@ -3421,11 +3432,12 @@ def run_thread_turn(
         prior_thread_state=prior_thread_state,
         next_thread_state=next_thread_state,
         ledger_record=ledger_record,
-        semantic_context_packet=semantic_context_packet,
+        semantic_compiler_packet=semantic_compiler_packet,
+        turn_compilation_packet=turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
         synthesis_context_packet=synthesis_context_packet,
-        isolated_semantic_extraction_packet=semantic_extraction.isolated_packet,
-        contextual_semantic_extraction_packet=semantic_extraction.contextual_packet,
+        isolated_semantic_compiler_packet=semantic_compiler.isolated_packet,
+        contextual_semantic_compiler_packet=semantic_compiler.contextual_packet,
     )

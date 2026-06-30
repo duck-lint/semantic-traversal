@@ -72,7 +72,7 @@
         ],
         "output": [
           "semantic_compiler_packet",
-          "semantic_context_packet"
+          "turn_compilation_packet"
         ]
       },
       {
@@ -257,7 +257,7 @@
           "parent_perturbation_hash",
           "prior_thread_state_hash",
           "user_input_hash",
-          "semantic_context_packet_hash",
+          "turn_compilation_packet_hash",
           "semantic_traversal_manifest_hash",
           "retrieval_packet_hash",
           "coverage_report_hash",
@@ -318,8 +318,8 @@
         "description": "Integral runtime operations cannot be replaced by stubs in the normal runtime route.",
         "rules": [
           "Stub or fixture implementations may exist only inside tests or diagnostic probes.",
-          "Fixture-backed semantic extraction cannot count as evidence that semantic_target_resolution works.",
-          "Fixture-backed semantic extraction cannot produce a thesis-valid state_perturbation."
+          "Fixture-backed semantic compiler output cannot count as evidence that semantic_target_resolution works.",
+          "Fixture-backed semantic compiler output cannot produce a thesis-valid state_perturbation."
         ]
       },
       "activation_surfaces_are_internal": {
@@ -579,7 +579,7 @@
           "parent_perturbation_hash",
           "prior_thread_state_hash",
           "user_input_hash",
-          "semantic_context_packet_hash",
+          "turn_compilation_packet_hash",
           "semantic_traversal_manifest_hash",
           "retrieval_packet_hash",
           "coverage_report_hash",
@@ -885,7 +885,7 @@
           "parent_perturbation_hash",
           "prior_thread_state_hash",
           "user_input_hash",
-          "semantic_context_packet_hash",
+          "turn_compilation_packet_hash",
           "semantic_traversal_manifest_hash",
           "retrieval_packet_hash",
           "coverage_report_hash",
@@ -1026,7 +1026,7 @@
         "coverage_audit"
       ]
     },
-    "semantic_context_packet": {
+    "turn_compilation_packet": {
       "description": "Structured turn packet containing raw_user_utterance, semantic_compiler_packet, runtime diagnostics, and compatibility surfaces needed by current activation, traversal, retrieval, coverage, synthesis, state, and ledger operations.",
       "created_by": "semantic_compiler_packet_generation",
       "consumed_by": [
@@ -1259,7 +1259,7 @@
         "llm_model_if_needed"
       ],
       "disallowed_user_controls": [
-        "semantic_extractor_mode",
+        "semantic_compiler_mode",
         "lexical_only_retrieval",
         "disabled_semantic_compiler",
         "stub_semantic_compiler",

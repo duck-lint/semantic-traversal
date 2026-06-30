@@ -26,8 +26,8 @@ from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roo
 from semantic_traversal.cli import build_turn_parser
 from semantic_traversal.llm import StubLLMBackend, resolve_openai_settings
 from semantic_traversal.runtime import (
-    SemanticExtractionArtifacts,
-    _build_semantic_context_packet,
+    SemanticCompilerArtifacts,
+    _build_turn_compilation_packet,
     _build_semantic_compiler_packet,
     _build_contextual_extraction_request,
     _build_retrieval_preparation,
@@ -36,13 +36,13 @@ from semantic_traversal.runtime import (
     _query_vector_candidates,
     run_thread_turn,
 )
-from semantic_traversal.semantic_extraction import (
+from semantic_traversal.semantic_compiler import (
     _build_ollama_prompt,
     _detect_followup_signals,
-    DisabledSemanticExtractorBackend,
-    SemanticExtractionResponse,
-    StubSemanticExtractorBackend,
-    resolve_semantic_extractor_backend,
+    DisabledSemanticCompilerBackend,
+    SemanticCompilerResponse,
+    StubSemanticCompilerBackend,
+    resolve_semantic_compiler_backend,
 )
 from semantic_traversal.storage import read_ledger
 
@@ -190,8 +190,8 @@ def _load_turn_artifact(path: Path) -> dict[str, object]:
 
 def _minimal_retrieval_coverage_inputs(selected_chunk_ids: list[str], retrieved_chunk_ids: list[str]) -> dict[str, Any]:
     return {
-        "semantic_context_packet": {
-            "semantic_extraction": {
+        "turn_compilation_packet": {
+            "semantic_compiler": {
                 "statuses": {
                     "backend_mode": "parsed",
                     "isolated_status": "parsed",
@@ -199,7 +199,7 @@ def _minimal_retrieval_coverage_inputs(selected_chunk_ids: list[str], retrieved_
                 }
             },
             "semantic_contract_validation": {"valid": True, "reasons": []},
-            "semantic_coverage_target": {
+            "semantic_target": {
                 "must_preserve": [],
                 "should_include": [],
                 "avoid_satisfying_with": [],
@@ -244,8 +244,8 @@ def _minimal_compiler_coverage_inputs(
 ) -> dict[str, Any]:
     selected_chunk_ids = [str(chunk["chunk_id"]) for chunk in selected_chunks]
     return {
-        "semantic_context_packet": {
-            "semantic_extraction": {
+        "turn_compilation_packet": {
+            "semantic_compiler": {
                 "statuses": {
                     "backend_mode": "parsed",
                     "isolated_status": "parsed",
@@ -253,7 +253,7 @@ def _minimal_compiler_coverage_inputs(
                 }
             },
             "semantic_contract_validation": {"valid": True, "reasons": []},
-            "semantic_coverage_target": {
+            "semantic_target": {
                 "must_preserve": [str(anchor["label"]) for anchor in required_anchors],
                 "should_include": [],
                 "avoid_satisfying_with": [],
@@ -372,7 +372,7 @@ class _TestEmbeddingBackend:
         )
 
 
-class _ParsedSemanticExtractorBackend:
+class _ParsedSemanticCompilerBackend:
     mode_name = "parsed"
 
     def __init__(
@@ -381,15 +381,15 @@ class _ParsedSemanticExtractorBackend:
         isolated_payload: dict[str, Any] | None = None,
         contextual_payload: dict[str, Any] | None = None,
     ) -> None:
-        self._delegate = StubSemanticExtractorBackend(
+        self._delegate = StubSemanticCompilerBackend(
             isolated_payload=isolated_payload,
             contextual_payload=contextual_payload,
         )
 
-    def _parsed_response(self, response: SemanticExtractionResponse) -> SemanticExtractionResponse:
+    def _parsed_response(self, response: SemanticCompilerResponse) -> SemanticCompilerResponse:
         metadata = dict(response.metadata)
         metadata["backend_mode"] = self.mode_name
-        return SemanticExtractionResponse(
+        return SemanticCompilerResponse(
             parsed_payload=response.parsed_payload,
             raw_response=response.raw_response,
             metadata=metadata,
@@ -397,10 +397,10 @@ class _ParsedSemanticExtractorBackend:
             status="parsed",
         )
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._parsed_response(self._delegate.extract_isolated(packet))
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._parsed_response(self._delegate.extract_contextual(packet))
 
 
@@ -515,7 +515,7 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
                     "nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
                     "edges": [{"source": "term:candy", "target": "term:bed", "kind": "association"}],
                 },
-                "semantic_coverage_target": "candy snack food before bed",
+                "semantic_target": "candy snack food before bed",
                 "activation_hints": ["candy", "snack", "food", "bed"],
                 "limitations": ["model-generated extraction", "additive only", "not authoritative"],
             }
@@ -533,7 +533,7 @@ class _OllamaFixtureHandler(BaseHTTPRequestHandler):
                 "nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms],
                 "edges": [{"source": "term:candy", "target": "term:bed", "kind": "association"}],
             },
-            "semantic_coverage_target": {
+            "semantic_target": {
                 "must_preserve": [referent["resolved_to"] for referent in resolved_referents] or ["candy snack food before bed"],
                 "should_include": ["yesterday", "dream"],
                 "avoid_satisfying_with": [],
@@ -595,6 +595,48 @@ class IngestRuntimeTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls._sentence_transformers_patcher.stop()
+
+    def test_active_source_docs_and_tests_do_not_reintroduce_legacy_authority_names(self) -> None:
+        repo_root = REPO_ROOT
+        scan_roots = [
+            repo_root / "semantic_traversal",
+            repo_root / "tests",
+        ]
+        scan_files = [
+            repo_root / "README.md",
+            repo_root / "semantic_traversal.runtime.yaml",
+            repo_root / "agent_harness" / "project-spec" / "project_spec.json",
+        ]
+        forbidden_patterns = [
+            "semantic_context_packet",
+            "semantic_extraction",
+            "semantic_extractor",
+            "semantic_context_extraction",
+            "semantic_context_benchmark",
+            "semantic_coverage_target",
+            "isolated_semantic_extraction",
+            "contextual_semantic_extraction",
+        ]
+        hits: list[str] = []
+        for root in scan_roots:
+            for path in root.rglob("*"):
+                if path.resolve() == Path(__file__).resolve():
+                    continue
+                if not path.is_file():
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                for pattern in forbidden_patterns:
+                    if pattern in content:
+                        hits.append(f"{path}:{pattern}")
+        for path in scan_files:
+            content = path.read_text(encoding="utf-8")
+            for pattern in forbidden_patterns:
+                if pattern in content:
+                    hits.append(f"{path}:{pattern}")
+        self.assertEqual(hits, [], f"legacy authority names still present: {hits}")
 
     def test_runtime_config_loads_default_and_explicit_paths_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
@@ -735,7 +777,7 @@ class IngestRuntimeTests(unittest.TestCase):
             _write_runtime_config(
                 repo_root,
                 {
-                    "semantic_extraction": {"model": "fixture-semantic"},
+                    "semantic_compiler": {"model": "fixture-semantic"},
                 },
             )
             (repo_root / ".env.local").write_text(
@@ -743,9 +785,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             config = load_runtime_config(repo_root=repo_root)
-            semantic_backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=config)
+            semantic_backend = resolve_semantic_compiler_backend(repo_root=repo_root, config=config)
 
-            self.assertEqual(config.semantic_extraction_provider, "ollama")
+            self.assertEqual(config.semantic_compiler_provider, "ollama")
             self.assertEqual(config.embedding_provider, "sentence_transformers")
             self.assertEqual(config.embedding_model, "sentence-transformers/all-MiniLM-L6-v2")
             self.assertEqual(semantic_backend.mode_name, "ollama")
@@ -899,15 +941,15 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(candidates, [])
             self.assertEqual(status, "no_valid_vectors")
 
-    def test_unsupported_provider_configuration_fails_closed_for_semantic_extraction(self) -> None:
+    def test_unsupported_provider_configuration_fails_closed_for_semantic_compiler(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = Path(repo_dir)
             _write_runtime_config(
                 repo_root,
-                {"semantic_extraction": {"provider": "unsupported", "model": "fixture-semantic"}},
+                {"semantic_compiler": {"provider": "unsupported", "model": "fixture-semantic"}},
             )
             config = load_runtime_config(repo_root=repo_root)
-            backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=config)
+            backend = resolve_semantic_compiler_backend(repo_root=repo_root, config=config)
 
             response = backend.extract_contextual({"raw_user_input": "hello", "instruction": "test"})
             self.assertEqual(response.status, "unavailable")
@@ -929,14 +971,14 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(response.status, "unavailable")
             self.assertIn("unsupported embedding provider", response.metadata.get("reason", ""))
 
-    def test_missing_semantic_extraction_provider_raises_config_error(self) -> None:
+    def test_missing_semantic_compiler_provider_raises_config_error(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = Path(repo_dir)
             raw_config = json.loads(json.dumps(load_runtime_config(repo_root=REPO_ROOT, config_path=str(DEFAULT_CONFIG_SOURCE)).raw))
-            raw_config["semantic_extraction"].pop("provider")
+            raw_config["semantic_compiler"].pop("provider")
             _write_runtime_config_document(repo_root, raw_config)
 
-            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.semantic_extraction\.provider"):
+            with self.assertRaisesRegex(ConfigError, r"Missing required runtime config field: root\.semantic_compiler\.provider"):
                 load_runtime_config(repo_root=repo_root)
 
     def test_missing_embeddings_provider_raises_config_error(self) -> None:
@@ -996,7 +1038,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                semantic_compiler_backend=DisabledSemanticCompilerBackend(),
             )
 
             manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
@@ -1054,7 +1096,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                semantic_compiler_backend=DisabledSemanticCompilerBackend(),
                 config=config,
             )
 
@@ -1194,7 +1236,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 _write_runtime_config(
                     repo_root,
                     {
-                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
+                        "semantic_compiler": {"model": "fixture-semantic", "base_url": base_url},
                     },
                 )
                 (repo_root / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
@@ -1260,7 +1302,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(second_result.updated_chunks, 1)
             self.assertEqual(second_result.deleted_chunks, 0)
 
-    def test_semantic_extraction_preserves_raw_user_input(self) -> None:
+    def test_semantic_compiler_preserves_raw_user_input(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1277,12 +1319,12 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input=user_input,
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
 
-            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
-            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
-            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_compiler_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
+            turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
             synthesis_context_packet = _load_turn_artifact(result.synthesis_context_packet_path)
 
             self.assertEqual(isolated_packet["raw_user_input"], user_input)
@@ -1291,13 +1333,13 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(contextual_packet["raw_user_input"], user_input)
             self.assertEqual(contextual_packet["request_packet"]["raw_user_input"], user_input)
             self.assertEqual(contextual_packet["parsed_payload"]["raw_user_input"], user_input)
-            self.assertEqual(semantic_context_packet["raw_user_input"], user_input)
+            self.assertEqual(turn_compilation_packet["raw_user_input"], user_input)
             self.assertEqual(synthesis_context_packet["raw_user_input"], user_input)
 
     def test_extraction_raw_user_input_mismatch_is_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
-            stub_backend = StubSemanticExtractorBackend(
+            stub_backend = StubSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "WRONG RAW INPUT",
                     "probable_user_intent": "mismatch isolated pass",
@@ -1338,11 +1380,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=stub_backend,
+                semantic_compiler_backend=stub_backend,
             )
 
-            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
-            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_compiler_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
 
             self.assertEqual(isolated_packet["parsed_payload"]["raw_user_input"], "Please retrieve the candy snack food before bed note.")
             self.assertTrue(isolated_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_present"])
@@ -1354,7 +1396,7 @@ class IngestRuntimeTests(unittest.TestCase):
     def test_extraction_missing_raw_user_input_is_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
-            stub_backend = StubSemanticExtractorBackend(
+            stub_backend = StubSemanticCompilerBackend(
                 isolated_payload={
                     "probable_user_intent": "missing raw input isolated pass",
                     "candidate_targets": ["candy"],
@@ -1393,11 +1435,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=stub_backend,
+                semantic_compiler_backend=stub_backend,
             )
 
-            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
-            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_compiler_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
 
             self.assertEqual(isolated_packet["parsed_payload"]["raw_user_input"], "Please retrieve the candy snack food before bed note.")
             self.assertFalse(isolated_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_present"])
@@ -1405,7 +1447,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertFalse(contextual_packet["diagnostics"]["raw_user_input_validation"]["model_supplied_raw_user_input_present"])
             self.assertTrue(contextual_packet["diagnostics"]["raw_user_input_validation"]["raw_user_input_repaired"])
 
-    def test_semantic_extraction_is_additive_not_destructive(self) -> None:
+    def test_semantic_compiler_is_additive_not_destructive(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -1416,7 +1458,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            stub_backend = StubSemanticExtractorBackend(
+            stub_backend = StubSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "",
                     "probable_user_intent": "limited hint isolated pass",
@@ -1461,10 +1503,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=stub_backend,
+                semantic_compiler_backend=stub_backend,
             )
 
-            retrieval_preparation = result.semantic_context_packet["retrieval_preparation"]
+            retrieval_preparation = result.turn_compilation_packet["retrieval_preparation"]
             self.assertIn("candy", retrieval_preparation["extraction_hint_terms"])
             self.assertIn("snack", retrieval_preparation["raw_lexical_terms"])
             self.assertIn("food", retrieval_preparation["raw_lexical_terms"])
@@ -1476,7 +1518,7 @@ class IngestRuntimeTests(unittest.TestCase):
     def test_extraction_hint_harvesting_is_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
-            stub_backend = StubSemanticExtractorBackend(
+            stub_backend = StubSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "",
                     "probable_user_intent": "pruned isolated pass",
@@ -1525,10 +1567,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve targetanchor note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=stub_backend,
+                semantic_compiler_backend=stub_backend,
             )
 
-            retrieval_preparation = result.semantic_context_packet["retrieval_preparation"]
+            retrieval_preparation = result.turn_compilation_packet["retrieval_preparation"]
             extraction_hint_terms = set(retrieval_preparation["extraction_hint_terms"])
             self.assertIn("usefultarget", extraction_hint_terms)
             self.assertIn("usefulrelation", extraction_hint_terms)
@@ -1557,7 +1599,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 _write_runtime_config(
                     repo_root,
                     {
-                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
+                        "semantic_compiler": {"model": "fixture-semantic", "base_url": base_url},
                     },
                 )
                 _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
@@ -1572,16 +1614,16 @@ class IngestRuntimeTests(unittest.TestCase):
                 )
 
             self.assertIn(result.runtime_outcome, {"completed", "blocked"})
-            self.assertIsInstance(result.semantic_context_packet["activation_hints"], dict)
-            self.assertEqual(result.semantic_context_packet["activation_hints"], {})
-            self.assertTrue(result.semantic_context_packet["semantic_contract_validation"]["valid"])
+            self.assertIsInstance(result.turn_compilation_packet["activation_hints"], dict)
+            self.assertEqual(result.turn_compilation_packet["activation_hints"], {})
+            self.assertTrue(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
             self.assertIn(
                 "activation_hints expected dict, got list",
-                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
             self.assertIn(
-                "semantic_coverage_target expected dict, got str",
-                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+                "semantic_target expected dict, got str",
+                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
 
     def test_followup_semantic_target_blocks_when_resolved_referent_is_lost(self) -> None:
@@ -1600,9 +1642,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "contextual_user_intent": "follow-up under-anchored",
@@ -1611,7 +1653,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["feelings", "specific about how it makes me feel"],
                         "should_include": ["specific"],
                         "avoid_satisfying_with": [],
@@ -1635,13 +1677,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
             self.assertTrue(
-                any(anchor["source"] == "prior_thread_state" for anchor in result.semantic_context_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
+                any(anchor["source"] == "prior_thread_state" for anchor in result.turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
             )
 
     def test_contextual_request_includes_deterministic_resolved_referent_candidates(self) -> None:
@@ -1659,7 +1701,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "You have mixed feelings about late candy snacks.",
                 ],
             },
-            isolated_semantic_extraction={},
+            isolated_semantic_compiler={},
         )
 
         self.assertIn("deterministic_followup_detection", request_packet)
@@ -1677,7 +1719,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 "recent_messages": [],
                 "recent_semantic_trajectory": [],
             },
-            isolated_semantic_extraction={},
+            isolated_semantic_compiler={},
         )
 
         self.assertIn("prior_thread_state", request_packet)
@@ -1705,7 +1747,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 ],
                 "latest_assistant_response": "Assistant summary about candy snack food before bed.",
             },
-            isolated_semantic_extraction={},
+            isolated_semantic_compiler={},
         )
 
         self.assertNotIn("prior_thread_state", request_packet)
@@ -1730,7 +1772,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "recent_messages": [],
                     "recent_semantic_trajectory": [],
                 },
-                isolated_semantic_extraction={},
+                isolated_semantic_compiler={},
             )
         )
         self.assertNotIn("Use deterministic_resolved_referent_candidates", prompt)
@@ -1747,7 +1789,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     ],
                     "recent_semantic_trajectory": ["What do I think about candy snack food before bed?"],
                 },
-                isolated_semantic_extraction={},
+                isolated_semantic_compiler={},
             )
         )
         self.assertIn("Use deterministic_resolved_referent_candidates", prompt)
@@ -1798,9 +1840,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "contextual_user_intent": "follow-up anchored",
@@ -1818,7 +1860,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["how candy snack food before bed makes me feel"],
                         "should_include": ["specific"],
                         "avoid_satisfying_with": [],
@@ -1848,15 +1890,15 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
-            self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
-            self.assertEqual(semantic_context_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
-            self.assertFalse(semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
+            turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
+            self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
+            self.assertEqual(turn_compilation_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
+            self.assertFalse(turn_compilation_packet["semantic_target_diagnostics"]["repaired"])
             self.assertNotIn(
-                "semantic_coverage_target must_preserve does not include required resolved referent: candy snack food before bed",
+                "semantic_target must_preserve does not include required resolved referent: candy snack food before bed",
                 result.coverage_report["blocking_reasons"],
             )
 
@@ -1887,9 +1929,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "resolved_referents": [
@@ -1903,7 +1945,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["candy snack food before bed"],
                         "should_include": ["sleep quality"],
                         "avoid_satisfying_with": [],
@@ -1927,10 +1969,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            packet = result.semantic_context_packet
+            packet = result.turn_compilation_packet
             self.assertTrue(packet["semantic_contract_validation"]["valid"])
             self.assertTrue(packet["resolved_referents"][0]["required_for_target"])
             self.assertTrue(packet["resolved_referent_repair_diagnostics"]["repaired"])
@@ -1956,9 +1998,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "resolved_referents": [
@@ -1972,7 +2014,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["candy snack food before bed"],
                         "should_include": [],
                         "avoid_satisfying_with": [],
@@ -1996,13 +2038,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
             self.assertIn(
                 "resolved_referents[0] missing required_for_target",
-                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
 
     def test_non_referential_resolved_referent_missing_required_for_target_is_not_repaired(self) -> None:
@@ -2016,7 +2058,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "Please retrieve the fixture note.",
                     "resolved_referents": [
@@ -2030,7 +2072,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:fixture", "label": "fixture", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["fixture note"],
                         "should_include": [],
                         "avoid_satisfying_with": [],
@@ -2053,13 +2095,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the fixture note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
             self.assertIn(
                 "resolved_referents[0] missing required_for_target",
-                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
 
     def test_followup_referent_with_existing_required_for_target_true_needs_no_repair(self) -> None:
@@ -2074,9 +2116,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "resolved_referents": [
@@ -2091,7 +2133,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["candy snack food before bed"],
                         "should_include": [],
                         "avoid_satisfying_with": [],
@@ -2115,11 +2157,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
-            self.assertTrue(result.semantic_context_packet["resolved_referents"][0]["required_for_target"])
+            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertTrue(result.turn_compilation_packet["resolved_referents"][0]["required_for_target"])
 
     def test_followup_referent_with_explicit_false_is_not_flipped_to_true(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2133,9 +2175,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "resolved_referents": [
@@ -2150,7 +2192,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["candy snack food before bed"],
                         "should_include": [],
                         "avoid_satisfying_with": [],
@@ -2174,15 +2216,15 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertFalse(result.semantic_context_packet["resolved_referent_repair_diagnostics"]["repaired"])
+            self.assertFalse(result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["repaired"])
             self.assertIn(
                 "explicit model required_for_target=false contradicts deterministic required target",
-                result.semantic_context_packet["resolved_referent_repair_diagnostics"]["reason"],
+                result.turn_compilation_packet["resolved_referent_repair_diagnostics"]["reason"],
             )
-            self.assertFalse(result.semantic_context_packet["resolved_referents"][0]["required_for_target"])
+            self.assertFalse(result.turn_compilation_packet["resolved_referents"][0]["required_for_target"])
 
     def test_non_referential_generic_semantic_target_is_repaired_with_concrete_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2207,7 +2249,7 @@ class IngestRuntimeTests(unittest.TestCase):
             _write_synthetic_corpus_journal_note(repo_root)
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "What do I think about candy snack food before bed?",
                     "probable_user_intent": "first-turn generic shell target",
@@ -2226,7 +2268,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:opinion", "label": "opinion", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["opinion about", "consumption timing"],
                         "should_include": ["thoughts", "candy snack food", "bedtime"],
                         "avoid_satisfying_with": [],
@@ -2249,19 +2291,19 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
-            diagnostics = semantic_context_packet["semantic_coverage_target_diagnostics"]
-            self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
+            turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
+            diagnostics = turn_compilation_packet["semantic_target_diagnostics"]
+            self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
             self.assertTrue(diagnostics["repaired"])
             self.assertEqual(diagnostics["repair_type"], "added_concrete_anchor_to_must_preserve")
             self.assertIn("opinion about", diagnostics["original_must_preserve"])
             self.assertIn("consumption timing", diagnostics["original_must_preserve"])
             self.assertIn(
                 diagnostics["added_must_preserve"][0],
-                semantic_context_packet["semantic_coverage_target"]["must_preserve"],
+                turn_compilation_packet["semantic_target"]["must_preserve"],
             )
             self.assertIn(diagnostics["added_must_preserve"][0], ["candy snack food before bed", "candy snack food"])
             coverage = result.coverage_report["semantic_target_coverage"]
@@ -2287,7 +2329,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "What is the relationship between?",
                     "probable_user_intent": "generic-only target",
@@ -2306,7 +2348,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:relation", "label": "relationship", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["relationship between", "effect of"],
                         "should_include": [],
                         "avoid_satisfying_with": [],
@@ -2329,16 +2371,16 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What is the relationship between?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
             self.assertIn(
-                "semantic_coverage_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available",
-                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+                "semantic_target must_preserve lacks concrete coverage anchor and no concrete anchor candidates were available",
+                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
             )
-            self.assertFalse(result.semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
+            self.assertFalse(result.turn_compilation_packet["semantic_target_diagnostics"]["repaired"])
 
     def test_already_good_non_referential_semantic_target_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2351,7 +2393,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "What do I think about candy snack food before bed?",
                     "probable_user_intent": "already good target",
@@ -2370,7 +2412,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:candy", "label": "candy", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["candy snack food before bed"],
                         "should_include": ["thoughts"],
                         "avoid_satisfying_with": [],
@@ -2393,13 +2435,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            diagnostics = result.semantic_context_packet["semantic_coverage_target_diagnostics"]
+            diagnostics = result.turn_compilation_packet["semantic_target_diagnostics"]
             self.assertFalse(diagnostics["repaired"])
             self.assertEqual(
-                result.semantic_context_packet["semantic_coverage_target"]["must_preserve"],
+                result.turn_compilation_packet["semantic_target"]["must_preserve"],
                 ["candy snack food before bed"],
             )
 
@@ -2428,7 +2470,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 isolated_payload={
                     "raw_user_input": "What do I think about Schopenhauer's parallel postulate argument?",
                     "probable_user_intent": "philosophy topic",
@@ -2447,7 +2489,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:thoughts", "label": "thoughts", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["thoughts about"],
                         "should_include": ["Schopenhauer's parallel postulate argument"],
                         "avoid_satisfying_with": [],
@@ -2470,14 +2512,14 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about Schopenhauer's parallel postulate argument?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             self.assertIn(
                 "Schopenhauer's parallel postulate argument",
-                result.semantic_context_packet["semantic_coverage_target"]["must_preserve"],
+                result.turn_compilation_packet["semantic_target"]["must_preserve"],
             )
-            self.assertTrue(result.semantic_context_packet["semantic_coverage_target_diagnostics"]["repaired"])
+            self.assertTrue(result.turn_compilation_packet["semantic_target_diagnostics"]["repaired"])
 
     def test_semantic_compiler_packet_drives_first_turn_runtime_with_provenance_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2509,7 +2551,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
             )
 
-            compiler_packet = result.semantic_context_packet["semantic_compiler_packet"]
+            compiler_packet = result.turn_compilation_packet["semantic_compiler_packet"]
             self.assertEqual(compiler_packet["raw_user_input"], "What do I think about candy snack food before bed?")
             self.assertTrue(compiler_packet["semantic_target"]["required_anchors"])
             self.assertEqual(result.coverage_report["semantic_target_coverage"]["coverage_mode"], "provenance_alignment")
@@ -2549,9 +2591,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "resolved_referents": [
@@ -2565,7 +2607,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "emotionally charged", "kind": "effect"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["emotionally charged"],
                         "should_include": ["sleep quality"],
                         "avoid_satisfying_with": [],
@@ -2589,10 +2631,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            compiler_packet = result.semantic_context_packet["semantic_compiler_packet"]
+            compiler_packet = result.turn_compilation_packet["semantic_compiler_packet"]
             self.assertEqual(compiler_packet["semantic_target"]["question_type"], "referential_followup")
             self.assertTrue(any(anchor["source"] == "prior_thread_state" for anchor in compiler_packet["semantic_target"]["required_anchors"]))
             self.assertEqual(result.coverage_report["decision"], "approved")
@@ -2610,7 +2652,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
             second_turn = run_thread_turn(
                 repo_root=repo_root,
@@ -2618,9 +2660,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "what makes me feel emotionally charged like the resulting sleep quality or the food?",
                     "resolved_referents": [],
@@ -2637,7 +2679,7 @@ class IngestRuntimeTests(unittest.TestCase):
                             {"source": "sleep_quality", "target": "emotionally_charged", "kind": "related_to"},
                         ],
                     },
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["emotionally charged", "sleep quality", "food"],
                         "should_include": ["causes", "related to"],
                         "avoid_satisfying_with": [],
@@ -2661,11 +2703,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="what makes me feel emotionally charged like the resulting sleep quality or the food?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=second_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            compiler_packet = result.semantic_context_packet["semantic_compiler_packet"]
-            self.assertEqual(result.semantic_context_packet["referential_followup_detection"]["requires_referent_resolution"], False)
+            compiler_packet = result.turn_compilation_packet["semantic_compiler_packet"]
+            self.assertEqual(result.turn_compilation_packet["referential_followup_detection"]["requires_referent_resolution"], False)
             self.assertEqual(compiler_packet["semantic_target"]["question_type"], "causal_disambiguation")
             entity_labels = [entity["label"] for entity in compiler_packet["semantic_target"]["entities"]]
             self.assertIn("emotionally charged", entity_labels)
@@ -2685,7 +2727,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about Schopenhauer's parallel postulate argument?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=_ParsedSemanticExtractorBackend(
+                semantic_compiler_backend=_ParsedSemanticCompilerBackend(
                     isolated_payload={
                         "raw_user_input": "What do I think about Schopenhauer's parallel postulate argument?",
                         "probable_user_intent": "philosophy topic",
@@ -2704,7 +2746,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "perturbation_nodes": [{"id": "node:thoughts", "label": "thoughts", "kind": "topic"}],
                         "contextual_salt_nodes": [],
                         "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                        "semantic_coverage_target": {
+                        "semantic_target": {
                             "must_preserve": ["thoughts about"],
                             "should_include": ["Schopenhauer's parallel postulate argument"],
                             "avoid_satisfying_with": [],
@@ -2725,8 +2767,8 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             self.assertIn("semantic_compiler_packet", result.synthesis_context_packet)
-            self.assertIn("legacy_semantic_extraction_diagnostics", result.synthesis_context_packet)
-            self.assertIn("semantic_compiler_packet", result.synthesis_context_packet["semantic_context_packet"])
+            self.assertIn("legacy_semantic_compiler_diagnostics", result.synthesis_context_packet)
+            self.assertIn("semantic_compiler_packet", result.synthesis_context_packet["turn_compilation_packet"])
             self.assertTrue(
                 any(
                     "Do not invent retrieval results" in requirement
@@ -2734,7 +2776,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                result.synthesis_context_packet["semantic_context_packet"]["semantic_compiler_packet"]["semantic_target"]["entities"][0]["label"],
+                result.synthesis_context_packet["turn_compilation_packet"]["semantic_compiler_packet"]["semantic_target"]["entities"][0]["label"],
                 "Schopenhauer's parallel postulate argument",
             )
 
@@ -2745,7 +2787,7 @@ class IngestRuntimeTests(unittest.TestCase):
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "Please retrieve the fixture note.",
                     "contextual_user_intent": "malformed referents",
@@ -2755,7 +2797,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["feelings"],
                         "should_include": ["specific"],
                         "avoid_satisfying_with": [],
@@ -2784,10 +2826,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the fixture note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertIn("resolved_referents expected list, got str", result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"])
+            self.assertIn("resolved_referents expected list, got str", result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"])
 
     def test_malformed_resolved_referent_item_fields_block_closed_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
@@ -2801,9 +2843,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "contextual_user_intent": "malformed referent item fields",
@@ -2821,7 +2863,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["feelings"],
                         "should_include": ["specific"],
                         "avoid_satisfying_with": [],
@@ -2851,10 +2893,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            reasons = result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"]
+            reasons = result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"]
             self.assertIn("resolved_referents[0].surface_form expected str, got int", reasons)
             self.assertIn("resolved_referents[0].resolved_to expected str, got list", reasons)
             self.assertIn("resolved_referents[0].source expected str, got dict", reasons)
@@ -2868,7 +2910,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 _write_runtime_config(
                     repo_root,
                     {
-                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
+                        "semantic_compiler": {"model": "fixture-semantic", "base_url": base_url},
                     },
                 )
                 (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2889,11 +2931,11 @@ class IngestRuntimeTests(unittest.TestCase):
                     thread_id=first_turn.thread_id,
                 )
 
-            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
-            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
-            self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
-            self.assertTrue(semantic_context_packet["resolved_referents"])
-            self.assertEqual(semantic_context_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
+            turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
+            self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
+            self.assertTrue(turn_compilation_packet["resolved_referents"])
+            self.assertEqual(turn_compilation_packet["resolved_referents"][0]["resolved_to"], "candy snack food before bed")
             self.assertIsNotNone(_OllamaFixtureHandler.last_generate_payload)
             self.assertNotIn("format", _OllamaFixtureHandler.last_generate_payload)
             self.assertEqual(
@@ -2927,9 +2969,9 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="What do I think about candy snack food before bed?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
                     "contextual_user_intent": "generic feelings only",
@@ -2938,7 +2980,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_nodes": [{"id": "node:feel", "label": "feel", "kind": "lexical_term"}],
                     "contextual_salt_nodes": [],
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["feelings"],
                         "should_include": ["specific"],
                         "avoid_satisfying_with": ["feelings", "felt", "anxiety", "urgency", "context", "influence"],
@@ -2977,7 +3019,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="I wonder if there's anything specific about how it makes me feel?",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             self.assertEqual(result.runtime_outcome, "blocked")
@@ -2987,7 +3029,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 result.coverage_report["blocking_reasons"],
             )
 
-    def test_stub_semantic_extractor_artifacts_are_persisted_and_hashed(self) -> None:
+    def test_stub_semantic_compiler_artifacts_are_persisted_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -2999,26 +3041,29 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
 
             ledger = read_ledger(result.thread_ledger_path)
-            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
-            isolated_raw = _load_turn_artifact(result.isolated_semantic_extraction_raw_path)
-            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
-            contextual_raw = _load_turn_artifact(result.contextual_semantic_extraction_raw_path)
+            semantic_compiler_packet = _load_turn_artifact(result.semantic_compiler_packet_path)
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_compiler_packet_path)
+            isolated_raw = _load_turn_artifact(result.isolated_semantic_compiler_raw_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
+            contextual_raw = _load_turn_artifact(result.contextual_semantic_compiler_raw_path)
 
-            self.assertTrue(result.isolated_semantic_extraction_packet_path.exists())
-            self.assertTrue(result.isolated_semantic_extraction_raw_path.exists())
-            self.assertTrue(result.contextual_semantic_extraction_packet_path.exists())
-            self.assertTrue(result.contextual_semantic_extraction_raw_path.exists())
+            self.assertTrue(result.semantic_compiler_packet_path.exists())
+            self.assertTrue(result.isolated_semantic_compiler_packet_path.exists())
+            self.assertTrue(result.isolated_semantic_compiler_raw_path.exists())
+            self.assertTrue(result.contextual_semantic_compiler_packet_path.exists())
+            self.assertTrue(result.contextual_semantic_compiler_raw_path.exists())
             self.assertEqual(result.runtime_outcome, "blocked")
-            self.assertEqual(ledger[-1]["isolated_semantic_extraction_packet_hash"], sha256_json(isolated_packet))
-            self.assertEqual(ledger[-1]["isolated_semantic_extraction_raw_hash"], sha256_json(isolated_raw))
-            self.assertEqual(ledger[-1]["contextual_semantic_extraction_packet_hash"], sha256_json(contextual_packet))
-            self.assertEqual(ledger[-1]["contextual_semantic_extraction_raw_hash"], sha256_json(contextual_raw))
+            self.assertEqual(ledger[-1]["semantic_compiler_packet_hash"], sha256_json(semantic_compiler_packet))
+            self.assertEqual(ledger[-1]["isolated_semantic_compiler_packet_hash"], sha256_json(isolated_packet))
+            self.assertEqual(ledger[-1]["isolated_semantic_compiler_raw_hash"], sha256_json(isolated_raw))
+            self.assertEqual(ledger[-1]["contextual_semantic_compiler_packet_hash"], sha256_json(contextual_packet))
+            self.assertEqual(ledger[-1]["contextual_semantic_compiler_raw_hash"], sha256_json(contextual_raw))
 
-    def test_disabled_semantic_extraction_blocks_runtime(self) -> None:
+    def test_disabled_semantic_compiler_blocks_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -3030,11 +3075,11 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                semantic_compiler_backend=DisabledSemanticCompilerBackend(),
             )
 
-            isolated_packet = _load_turn_artifact(result.isolated_semantic_extraction_packet_path)
-            contextual_packet = _load_turn_artifact(result.contextual_semantic_extraction_packet_path)
+            isolated_packet = _load_turn_artifact(result.isolated_semantic_compiler_packet_path)
+            contextual_packet = _load_turn_artifact(result.contextual_semantic_compiler_packet_path)
             self.assertEqual(isolated_packet["status"], "disabled")
             self.assertEqual(contextual_packet["status"], "disabled")
             self.assertEqual(result.runtime_outcome, "blocked")
@@ -3053,7 +3098,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="First turn to seed thread state.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
             second_turn = run_thread_turn(
                 repo_root=repo_root,
@@ -3061,10 +3106,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 user_input="Second turn should receive prior thread state.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
                 thread_id=first_turn.thread_id,
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
 
-            contextual_packet = _load_turn_artifact(second_turn.contextual_semantic_extraction_packet_path)
+            contextual_packet = _load_turn_artifact(second_turn.contextual_semantic_compiler_packet_path)
             request_packet = contextual_packet["request_packet"]
             self.assertIn("prior_thread_state", request_packet)
             self.assertNotIn("extractor_thread_context", request_packet)
@@ -3073,7 +3118,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(prior_thread_state["latest_turn_id"], 1)
             self.assertEqual(prior_thread_state["latest_user_input"], "First turn to seed thread state.")
 
-    def test_stub_semantic_extraction_blocks_normal_runtime(self) -> None:
+    def test_stub_semantic_compiler_blocks_normal_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -3085,15 +3130,15 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
 
-            self.assertEqual(result.isolated_semantic_extraction_packet["status"], "stub")
-            self.assertEqual(result.contextual_semantic_extraction_packet["status"], "stub")
+            self.assertEqual(result.isolated_semantic_compiler_packet["status"], "stub")
+            self.assertEqual(result.contextual_semantic_compiler_packet["status"], "stub")
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
-            self.assertTrue(result.isolated_semantic_extraction_packet_path.exists())
-            self.assertTrue(result.contextual_semantic_extraction_packet_path.exists())
+            self.assertTrue(result.isolated_semantic_compiler_packet_path.exists())
+            self.assertTrue(result.contextual_semantic_compiler_packet_path.exists())
             self.assertTrue(result.synthesis_context_packet_path.exists())
             self.assertEqual(result.coverage_report["decision"], "blocked")
             self.assertIsNone(result.synthesis_context_packet["approved_retrieval_packet"])
@@ -3115,7 +3160,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
             )
 
-            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
             semantic_traversal_manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
             retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
             coverage_report = _load_turn_artifact(result.coverage_report_path)
@@ -3134,12 +3179,12 @@ class IngestRuntimeTests(unittest.TestCase):
                 self.assertIsNone(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
             self.assertEqual(
-                synthesis_context_packet["semantic_context_packet"]["retrieval_preparation"]["raw_lexical_terms"],
-                semantic_context_packet["retrieval_preparation"]["raw_lexical_terms"],
+                synthesis_context_packet["turn_compilation_packet"]["retrieval_preparation"]["raw_lexical_terms"],
+                turn_compilation_packet["retrieval_preparation"]["raw_lexical_terms"],
             )
             self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
             self.assertIn("matched_chunks", coverage_report["limits"]["diagnostic_retrieval_observation"])
-            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
+            self.assertEqual(ledger[-1]["turn_compilation_packet_hash"], sha256_json(turn_compilation_packet))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
             self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
@@ -3171,7 +3216,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(retrieval_packet["selected_chunks"], [])
             self.assertEqual(retrieval_packet["retrieval_observation"], "index_missing")
             self.assertEqual(result.semantic_traversal_manifest["selection_reasons"], ["ingestion SQLite database not found"])
-            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
+            self.assertEqual(ledger[-1]["turn_compilation_packet_hash"], sha256_json(_load_turn_artifact(result.turn_compilation_packet_path)))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
             self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
@@ -3200,7 +3245,7 @@ class IngestRuntimeTests(unittest.TestCase):
             self.assertEqual(retrieval_packet["retrieval_observation"], "matched_chunks")
             self.assertTrue(retrieval_packet["selected_chunks"])
             self.assertTrue(semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
-            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(_load_turn_artifact(result.semantic_context_packet_path)))
+            self.assertEqual(ledger[-1]["turn_compilation_packet_hash"], sha256_json(_load_turn_artifact(result.turn_compilation_packet_path)))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(_load_turn_artifact(result.semantic_traversal_manifest_path)))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
             self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
@@ -3217,23 +3262,23 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="   and the or   ",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                semantic_compiler_backend=DisabledSemanticCompilerBackend(),
             )
 
-            semantic_context_packet = _load_turn_artifact(result.semantic_context_packet_path)
+            turn_compilation_packet = _load_turn_artifact(result.turn_compilation_packet_path)
             semantic_traversal_manifest = _load_turn_artifact(result.semantic_traversal_manifest_path)
             retrieval_packet = _load_turn_artifact(result.retrieval_packet_path)
             coverage_report = _load_turn_artifact(result.coverage_report_path)
             ledger = read_ledger(result.thread_ledger_path)
 
-            self.assertEqual(result.semantic_context_packet["extracted_lexical_query_terms"], [])
-            self.assertEqual(semantic_context_packet["extracted_lexical_query_terms"], [])
+            self.assertEqual(result.turn_compilation_packet["extracted_lexical_query_terms"], [])
+            self.assertEqual(turn_compilation_packet["extracted_lexical_query_terms"], [])
             self.assertFalse(semantic_traversal_manifest["query_terms_available"])
             self.assertEqual(retrieval_packet["retrieval_observation"], "matched_chunks")
             self.assertTrue(retrieval_packet["selected_chunks"])
             self.assertTrue(semantic_traversal_manifest["surface_contributions"]["vector_index_surface"])
             self.assertEqual(coverage_report["decision"], "blocked")
-            self.assertEqual(ledger[-1]["semantic_context_packet_hash"], sha256_json(semantic_context_packet))
+            self.assertEqual(ledger[-1]["turn_compilation_packet_hash"], sha256_json(turn_compilation_packet))
             self.assertEqual(ledger[-1]["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
             self.assertEqual(ledger[-1]["retrieval_packet_hash"], sha256_json(retrieval_packet))
             self.assertEqual(ledger[-1]["coverage_report_hash"], sha256_json(coverage_report))
@@ -3273,7 +3318,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 _write_runtime_config(
                     repo_root,
                     {
-                        "semantic_extraction": {"model": "fixture-semantic", "base_url": base_url},
+                        "semantic_compiler": {"model": "fixture-semantic", "base_url": base_url},
                         "coverage": {
                             "graph_expansion_hop_limit": 2,
                             "require_surface_contributions": {
@@ -3365,7 +3410,7 @@ class IngestRuntimeTests(unittest.TestCase):
             _copy_note(FIXTURE_NOTE, repo_root / "tests" / "fixtures", "JOURNAL/2025-09/01_Monday.md")
             run_ingest(repo_root=repo_root, data_root=Path(data_dir), source_roots=build_default_source_roots(repo_root))
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "Please retrieve the candy snack food before bed note and check the unseen phrase.",
                     "contextual_user_intent": "coverage miss",
@@ -3376,7 +3421,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
                     "candidate_targets": ["candy", "unseen"],
                     "candidate_relations": [],
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["unseen phrase alpha"],
                         "should_include": ["midnight orchard"],
                         "avoid_satisfying_with": [],
@@ -3399,7 +3444,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note and check the unseen phrase.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             coverage_report = _load_turn_artifact(result.coverage_report_path)
@@ -3437,7 +3482,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "Please retrieve the candy snack food before bed note and dream recall.",
                     "contextual_user_intent": "avoid coverage",
@@ -3448,7 +3493,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
                     "candidate_targets": ["candy", "dream"],
                     "candidate_relations": [],
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["candy snack food before bed"],
                         "should_include": [],
                         "avoid_satisfying_with": ["dream recall"],
@@ -3471,7 +3516,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note and dream recall.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             coverage_report = _load_turn_artifact(result.coverage_report_path)
@@ -3507,7 +3552,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "Please retrieve the fixture corpus beta note.",
                     "contextual_user_intent": "metadata evidence",
@@ -3518,7 +3563,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
                     "candidate_targets": ["fixture", "beta"],
                     "candidate_relations": [],
-                    "semantic_coverage_target": {
+                    "semantic_target": {
                         "must_preserve": ["Fixture Corpus Beta"],
                         "should_include": ["midnight orchard"],
                         "avoid_satisfying_with": [],
@@ -3541,7 +3586,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the fixture corpus beta note.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
             coverage_target = result.coverage_report["semantic_target_coverage"]
@@ -3554,8 +3599,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_target_coverage_returns_false_for_empty_retrieval(self) -> None:
         report = _evaluate_semantic_target_coverage(
-            semantic_context_packet={
-                "semantic_coverage_target": {
+            turn_compilation_packet={
+                "semantic_target": {
                     "must_preserve": ["candy snack food before bed"],
                     "should_include": ["dream"],
                     "avoid_satisfying_with": ["avoid this"],
@@ -3572,7 +3617,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_target_coverage_accepts_required_resolved_referent_as_discourse_anchor_evidence(self) -> None:
         report = _evaluate_semantic_target_coverage(
-            semantic_context_packet={
+            turn_compilation_packet={
                 "resolved_referents": [
                     {
                         "surface_form": "it",
@@ -3592,7 +3637,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "disagreements": [],
                     "requires_referent_resolution": True,
                 },
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "must_preserve": ["candy snack food before bed"],
                     "should_include": ["sleep quality"],
                     "avoid_satisfying_with": [],
@@ -3628,7 +3673,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_target_coverage_does_not_auto_cover_resolved_referent_anchor_when_diagnostics_disagree(self) -> None:
         report = _evaluate_semantic_target_coverage(
-            semantic_context_packet={
+            turn_compilation_packet={
                 "resolved_referents": [
                     {
                         "surface_form": "it",
@@ -3646,7 +3691,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     ],
                     "requires_referent_resolution": True,
                 },
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "must_preserve": ["candy snack food before bed"],
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3663,7 +3708,7 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_target_coverage_non_referent_must_preserve_still_requires_retrieved_evidence(self) -> None:
         report = _evaluate_semantic_target_coverage(
-            semantic_context_packet={
+            turn_compilation_packet={
                 "resolved_referents": [
                     {
                         "surface_form": "it",
@@ -3679,7 +3724,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "disagreements": [],
                     "requires_referent_resolution": True,
                 },
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "must_preserve": ["sleep quality"],
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3696,8 +3741,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_target_coverage_does_not_count_runtime_annotations_as_evidence(self) -> None:
         report = _evaluate_semantic_target_coverage(
-            semantic_context_packet={
-                "semantic_coverage_target": {
+            turn_compilation_packet={
+                "semantic_target": {
                     "must_preserve": ["unseen phrase alpha"],
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3730,8 +3775,8 @@ class IngestRuntimeTests(unittest.TestCase):
 
     def test_semantic_target_coverage_does_not_count_query_text_as_evidence(self) -> None:
         report = _evaluate_semantic_target_coverage(
-            semantic_context_packet={
-                "semantic_coverage_target": {
+            turn_compilation_packet={
+                "semantic_target": {
                     "must_preserve": ["query text only target"],
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3761,7 +3806,7 @@ class IngestRuntimeTests(unittest.TestCase):
     def test_semantic_target_coverage_rejects_invalid_target_shape(self) -> None:
         invalid_targets = [
             {
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "should_include": [],
                     "avoid_satisfying_with": [],
                     "query_text": "alpha",
@@ -3769,7 +3814,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             {
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "must_preserve": "alpha",
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3778,7 +3823,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             {
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "must_preserve": [],
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3787,7 +3832,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             {
-                "semantic_coverage_target": {
+                "semantic_target": {
                     "must_preserve": [],
                     "should_include": [],
                     "avoid_satisfying_with": [],
@@ -3796,10 +3841,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
         ]
-        for semantic_context_packet in invalid_targets:
-            with self.subTest(semantic_context_packet=semantic_context_packet):
+        for turn_compilation_packet in invalid_targets:
+            with self.subTest(turn_compilation_packet=turn_compilation_packet):
                 report = _evaluate_semantic_target_coverage(
-                    semantic_context_packet=semantic_context_packet,
+                    turn_compilation_packet=turn_compilation_packet,
                     semantic_traversal_manifest={},
                     retrieval_packet={"selected_chunks": []},
                 )
@@ -3973,7 +4018,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         }
                     },
                     contextual_packet={"parsed_payload": {}},
-                    semantic_coverage_target={
+                    semantic_target={
                         "must_preserve": ["poor sleep", "the thing I ate"],
                         "should_include": [],
                         "avoid_satisfying_with": [],
@@ -4016,7 +4061,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             contextual_packet={"parsed_payload": {"candidate_targets": ["food", "emotionally charged"]}},
-            semantic_coverage_target={
+            semantic_target={
                 "must_preserve": ["emotionally charged", "food"],
                 "should_include": ["causes"],
                 "avoid_satisfying_with": [],
@@ -4071,7 +4116,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             contextual_packet={"parsed_payload": {}},
-            semantic_coverage_target={
+            semantic_target={
                 "must_preserve": ["emotionally charged", "food"],
                 "should_include": [],
                 "avoid_satisfying_with": [],
@@ -4117,7 +4162,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             contextual_packet={"parsed_payload": {}},
-            semantic_coverage_target={
+            semantic_target={
                 "must_preserve": ["emotionally charged", "food"],
                 "should_include": [],
                 "avoid_satisfying_with": [],
@@ -4155,7 +4200,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             },
             contextual_packet={"parsed_payload": {}},
-            semantic_coverage_target={
+            semantic_target={
                 "must_preserve": ["candy snack food before bed"],
                 "should_include": [],
                 "avoid_satisfying_with": [],
@@ -4170,12 +4215,12 @@ class IngestRuntimeTests(unittest.TestCase):
         self.assertEqual(relation["endpoint_normalization"], "normalized")
 
     def test_semantic_contract_validation_is_compiler_primary_when_legacy_target_is_malformed(self) -> None:
-        semantic_context_packet = _build_semantic_context_packet(
+        turn_compilation_packet = _build_turn_compilation_packet(
             thread_document={"thread_id": "thread-test"},
             prior_thread_state={},
             user_input="Please retrieve the bedtime candy topic.",
             turn_id=1,
-            semantic_extraction=SemanticExtractionArtifacts(
+            semantic_compiler=SemanticCompilerArtifacts(
                 isolated_packet={
                     "backend_mode": "parsed",
                     "status": "parsed",
@@ -4196,7 +4241,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "perturbation_nodes": [{"id": "topic", "label": "bedtime candy topic", "kind": "topic"}],
                         "contextual_salt_nodes": [],
                         "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                        "semantic_coverage_target": "bad legacy target",
+                        "semantic_target": "bad legacy target",
                         "activation_hints": {"entity_hints": ["bedtime candy topic"]},
                         "limitations": ["model-generated extraction"],
                     },
@@ -4205,19 +4250,19 @@ class IngestRuntimeTests(unittest.TestCase):
             ),
         )
 
-        self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
-        self.assertTrue(semantic_context_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
+        self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
+        self.assertTrue(turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["required_anchors"])
         self.assertFalse(
-            semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["valid"]
+            turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["valid"]
         )
         self.assertIn(
-            "semantic_coverage_target expected dict, got str",
+            "semantic_target expected dict, got str",
             " ".join(
-                semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"]
+                turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"]
             ),
         )
 
-    def test_runtime_does_not_block_only_for_legacy_semantic_coverage_target_shape_when_compiler_valid(self) -> None:
+    def test_runtime_does_not_block_only_for_legacy_semantic_target_shape_when_compiler_valid(self) -> None:
         inputs = _minimal_compiler_coverage_inputs(
             required_anchor_policy="touch_all",
             required_anchors=[
@@ -4235,7 +4280,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             ],
         )
-        inputs["semantic_context_packet"]["semantic_coverage_target"] = {
+        inputs["turn_compilation_packet"]["semantic_target"] = {
             "must_preserve": ["alpha anchor"],
             "should_include": [],
             "avoid_satisfying_with": [],
@@ -4264,14 +4309,14 @@ class IngestRuntimeTests(unittest.TestCase):
                 }
             ],
         )
-        inputs["semantic_context_packet"]["referential_followup_detection"] = {
+        inputs["turn_compilation_packet"]["referential_followup_detection"] = {
             "is_referential_followup": True,
             "requires_referent_resolution": True,
             "signals": ["model followup"],
             "surface_forms": ["it"],
         }
-        inputs["semantic_context_packet"]["semantic_compiler_packet"]["semantic_target"]["question_type"] = "causal_disambiguation"
-        inputs["semantic_context_packet"]["resolved_referents"] = [
+        inputs["turn_compilation_packet"]["semantic_compiler_packet"]["semantic_target"]["question_type"] = "causal_disambiguation"
+        inputs["turn_compilation_packet"]["resolved_referents"] = [
             {"surface_form": "it", "resolved_to": "sleep", "source": "model", "confidence": "high"}
         ]
         report = _evaluate_retrieval_coverage(**inputs)
@@ -4282,7 +4327,7 @@ class IngestRuntimeTests(unittest.TestCase):
         )
 
     def test_missing_required_for_target_is_legacy_diagnostic_when_compiler_target_is_valid(self) -> None:
-        semantic_context_packet = _build_semantic_context_packet(
+        turn_compilation_packet = _build_turn_compilation_packet(
             thread_document={"thread_id": "thread-test"},
             prior_thread_state={
                 "latest_turn_id": 2,
@@ -4290,7 +4335,7 @@ class IngestRuntimeTests(unittest.TestCase):
             },
             user_input="Is my low mood coming from poor sleep or from the thing I ate?",
             turn_id=3,
-            semantic_extraction=SemanticExtractionArtifacts(
+            semantic_compiler=SemanticCompilerArtifacts(
                 isolated_packet={
                     "backend_mode": "parsed",
                     "status": "parsed",
@@ -4324,7 +4369,7 @@ class IngestRuntimeTests(unittest.TestCase):
                         "perturbation_nodes": [],
                         "contextual_salt_nodes": [],
                         "perturbation_semantic_graph": {"nodes": [], "edges": []},
-                        "semantic_coverage_target": {
+                        "semantic_target": {
                             "must_preserve": ["poor sleep", "the thing I ate"],
                             "should_include": [],
                             "avoid_satisfying_with": [],
@@ -4339,14 +4384,14 @@ class IngestRuntimeTests(unittest.TestCase):
             ),
         )
 
-        self.assertTrue(semantic_context_packet["semantic_contract_validation"]["valid"])
+        self.assertTrue(turn_compilation_packet["semantic_contract_validation"]["valid"])
         self.assertEqual(
-            semantic_context_packet["semantic_compiler_packet"]["semantic_target"]["question_type"],
+            turn_compilation_packet["semantic_compiler_packet"]["semantic_target"]["question_type"],
             "causal_disambiguation",
         )
         self.assertIn(
             "resolved_referents[0] missing required_for_target",
-            semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["reasons"],
+            turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["reasons"],
         )
 
     def test_retrieval_preparation_prioritizes_compiler_plan_terms(self) -> None:
@@ -4354,7 +4399,7 @@ class IngestRuntimeTests(unittest.TestCase):
             user_input="Please compare latent geometry and hyperbolic drift.",
             isolated_packet={"parsed_payload": {"candidate_targets": ["legacy target"], "candidate_relations": []}},
             contextual_packet={"parsed_payload": {"activation_hints": {"entity_hints": ["legacy hint"]}}},
-            semantic_coverage_target={
+            semantic_target={
                 "must_preserve": ["legacy must preserve"],
                 "should_include": [],
                 "avoid_satisfying_with": [],
@@ -4380,7 +4425,7 @@ class IngestRuntimeTests(unittest.TestCase):
         combined = retrieval_preparation["combined_candidate_terms"]
         self.assertLess(combined.index("riemannian"), combined.index("legacy"))
 
-    def test_runtime_blocks_when_semantic_coverage_target_shape_is_invalid(self) -> None:
+    def test_runtime_blocks_when_semantic_target_shape_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             _write_markdown_fixture(
@@ -4404,7 +4449,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 source_roots=(IngestSourceRoot(label="corpus", path=repo_root / "corpus"),),
             )
 
-            parsed_backend = _ParsedSemanticExtractorBackend(
+            parsed_backend = _ParsedSemanticCompilerBackend(
                 contextual_payload={
                     "raw_user_input": "Please retrieve the invalid target fixture.",
                     "contextual_user_intent": "invalid target",
@@ -4415,7 +4460,7 @@ class IngestRuntimeTests(unittest.TestCase):
                     "perturbation_semantic_graph": {"nodes": [], "edges": []},
                     "candidate_targets": ["invalid"],
                     "candidate_relations": [],
-                    "semantic_coverage_target": "bad legacy target",
+                    "semantic_target": "bad legacy target",
                     "activation_hints": {
                         "lexical_terms": ["invalid", "target", "fixture"],
                         "phrases": ["invalid target fixture"],
@@ -4432,12 +4477,12 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the invalid target fixture.",
                 llm_backend=StubLLMBackend(prefix="Probe stub response"),
-                semantic_extractor_backend=parsed_backend,
+                semantic_compiler_backend=parsed_backend,
             )
 
-            self.assertTrue(result.semantic_context_packet["semantic_contract_validation"]["valid"])
+            self.assertTrue(result.turn_compilation_packet["semantic_contract_validation"]["valid"])
             self.assertFalse(
-                result.semantic_context_packet["legacy_semantic_extraction_diagnostics"]["legacy_contract_validation"]["valid"]
+                result.turn_compilation_packet["legacy_semantic_compiler_diagnostics"]["legacy_contract_validation"]["valid"]
             )
             self.assertNotIn("semantic compiler packet failed validation", result.coverage_report["blocking_reasons"])
 
@@ -4471,11 +4516,12 @@ class IngestRuntimeTests(unittest.TestCase):
             payload = json.loads(process.stdout)
             for key in (
                 "turn_root",
-                "isolated_semantic_extraction_packet_path",
-                "isolated_semantic_extraction_raw_path",
-                "contextual_semantic_extraction_packet_path",
-                "contextual_semantic_extraction_raw_path",
-                "semantic_context_packet_path",
+                "semantic_compiler_packet_path",
+                "isolated_semantic_compiler_packet_path",
+                "isolated_semantic_compiler_raw_path",
+                "contextual_semantic_compiler_packet_path",
+                "contextual_semantic_compiler_raw_path",
+                "turn_compilation_packet_path",
                 "semantic_traversal_manifest_path",
                 "retrieval_packet_path",
                 "coverage_report_path",
@@ -4483,24 +4529,24 @@ class IngestRuntimeTests(unittest.TestCase):
                 "state_delta_path",
             ):
                 self.assertTrue(Path(payload[key]).exists())
-            self.assertIn(payload["isolated_extraction_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
-            self.assertIn(payload["contextual_extraction_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
+            self.assertIn(payload["isolated_compiler_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
+            self.assertIn(payload["contextual_compiler_status"], {"parsed", "stub", "disabled", "unavailable", "invalid_json"})
             self.assertEqual(payload["runtime_outcome"], "blocked")
             self.assertEqual(payload["coverage_decision"], "blocked")
             self.assertIsNone(payload["assistant_response"])
             self.assertTrue(payload["latest_perturbation_hash"])
             self.assertTrue(payload["latest_thread_state_hash"])
 
-    def test_turn_cli_parser_rejects_semantic_extractor_mode_flag(self) -> None:
+    def test_turn_cli_parser_rejects_semantic_compiler_mode_flag(self) -> None:
         parser = build_turn_parser()
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 parser.parse_args(["--message", "hello", "--semantic-extractor-mode", "stub"])
 
-    def test_runtime_semantic_extractor_resolver_fails_closed_without_configured_backend(self) -> None:
+    def test_runtime_semantic_compiler_resolver_fails_closed_without_configured_backend(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir:
             repo_root = _prepared_repo_root(repo_dir)
-            backend = resolve_semantic_extractor_backend(repo_root=repo_root, config=load_runtime_config(repo_root=repo_root))
+            backend = resolve_semantic_compiler_backend(repo_root=repo_root, config=load_runtime_config(repo_root=repo_root))
             self.assertEqual(backend.mode_name, "ollama")
 
     def test_blocked_runtime_does_not_call_llm_backend(self) -> None:
@@ -4511,13 +4557,13 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="This should block before the llm call boundary.",
                 llm_backend=FailingLLMBackend(),
-                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                semantic_compiler_backend=DisabledSemanticCompilerBackend(),
             )
             self.assertEqual(result.runtime_outcome, "blocked")
             self.assertEqual(result.llm_metadata["mode"], "not_called")
             self.assertIsNone(result.assistant_response)
 
-    def test_stub_semantic_extraction_cannot_produce_thesis_valid_state_perturbation(self) -> None:
+    def test_stub_semantic_compiler_cannot_produce_thesis_valid_state_perturbation(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:
             repo_root = _prepared_repo_root(repo_dir)
             (repo_root / "corpus").mkdir(parents=True, exist_ok=True)
@@ -4529,7 +4575,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=FailingLLMBackend(),
-                semantic_extractor_backend=StubSemanticExtractorBackend(),
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
             )
 
             self.assertEqual(result.coverage_report["decision"], "blocked")
@@ -4558,7 +4604,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 data_root=Path(data_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
                 llm_backend=FailingLLMBackend(),
-                semantic_extractor_backend=DisabledSemanticExtractorBackend(),
+                semantic_compiler_backend=DisabledSemanticCompilerBackend(),
             )
 
             serialized = json.dumps(

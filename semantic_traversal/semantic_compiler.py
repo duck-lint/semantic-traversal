@@ -78,7 +78,7 @@ REFERENT_EXTRACTION_PATTERNS = (
 
 
 @dataclass(frozen=True)
-class SemanticExtractionResponse:
+class SemanticCompilerResponse:
     parsed_payload: dict[str, Any] | None
     raw_response: str | None
     metadata: dict[str, Any]
@@ -86,13 +86,13 @@ class SemanticExtractionResponse:
     status: str
 
 
-class SemanticExtractorBackend(Protocol):
+class SemanticCompilerBackend(Protocol):
     mode_name: str
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         ...
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         ...
 
 
@@ -137,7 +137,7 @@ def _default_activation_hints() -> dict[str, Any]:
     }
 
 
-def _semantic_extraction_schema(mode: str) -> dict[str, Any]:
+def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
     if mode == "isolated":
         return {
             "type": "object",
@@ -181,7 +181,7 @@ def _semantic_extraction_schema(mode: str) -> dict[str, Any]:
             "perturbation_nodes",
             "contextual_salt_nodes",
             "perturbation_semantic_graph",
-            "semantic_coverage_target",
+            "semantic_target",
             "activation_hints",
             "limitations",
         ],
@@ -220,7 +220,7 @@ def _semantic_extraction_schema(mode: str) -> dict[str, Any]:
                 "items": {"type": "object"},
             },
             "perturbation_semantic_graph": {"type": "object"},
-            "semantic_coverage_target": {
+            "semantic_target": {
                 "type": "object",
                 "additionalProperties": True,
                 "required": [
@@ -293,7 +293,7 @@ def _contextual_json_skeleton() -> dict[str, Any]:
             "nodes": [{"id": "", "label": "", "kind": ""}],
             "edges": [{"source": "", "target": "", "kind": ""}],
         },
-        "semantic_coverage_target": {
+        "semantic_target": {
             "must_preserve": [],
             "should_include": [],
             "avoid_satisfying_with": [],
@@ -336,7 +336,7 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
         ) or bool(packet.get("deterministic_resolved_referent_candidates"))
         mode_instruction = (
             "This is contextual extraction. Return a JSON object that matches the contextual schema exactly. "
-            "semantic_coverage_target must be an object, activation_hints must be an object, "
+            "semantic_target must be an object, activation_hints must be an object, "
             "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
             "perturbation_semantic_graph must be an object with nodes and edges arrays. "
             "resolved_referents must be an array of objects when follow-up resolution is required."
@@ -345,7 +345,7 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
             mode_instruction += (
                 " Use deterministic_resolved_referent_candidates when present. "
                 "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-                "For referential follow-ups, semantic_coverage_target.must_preserve must include the resolved referent."
+                "For referential follow-ups, semantic_target.must_preserve must include the resolved referent."
             )
     return (
         "Return JSON only.\n"
@@ -499,11 +499,11 @@ def _resolve_followup_referents(
     ]
 
 
-class DisabledSemanticExtractorBackend:
+class DisabledSemanticCompilerBackend:
     mode_name = "disabled"
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
-        return SemanticExtractionResponse(
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        return SemanticCompilerResponse(
             parsed_payload=None,
             raw_response=None,
             metadata={
@@ -514,8 +514,8 @@ class DisabledSemanticExtractorBackend:
             status="disabled",
         )
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
-        return SemanticExtractionResponse(
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        return SemanticCompilerResponse(
             parsed_payload=None,
             raw_response=None,
             metadata={
@@ -527,7 +527,7 @@ class DisabledSemanticExtractorBackend:
         )
 
 
-class StubSemanticExtractorBackend:
+class StubSemanticCompilerBackend:
     mode_name = "stub"
 
     def __init__(
@@ -539,11 +539,11 @@ class StubSemanticExtractorBackend:
         self._isolated_payload = isolated_payload
         self._contextual_payload = contextual_payload
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
         payload = self._isolated_payload or self._build_default_isolated_payload(raw_user_input)
         normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
-        return SemanticExtractionResponse(
+        return SemanticCompilerResponse(
             parsed_payload=normalized_payload,
             raw_response=None,
             metadata={
@@ -554,17 +554,17 @@ class StubSemanticExtractorBackend:
             status="stub",
         )
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
         prior_thread_state = packet.get("extractor_thread_context") or packet.get("prior_thread_state") or {}
-        isolated_payload = packet.get("isolated_semantic_extraction") or {}
+        isolated_payload = packet.get("isolated_semantic_compiler") or {}
         payload = self._contextual_payload or self._build_default_contextual_payload(
             raw_user_input=raw_user_input,
             prior_thread_state=prior_thread_state,
             isolated_payload=isolated_payload,
         )
         normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
-        return SemanticExtractionResponse(
+        return SemanticCompilerResponse(
             parsed_payload=normalized_payload,
             raw_response=None,
             metadata={
@@ -632,7 +632,7 @@ class StubSemanticExtractorBackend:
                 ],
                 "edges": [],
             },
-            "semantic_coverage_target": {
+            "semantic_target": {
                 "must_preserve": must_preserve,
                 "should_include": should_include,
                 "avoid_satisfying_with": avoid_satisfying_with,
@@ -662,7 +662,7 @@ class StubSemanticExtractorBackend:
         }
 
 
-class OllamaSemanticExtractorBackend:
+class OllamaSemanticCompilerBackend:
     mode_name = "ollama"
 
     def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20) -> None:
@@ -670,15 +670,15 @@ class OllamaSemanticExtractorBackend:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._extract(packet)
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._extract(packet)
 
-    def _extract(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def _extract(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
-            return SemanticExtractionResponse(
+            return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=None,
                 metadata={
@@ -708,7 +708,7 @@ class OllamaSemanticExtractorBackend:
             envelope = json.loads(envelope_text)
             raw_response_text = str(envelope.get("response", ""))
         except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-            return SemanticExtractionResponse(
+            return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
                 metadata={
@@ -724,7 +724,7 @@ class OllamaSemanticExtractorBackend:
         try:
             parsed_payload = json.loads(raw_response_text or "")
         except json.JSONDecodeError:
-            return SemanticExtractionResponse(
+            return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
                 metadata={
@@ -736,7 +736,7 @@ class OllamaSemanticExtractorBackend:
                 status="invalid_json",
             )
         if not isinstance(parsed_payload, dict):
-            return SemanticExtractionResponse(
+            return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
                 metadata={
@@ -750,7 +750,7 @@ class OllamaSemanticExtractorBackend:
             )
 
         normalized_payload, diagnostics = _normalize_raw_user_input(parsed_payload, str(packet.get("raw_user_input", "")))
-        return SemanticExtractionResponse(
+        return SemanticCompilerResponse(
             parsed_payload=normalized_payload,
             raw_response=raw_response_text,
             metadata={
@@ -763,27 +763,27 @@ class OllamaSemanticExtractorBackend:
         )
 
 
-class UnavailableSemanticExtractorBackend:
+class UnavailableSemanticCompilerBackend:
     mode_name = "unavailable"
 
     def __init__(self, *, reason: str, configured_mode: str | None = None) -> None:
         self._reason = reason
         self._configured_mode = configured_mode
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._response()
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticExtractionResponse:
+    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._response()
 
-    def _response(self) -> SemanticExtractionResponse:
+    def _response(self) -> SemanticCompilerResponse:
         metadata = {
             "backend_mode": self.mode_name,
             "reason": self._reason,
         }
         if self._configured_mode is not None:
             metadata["configured_mode"] = self._configured_mode
-        return SemanticExtractionResponse(
+        return SemanticCompilerResponse(
             parsed_payload=None,
             raw_response=None,
             metadata=metadata,
@@ -792,7 +792,7 @@ class UnavailableSemanticExtractorBackend:
         )
 
 
-def resolve_semantic_extractor_backend(
+def resolve_semantic_compiler_backend(
     *,
     repo_root: Path,
     config: RuntimeConfig,
@@ -800,38 +800,38 @@ def resolve_semantic_extractor_backend(
     model_override: str | None = None,
     base_url_override: str | None = None,
     allow_test_backends: bool = False,
-) -> SemanticExtractorBackend:
+) -> SemanticCompilerBackend:
     configured_mode = extractor_mode.strip().lower() if isinstance(extractor_mode, str) and extractor_mode.strip() else None
-    configured_provider = config.semantic_extraction_provider.strip().lower()
-    configured_model = model_override or config.semantic_extraction_model
-    configured_base_url = base_url_override or config.semantic_extraction_base_url
-    timeout_seconds = config.semantic_extraction_request_timeout_seconds
+    configured_provider = config.semantic_compiler_provider.strip().lower()
+    configured_model = model_override or config.semantic_compiler_model
+    configured_base_url = base_url_override or config.semantic_compiler_base_url
+    timeout_seconds = config.semantic_compiler_request_timeout_seconds
 
     if configured_mode in {"disabled", "stub"}:
         if allow_test_backends:
-            return DisabledSemanticExtractorBackend() if configured_mode == "disabled" else StubSemanticExtractorBackend()
-        return UnavailableSemanticExtractorBackend(
+            return DisabledSemanticCompilerBackend() if configured_mode == "disabled" else StubSemanticCompilerBackend()
+        return UnavailableSemanticCompilerBackend(
             reason=f"{configured_mode} semantic extraction is test-only and not valid for the normal runtime",
             configured_mode=configured_mode,
         )
     if configured_mode and configured_mode != configured_provider:
         if configured_mode != "ollama":
-            return UnavailableSemanticExtractorBackend(
+            return UnavailableSemanticCompilerBackend(
                 reason=f"unsupported semantic extractor mode: {configured_mode}",
                 configured_mode=configured_mode,
             )
     if configured_provider == "ollama":
         if not isinstance(configured_model, str) or not configured_model.strip():
-            return UnavailableSemanticExtractorBackend(
+            return UnavailableSemanticCompilerBackend(
                 reason="SEMANTIC_EXTRACTOR_MODEL is not configured for the normal runtime",
                 configured_mode=configured_provider,
             )
-        return OllamaSemanticExtractorBackend(
+        return OllamaSemanticCompilerBackend(
             model=configured_model,
             base_url=configured_base_url,
             timeout_seconds=timeout_seconds,
         )
-    return UnavailableSemanticExtractorBackend(
+    return UnavailableSemanticCompilerBackend(
         reason=f"unsupported semantic extraction provider: {configured_provider}",
         configured_mode=configured_provider,
     )
