@@ -17,9 +17,9 @@ from .semantic_compiler import (
     FOLLOWUP_EXPLETIVE_PATTERNS,
     SemanticCompilerResponse,
     SemanticCompilerBackend,
+    collect_compiler_terms,
     _detect_followup_signals,
     _resolve_followup_referents,
-    extract_terms as extract_semantic_terms,
     resolve_semantic_compiler_backend,
 )
 from .storage import append_ledger_record, create_thread_paths, load_json, read_ledger, write_json
@@ -150,6 +150,11 @@ GENERIC_RELATION_WORDS = {
     "view",
 }
 
+REQUEST_FILLER_WORDS = {
+    "please",
+    "kindly",
+}
+
 CAUSAL_DISAMBIGUATION_PATTERNS = (
     (re.compile(r"\bcoming from\b", re.IGNORECASE), "coming from"),
     (re.compile(r"\bcaused by\b", re.IGNORECASE), "caused by"),
@@ -237,12 +242,12 @@ def _extract_lexical_query_terms(user_input: str) -> list[str]:
 
 def _collect_string_terms(value: Any) -> list[str]:
     if isinstance(value, str):
-        return extract_semantic_terms(value)
+        return collect_compiler_terms(value)
     if isinstance(value, list):
         terms: list[str] = []
         for item in value:
             if isinstance(item, str):
-                for term in extract_semantic_terms(item):
+                for term in collect_compiler_terms(item):
                     if term not in terms:
                         terms.append(term)
         return terms
@@ -265,13 +270,13 @@ def _collect_compiler_hint_terms(
             ("isolated.terms_or_phrases_not_to_discard", parsed_payload.get("terms_or_phrases_not_to_discard")),
         ]
     elif compiler_mode == "contextual":
-        activation_hints = parsed_payload.get("activation_hints")
-        if isinstance(activation_hints, dict):
+        retrieval_hints = parsed_payload.get("retrieval_hints")
+        if isinstance(retrieval_hints, dict):
             allowed_fields = [
-                ("contextual.activation_hints.lexical_terms", activation_hints.get("lexical_terms")),
-                ("contextual.activation_hints.phrases", activation_hints.get("phrases")),
-                ("contextual.activation_hints.entity_hints", activation_hints.get("entity_hints")),
-                ("contextual.activation_hints.relation_hints", activation_hints.get("relation_hints")),
+                ("contextual.retrieval_hints.lexical_terms", retrieval_hints.get("lexical_terms")),
+                ("contextual.retrieval_hints.phrases", retrieval_hints.get("phrases")),
+                ("contextual.retrieval_hints.entity_hints", retrieval_hints.get("entity_hints")),
+                ("contextual.retrieval_hints.relation_hints", retrieval_hints.get("relation_hints")),
             ]
 
     terms: list[str] = []
@@ -283,21 +288,6 @@ def _collect_compiler_hint_terms(
             if source_label not in sources.setdefault(term, []):
                 sources[term].append(source_label)
     return terms, sources
-
-
-def _extract_semantic_outputs(
-    *,
-    isolated_packet: dict[str, Any],
-    contextual_packet: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    isolated_payload = isolated_packet.get("parsed_payload") if isinstance(isolated_packet.get("parsed_payload"), dict) else {}
-    contextual_payload = contextual_packet.get("parsed_payload") if isinstance(contextual_packet.get("parsed_payload"), dict) else {}
-    semantic_payload = contextual_payload or isolated_payload
-    semantic_target = semantic_payload.get("semantic_target") or semantic_payload.get("coverage_target")
-    return (
-        semantic_payload if isinstance(semantic_payload, dict) else {},
-        semantic_target if isinstance(semantic_target, dict) else None,
-    )
 
 
 def _expected_type_name(expected_type: type[Any]) -> str:
@@ -314,19 +304,6 @@ def _dict_or_empty(value: Any) -> dict[str, Any]:
 
 def _normalize_semantic_text(value: Any) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
-
-
-def _semantic_target_includes_anchor(semantic_target: Any, anchor: str) -> bool:
-    if not isinstance(semantic_target, dict):
-        return False
-    normalized_anchor = _normalize_semantic_text(anchor)
-    if not normalized_anchor:
-        return False
-    for candidate in list(semantic_target.get("must_preserve") or []):
-        candidate_text = _normalize_semantic_text(candidate)
-        if candidate_text and normalized_anchor in candidate_text:
-            return True
-    return False
 
 
 def _normalize_resolved_referent_value(value: Any) -> str:
@@ -479,6 +456,27 @@ def _resolve_compiler_retrieval_requirement(
         "allow_no_retrieval_needed": not bool(default_requires_retrieval),
     }
     if isinstance(compiler_payload, dict):
+        if isinstance(compiler_payload.get("requires_retrieval"), bool):
+            requires_retrieval = bool(compiler_payload.get("requires_retrieval"))
+            resolution.update(
+                {
+                    "source": "compiler_payload.requires_retrieval",
+                    "requires_retrieval": requires_retrieval,
+                    "allow_no_retrieval_needed": not requires_retrieval,
+                }
+            )
+            return requires_retrieval, resolution
+        if isinstance(compiler_payload.get("allow_no_retrieval_needed"), bool):
+            allow_no_retrieval_needed = bool(compiler_payload.get("allow_no_retrieval_needed"))
+            requires_retrieval = not allow_no_retrieval_needed
+            resolution.update(
+                {
+                    "source": "compiler_payload.allow_no_retrieval_needed",
+                    "requires_retrieval": requires_retrieval,
+                    "allow_no_retrieval_needed": allow_no_retrieval_needed,
+                }
+            )
+            return requires_retrieval, resolution
         coverage_policy = _dict_or_empty(compiler_payload.get("coverage_policy"))
         if isinstance(coverage_policy.get("requires_retrieval"), bool):
             requires_retrieval = bool(coverage_policy.get("requires_retrieval"))
@@ -525,7 +523,7 @@ def _infer_entity_role(label: str, *, nodes_by_label: dict[str, dict[str, Any]])
         return "effect"
     if any(token in normalized for token in ("sleep", "food", "bed", "quality", "thing", "ate")):
         return "factor"
-    return "topic" if len(_coverage_target_tokens(label)) >= 2 else "unknown"
+    return "topic" if len(_compiler_target_tokens(label)) >= 2 else "unknown"
 
 
 def _build_compiler_entity_lookup(
@@ -586,6 +584,8 @@ def _normalize_compiler_relations(
     *,
     graph: dict[str, Any],
     isolated_payload: dict[str, Any],
+    contextual_payload: dict[str, Any],
+    compiler_stage_payload: dict[str, Any],
     entities: list[dict[str, Any]],
     candidate_entities: list[str],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -638,7 +638,12 @@ def _normalize_compiler_relations(
     if relations:
         return relations, diagnostics
 
-    for relation in _list_or_empty(isolated_payload.get("candidate_relations")):
+    relation_sources = (
+        _list_or_empty(compiler_stage_payload.get("candidate_relations"))
+        or _list_or_empty(contextual_payload.get("candidate_relations"))
+        or _list_or_empty(isolated_payload.get("candidate_relations"))
+    )
+    for relation in relation_sources:
         if isinstance(relation, str) and relation.strip():
             relations.append(
                 {
@@ -661,15 +666,16 @@ def _build_semantic_compiler_packet(
     *,
     user_input: str,
     prior_thread_state: dict[str, Any],
-    semantic_payload: dict[str, Any],
+    compiler_payload: dict[str, Any],
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
-    semantic_target: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], list[str]]:
     compiler_reasons: list[str] = []
     followup_detection = _detect_followup_signals(user_input, prior_thread_state)
+    compiler_stage_payload = _dict_or_empty(compiler_payload)
     isolated_payload = _dict_or_empty(isolated_packet.get("parsed_payload"))
     contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
+    merged_payload = contextual_payload or isolated_payload
 
     candidate_entities: list[str] = []
     seen_entities: set[str] = set()
@@ -677,17 +683,24 @@ def _build_semantic_compiler_packet(
         _list_or_empty(isolated_payload.get("candidate_targets")),
         _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")),
         _list_or_empty(contextual_payload.get("candidate_targets")),
-        _list_or_empty(_dict_or_empty(contextual_payload.get("semantic_target")).get("must_preserve")),
-        _list_or_empty(_dict_or_empty(contextual_payload.get("activation_hints")).get("entity_hints")),
+        _list_or_empty(compiler_stage_payload.get("candidate_targets")),
+        _list_or_empty(contextual_payload.get("resolved_referents")),
+        _list_or_empty(compiler_stage_payload.get("resolved_referents")),
+        _list_or_empty(_dict_or_empty(contextual_payload.get("retrieval_hints")).get("entity_hints")),
+        _list_or_empty(_dict_or_empty(contextual_payload.get("retrieval_hints")).get("phrases")),
+        _list_or_empty(_dict_or_empty(compiler_stage_payload.get("retrieval_hints")).get("entity_hints")),
+        _list_or_empty(_dict_or_empty(compiler_stage_payload.get("retrieval_hints")).get("phrases")),
     ):
         for item in source:
+            if isinstance(item, dict):
+                item = item.get("resolved_to") or item.get("label") or item.get("surface_form")
             if not isinstance(item, str):
                 continue
             cleaned = item.strip()
             normalized = _normalize_semantic_text(cleaned)
             if not cleaned or not normalized or normalized in seen_entities:
                 continue
-            if len(_coverage_target_tokens(cleaned)) == 0:
+            if len(_compiler_target_tokens(cleaned)) == 0:
                 continue
             seen_entities.add(normalized)
             candidate_entities.append(cleaned)
@@ -696,8 +709,7 @@ def _build_semantic_compiler_packet(
         user_input=user_input,
         isolated_packet=isolated_packet,
         contextual_packet=contextual_packet,
-        semantic_payload=semantic_payload,
-        semantic_target=semantic_target,
+        semantic_payload=merged_payload,
     )
     for candidate in concrete_candidates:
         normalized = _normalize_semantic_text(candidate)
@@ -712,45 +724,36 @@ def _build_semantic_compiler_packet(
         deterministic_followup_detection=followup_detection,
     )
 
-    referent_diagnostics = _validate_resolved_referents(
-        payload=semantic_payload,
+    deterministic_referents = _resolve_followup_referents(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
-    )[1] if semantic_payload else {
-        "deterministic_followup_detection": followup_detection,
-        "deterministic_referent_targets": [],
-        "model_referent_targets": [],
-        "disagreements": [],
-        "requires_referent_resolution": False,
-    }
-
-    nodes_by_label: dict[str, dict[str, Any]] = {}
-    for node in _list_or_empty(semantic_payload.get("perturbation_nodes")):
-        if isinstance(node, dict):
-            label = str(node.get("label") or "").strip()
-            normalized = _normalize_semantic_text(label)
-            if normalized:
-                nodes_by_label[normalized] = node
+        followup_detection=followup_detection,
+    )
+    deterministic_referent_targets = _collect_resolved_referent_targets(deterministic_referents)
 
     entities: list[dict[str, Any]] = []
     for index, label in enumerate(candidate_entities, start=1):
         normalized = _normalize_semantic_text(label)
         source = "raw_user_input" if normalized and normalized in _normalize_semantic_text(user_input) else "model_inference"
-        if normalized in {str(target) for target in _list_or_empty(referent_diagnostics.get("deterministic_referent_targets"))}:
+        if normalized in set(deterministic_referent_targets):
             source = "prior_thread_state"
         entities.append(
             {
                 "id": f"entity:{index}",
                 "label": label,
-                "role": _infer_entity_role(label, nodes_by_label=nodes_by_label),
+                "role": _infer_entity_role(label, nodes_by_label={}),
                 "source": source,
             }
         )
 
-    graph = _dict_or_empty(semantic_payload.get("perturbation_semantic_graph"))
+    graph = _dict_or_empty(compiler_stage_payload.get("perturbation_semantic_graph")) or _dict_or_empty(
+        contextual_payload.get("perturbation_semantic_graph")
+    ) or _dict_or_empty(isolated_payload.get("perturbation_semantic_graph"))
     relations, relation_endpoint_normalization = _normalize_compiler_relations(
         graph=graph,
         isolated_payload=isolated_payload,
+        contextual_payload=contextual_payload,
+        compiler_stage_payload=compiler_stage_payload,
         entities=entities,
         candidate_entities=candidate_entities,
     )
@@ -774,7 +777,7 @@ def _build_semantic_compiler_packet(
         "causal_disambiguation",
         "comparison_disambiguation",
     }:
-        for target in _list_or_empty(referent_diagnostics.get("deterministic_referent_targets")):
+        for target in deterministic_referent_targets:
             if isinstance(target, str) and target.strip():
                 required_anchors.append(
                     {
@@ -785,11 +788,6 @@ def _build_semantic_compiler_packet(
                     }
                 )
     if not required_anchors:
-        non_generic_must_preserve = []
-        if isinstance(semantic_target, dict):
-            for candidate in _list_or_empty(semantic_target.get("must_preserve")):
-                if isinstance(candidate, str) and candidate.strip() and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms):
-                    non_generic_must_preserve.append(candidate.strip())
         filtered_candidate_entities = [
             candidate
             for candidate in candidate_entities
@@ -797,7 +795,7 @@ def _build_semantic_compiler_packet(
             and candidate.strip()
             and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms)
         ]
-        anchor_seed_candidates = non_generic_must_preserve or concrete_candidates or filtered_candidate_entities
+        anchor_seed_candidates = concrete_candidates or filtered_candidate_entities
         selected_anchor_kind = "current_turn_entity" if question_shape_classification["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} else "current_turn_phrase"
         for candidate in anchor_seed_candidates[:3]:
             required_anchors.append(
@@ -812,14 +810,16 @@ def _build_semantic_compiler_packet(
     lexical_terms = _extract_lexical_query_terms(user_input)
     entity_terms = [entity["label"] for entity in entities]
     relation_terms = [str(relation.get("relation") or "") for relation in relations if str(relation.get("relation") or "").strip()]
-    avoid_terms = []
-    if isinstance(semantic_target, dict):
-        avoid_terms = [str(item) for item in _list_or_empty(semantic_target.get("avoid_satisfying_with")) if str(item).strip()]
+    avoidance_hints = _list_or_empty(merged_payload.get("avoidance_hints"))
+    avoid_terms = [str(item) for item in avoidance_hints if isinstance(item, str) and str(item).strip()]
 
     requires_retrieval, retrieval_requirement_resolution = _resolve_compiler_retrieval_requirement(
-        semantic_target=semantic_target,
+        compiler_payload=compiler_stage_payload or merged_payload,
         default_requires_retrieval=True,
     )
+    contextual_retrieval_hints = _dict_or_empty(contextual_payload.get("retrieval_hints"))
+    contextual_phrases = _list_or_empty(contextual_retrieval_hints.get("phrases"))
+    canonical_query = contextual_phrases[0] if contextual_phrases else user_input
     semantic_target = {
         "intent": str(
             contextual_payload.get("contextual_user_intent")
@@ -827,7 +827,7 @@ def _build_semantic_compiler_packet(
             or user_input
         ),
         "question_type": str(question_shape_classification["question_type"]),
-        "canonical_query": str(semantic_target.get("query_text") if isinstance(semantic_target, dict) else user_input) or user_input,
+        "canonical_query": canonical_query or user_input,
         "entities": entities,
         "relations": relations,
         "disambiguation_options": disambiguation_options,
@@ -866,12 +866,28 @@ def _build_semantic_compiler_packet(
         "compiler_diagnostics": {
             "question_shape_classification": question_shape_classification,
             "deterministic_followup_detection": followup_detection,
-            "model_followup_detection": _dict_or_empty(semantic_payload.get("followup_detection")),
-            "referent_resolution_diagnostics": referent_diagnostics,
+            "deterministic_referent_targets": deterministic_referent_targets,
+            "model_followup_detection": _dict_or_empty(merged_payload.get("followup_detection")),
             "relation_endpoint_normalization": relation_endpoint_normalization,
             "retrieval_requirement_resolution": retrieval_requirement_resolution,
         },
     }
+    referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
+        compiler_stage_payload=compiler_stage_payload or merged_payload,
+        compiler_packet=compiler_packet,
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+    ) if merged_payload else ([], {
+        "deterministic_followup_detection": followup_detection,
+        "deterministic_referent_targets": deterministic_referent_targets,
+        "model_referent_targets": [],
+        "disagreements": [],
+        "requires_referent_resolution": False,
+        "required_anchor_labels": [],
+    })
+    if referent_validation_reasons:
+        compiler_reasons.extend(referent_validation_reasons)
+    compiler_packet["compiler_diagnostics"]["referent_resolution_diagnostics"] = referent_diagnostics
     if not semantic_target["entities"]:
         compiler_reasons.append("semantic compiler packet missing entities")
     if not semantic_target["required_anchors"]:
@@ -882,7 +898,7 @@ def _build_semantic_compiler_packet(
 
 
 def _phrase_token_count(value: str) -> int:
-    return len(_coverage_target_tokens(value))
+    return len(_compiler_target_tokens(value))
 
 
 def _strip_question_framing(raw_user_input: str) -> str:
@@ -909,10 +925,10 @@ def _anchor_matches(target: str, candidate: str) -> bool:
 
 
 def _is_generic_relation_shell(target: str, *, raw_topic_terms: set[str]) -> bool:
-    target_tokens = _coverage_target_tokens(target)
+    target_tokens = _compiler_target_tokens(target)
     if not target_tokens:
         return True
-    nongeneric_tokens = [token for token in target_tokens if token not in GENERIC_RELATION_WORDS]
+    nongeneric_tokens = [token for token in target_tokens if token not in GENERIC_RELATION_WORDS and token not in REQUEST_FILLER_WORDS]
     topical_overlap = [token for token in nongeneric_tokens if token in raw_topic_terms]
     if topical_overlap:
         return False
@@ -935,7 +951,6 @@ def _collect_concrete_anchor_candidates(
     isolated_packet: dict[str, Any],
     contextual_packet: dict[str, Any],
     semantic_payload: dict[str, Any],
-    semantic_target: dict[str, Any] | None,
 ) -> list[str]:
     raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
     scored_candidates: list[tuple[int, str]] = []
@@ -953,7 +968,7 @@ def _collect_concrete_anchor_candidates(
         token_count = _phrase_token_count(candidate)
         if token_count == 0:
             return
-        topical_overlap = len(set(_coverage_target_tokens(candidate)).intersection(raw_topic_terms))
+        topical_overlap = len(set(_compiler_target_tokens(candidate)).intersection(raw_topic_terms))
         score = weight + (token_count * 10) + (topical_overlap * 5)
         seen.add(normalized_candidate)
         scored_candidates.append((score, candidate))
@@ -967,56 +982,36 @@ def _collect_concrete_anchor_candidates(
     for candidate in _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")):
         add_candidate(candidate, weight=45)
 
-    for node in _list_or_empty(semantic_payload.get("contextual_salt_nodes")):
-        if isinstance(node, dict):
-            add_candidate(node.get("label"), weight=25)
-
-    activation_hints = _dict_or_empty(semantic_payload.get("activation_hints"))
-    for candidate in _list_or_empty(activation_hints.get("entity_hints")):
+    retrieval_hints = _dict_or_empty(semantic_payload.get("retrieval_hints"))
+    for candidate in _list_or_empty(retrieval_hints.get("phrases")):
+        add_candidate(candidate, weight=55)
+    for candidate in _list_or_empty(retrieval_hints.get("entity_hints")):
         add_candidate(candidate, weight=30)
 
-    if isinstance(semantic_target, dict):
-        for candidate in _list_or_empty(semantic_target.get("should_include")):
-            add_candidate(candidate, weight=35)
-
     contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
-    contextual_activation_hints = _dict_or_empty(contextual_payload.get("activation_hints"))
-    for candidate in _list_or_empty(contextual_activation_hints.get("entity_hints")):
+    contextual_retrieval_hints = _dict_or_empty(contextual_payload.get("retrieval_hints"))
+    for candidate in _list_or_empty(contextual_retrieval_hints.get("phrases")):
+        add_candidate(candidate, weight=35)
+    for candidate in _list_or_empty(contextual_retrieval_hints.get("entity_hints")):
         add_candidate(candidate, weight=20)
 
     scored_candidates.sort(key=lambda item: (-item[0], -_phrase_token_count(item[1]), item[1]))
     return [candidate for _, candidate in scored_candidates]
 
 
-def _coverage_target_has_concrete_anchor(
-    semantic_target: dict[str, Any] | None,
-    *,
-    concrete_anchor_candidates: list[str],
-    raw_topic_terms: set[str],
-) -> bool:
-    if not isinstance(semantic_target, dict):
-        return False
-    must_preserve = _list_or_empty(semantic_target.get("must_preserve"))
-    for target in must_preserve:
-        if not isinstance(target, str):
-            continue
-        if any(_anchor_matches(target, candidate) for candidate in concrete_anchor_candidates):
-            return True
-        if not _is_generic_relation_shell(target, raw_topic_terms=raw_topic_terms):
-            return True
-    return False
-
-
 def _validate_resolved_referents(
     *,
-    payload: dict[str, Any],
+    compiler_stage_payload: dict[str, Any],
+    compiler_packet: dict[str, Any],
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
 ) -> tuple[list[str], dict[str, Any]]:
     reasons: list[str] = []
     followup_detection = _detect_followup_signals(raw_user_input, prior_thread_state)
-    requires_resolution = bool(followup_detection.get("requires_referent_resolution"))
-    resolved_referents = payload.get("resolved_referents")
+    semantic_target = _dict_or_empty(compiler_packet.get("semantic_target"))
+    question_type = str(semantic_target.get("question_type") or "")
+    requires_resolution = bool(followup_detection.get("requires_referent_resolution")) and question_type == "referential_followup"
+    resolved_referents = compiler_stage_payload.get("resolved_referents")
     deterministic_referents = _resolve_followup_referents(
         raw_user_input=raw_user_input,
         prior_thread_state=prior_thread_state,
@@ -1068,10 +1063,35 @@ def _validate_resolved_referents(
                         f"resolved_referents[{index}] required_for_target=true but resolved_to is empty"
                     )
 
+    required_anchors = [
+        str(anchor.get("label") or "").strip()
+        for anchor in _list_or_empty(semantic_target.get("required_anchors"))
+        if isinstance(anchor, dict) and str(anchor.get("label") or "").strip()
+    ]
+
+    contradictory_referents = [
+        resolved_referent
+        for resolved_referent in _list_or_empty(resolved_referents)
+        if isinstance(resolved_referent, dict)
+        and resolved_referent.get("required_for_target") is False
+        and isinstance(resolved_referent.get("resolved_to"), str)
+        and str(resolved_referent.get("resolved_to")).strip()
+        and (
+            not deterministic_targets
+            or any(
+                _anchor_matches(target, str(resolved_referent.get("resolved_to") or "").strip())
+                for target in deterministic_targets
+            )
+        )
+    ]
+    if contradictory_referents and bool(followup_detection.get("requires_referent_resolution")):
+        reasons.append("follow-up semantic target explicitly marks required resolved referent as non-required")
+
     if requires_resolution:
         if not isinstance(resolved_referents, list):
-            reasons.append("follow-up semantic target missing resolved referent")
-            reasons.append("follow-up semantic target missing required resolved referent")
+            if not deterministic_targets:
+                reasons.append("follow-up semantic target missing resolved referent")
+                reasons.append("follow-up semantic target missing required resolved referent")
         else:
             required_referents = [
                 resolved_referent
@@ -1081,13 +1101,15 @@ def _validate_resolved_referents(
                 and isinstance(resolved_referent.get("resolved_to"), str)
                 and str(resolved_referent.get("resolved_to")).strip()
             ]
-            if not required_referents:
+            if not required_referents and not deterministic_targets:
                 reasons.append("follow-up semantic target missing resolved referent")
                 reasons.append("follow-up semantic target missing required resolved referent")
             for resolved_referent in required_referents:
                 resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
-                if resolved_to and not _semantic_target_includes_anchor(payload.get("semantic_target"), resolved_to):
-                    reasons.append(f"semantic_target must_preserve does not include required resolved referent: {resolved_to}")
+                if resolved_to and not any(_anchor_matches(label, resolved_to) for label in required_anchors):
+                    reasons.append(
+                        f"semantic_compiler_packet.semantic_target.required_anchors does not include required resolved referent: {resolved_to}"
+                    )
 
     if deterministic_targets and model_targets:
         missing_from_model = [target for target in deterministic_targets if target not in model_targets]
@@ -1112,6 +1134,7 @@ def _validate_resolved_referents(
         "model_referent_targets": model_targets,
         "disagreements": disagreements,
         "requires_referent_resolution": requires_resolution,
+        "required_anchor_labels": required_anchors,
     }
     return reasons, diagnostics
 
@@ -1165,7 +1188,7 @@ def _normalize_coverage_text(value: Any) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def _coverage_target_tokens(value: Any) -> list[str]:
+def _compiler_target_tokens(value: Any) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
     for token in QUERY_TOKEN_RE.findall(str(value).lower()):
@@ -1206,7 +1229,7 @@ def _build_evidence_excerpt(text: str, target: str, *, max_length: int = 200) ->
 
 def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
     normalized_target = _normalize_coverage_text(target)
-    target_tokens = _coverage_target_tokens(target)
+    target_tokens = _compiler_target_tokens(target)
     if not normalized_target and not target_tokens:
         return None
     for field_name, field_text in _chunk_evidence_fields(chunk):
@@ -1224,7 +1247,7 @@ def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict
         if not normalized_field:
             continue
         if target_tokens:
-            field_tokens = set(_coverage_target_tokens(field_text))
+            field_tokens = set(_compiler_target_tokens(field_text))
             if all(token in field_tokens for token in target_tokens):
                 return {
                     "field": field_name,
@@ -1278,7 +1301,7 @@ def _evaluate_semantic_compiler_alignment(
         )
         for chunk in selected_chunks
     )
-    selected_terms = set(_coverage_target_tokens(selected_text))
+    selected_terms = set(_compiler_target_tokens(selected_text))
     compiler_query_terms = set(
         _collect_string_terms(retrieval_plan.get("lexical_terms"))
         + _collect_string_terms(retrieval_plan.get("entity_terms"))
@@ -1310,7 +1333,7 @@ def _evaluate_semantic_compiler_alignment(
             continue
         anchor_source = str(anchor.get("source") or "raw_user_input")
         anchor_kind = str(anchor.get("anchor_kind") or "current_turn_phrase")
-        anchor_tokens = set(_coverage_target_tokens(label))
+        anchor_tokens = set(_compiler_target_tokens(label))
         generic_shell = _is_generic_relation_shell(label, raw_topic_terms=raw_topic_terms)
         aligned = False
         evidence: list[dict[str, Any]] = []
@@ -1331,7 +1354,7 @@ def _evaluate_semantic_compiler_alignment(
                     evidence.append(
                         {
                             "alignment_type": "retrieved_term_overlap",
-                            "matched_terms": sorted(anchor_tokens.intersection(set(_coverage_target_tokens(str(chunk.get("paragraph_text") or ""))))),
+                            "matched_terms": sorted(anchor_tokens.intersection(set(_compiler_target_tokens(str(chunk.get("paragraph_text") or ""))))),
                             "chunk_id": str(chunk.get("chunk_id") or ""),
                             "field": match["field"],
                             "excerpt": match["excerpt"],
@@ -1520,7 +1543,7 @@ def _build_retrieval_preparation(
         contextual_packet.get("parsed_payload"),
         compiler_mode="contextual",
     )
-    coverage_target_terms: list[str] = []
+    compiler_target_terms: list[str] = []
     compiler_plan_terms: list[str] = []
     if isinstance(semantic_compiler_packet, dict):
         retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
@@ -1537,8 +1560,8 @@ def _build_retrieval_preparation(
         for anchor in _list_or_empty(semantic_target.get("required_anchors")):
             if isinstance(anchor, dict):
                 for term in _collect_string_terms(anchor.get("label")):
-                    if term not in coverage_target_terms:
-                        coverage_target_terms.append(term)
+                    if term not in compiler_target_terms:
+                        compiler_target_terms.append(term)
                     if (
                         "raw_user_input" not in candidate_term_sources.get(term, [])
                         and "semantic_compiler_packet.semantic_target.required_anchors" not in candidate_term_sources.setdefault(term, [])
@@ -1568,19 +1591,19 @@ def _build_retrieval_preparation(
                 candidate_term_sources[term].append(source_label)
 
     combined_candidate_terms: list[str] = []
-    for term in raw_lexical_terms + compiler_plan_terms + compiler_hint_terms + coverage_target_terms:
+    for term in raw_lexical_terms + compiler_plan_terms + compiler_hint_terms + compiler_target_terms:
         if term not in combined_candidate_terms:
             combined_candidate_terms.append(term)
 
     model_proposed_only_terms = [
         term
-        for term in compiler_plan_terms + compiler_hint_terms + coverage_target_terms
+        for term in compiler_plan_terms + compiler_hint_terms + compiler_target_terms
         if "raw_user_input" not in candidate_term_sources.get(term, [])
     ]
     return {
         "raw_lexical_terms": raw_lexical_terms,
         "compiler_hint_terms": compiler_hint_terms,
-        "coverage_target_terms": coverage_target_terms,
+        "compiler_target_terms": compiler_target_terms,
         "compiler_plan_terms": compiler_plan_terms,
         "combined_candidate_terms": combined_candidate_terms,
         "candidate_term_sources": candidate_term_sources,
@@ -1598,19 +1621,15 @@ def _build_turn_compilation_packet(
     semantic_compiler: SemanticCompilerArtifacts,
     config: RuntimeConfig | None = None,
 ) -> dict[str, Any]:
-    semantic_payload, extracted_semantic_target = _extract_semantic_outputs(
-        isolated_packet=semantic_compiler.isolated_packet,
-        contextual_packet=semantic_compiler.contextual_packet,
-    )
+    isolated_payload = _dict_or_empty(semantic_compiler.isolated_packet.get("parsed_payload"))
+    contextual_payload = _dict_or_empty(semantic_compiler.contextual_packet.get("parsed_payload"))
+    semantic_payload = contextual_payload or isolated_payload
     semantic_compiler_packet, semantic_compiler_reasons = _build_semantic_compiler_packet(
         user_input=user_input,
         prior_thread_state=prior_thread_state,
-        semantic_payload=semantic_payload,
+        compiler_payload=semantic_payload,
         isolated_packet=semantic_compiler.isolated_packet,
         contextual_packet=semantic_compiler.contextual_packet,
-        semantic_target=(
-            extracted_semantic_target if isinstance(extracted_semantic_target, dict) else None
-        ),
     )
     if config is not None:
         coverage_policy = _dict_or_empty(semantic_compiler_packet.get("coverage_policy"))
@@ -1638,7 +1657,8 @@ def _build_turn_compilation_packet(
         raw_user_input=user_input,
     )
     referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
-        payload=semantic_payload,
+        compiler_stage_payload=semantic_payload,
+        compiler_packet=semantic_compiler_packet,
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
     ) if semantic_payload else ([], {
@@ -1759,8 +1779,8 @@ def _build_contextual_compiler_request(
         "Hydrate the isolated compiler output with conversation context. "
         "Return JSON only. "
         "Do not answer the user. Preserve the raw message. "
-        "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
-        "semantic_target, activation_hints, and limitations."
+        "Produce raw_user_input, candidate_targets, candidate_relations, resolved_referents, "
+        "retrieval_hints, avoidance_hints, compiler_confidence, and limitations."
     )
     if not deterministic_followup_detection.get("requires_referent_resolution"):
         return {
@@ -1789,9 +1809,9 @@ def _build_contextual_compiler_request(
             "Do not answer the user. Preserve the raw message. "
             "Use deterministic_resolved_referent_candidates when present. "
             "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-            "For referential follow-ups, semantic_target.must_preserve must include the resolved referent. "
-            "Produce raw_user_input, perturbation_nodes, contextual_salt_nodes, perturbation_semantic_graph, "
-            "semantic_target, activation_hints, and limitations."
+            "When a prior referent is required, include it in resolved_referents and candidate_targets. "
+            "Produce raw_user_input, candidate_targets, candidate_relations, resolved_referents, "
+            "retrieval_hints, avoidance_hints, compiler_confidence, and limitations."
         ),
     }
 
@@ -1857,7 +1877,7 @@ def _run_semantic_compiler(
     backend: SemanticCompilerBackend,
 ) -> SemanticCompilerArtifacts:
     isolated_request = _build_isolated_compiler_request(user_input)
-    isolated_response = backend.extract_isolated(isolated_request)
+    isolated_response = backend.compile_isolated(isolated_request)
     isolated_packet = _build_compiler_stage_packet(
         thread_id=thread_id,
         turn_id=turn_id,
@@ -1878,7 +1898,7 @@ def _run_semantic_compiler(
         prior_thread_state=prior_thread_state,
         isolated_semantic_compiler=isolated_response.parsed_payload,
     )
-    contextual_response = backend.extract_contextual(contextual_request)
+    contextual_response = backend.compile_contextual(contextual_request)
     contextual_packet = _build_compiler_stage_packet(
         thread_id=thread_id,
         turn_id=turn_id,

@@ -234,7 +234,7 @@ def probe_lexical_retrieval_no_query_terms(data_root: Path, repo_root: Path | No
         "runtime_outcome": result.runtime_outcome,
         "turn_id": result.turn_id,
         "coverage_decision": result.coverage_report["decision"],
-        "query_terms": result.turn_compilation_packet["extracted_lexical_query_terms"],
+        "query_terms": result.turn_compilation_packet["retrieval_preparation"]["raw_lexical_terms"],
     }
 
 

@@ -10,8 +10,8 @@ from urllib import error, request
 from .config import RuntimeConfig
 
 
-EXTRACTION_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
-EXTRACTION_STOP_WORDS = {
+COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+COMPILER_STOP_WORDS = {
     "a",
     "an",
     "and",
@@ -68,12 +68,16 @@ FOLLOWUP_EXPLETIVE_PATTERNS = (
     re.compile(r"\bit\s+looks\s+like\b", re.IGNORECASE),
 )
 
-REFERENT_EXTRACTION_PATTERNS = (
+REFERENT_CANDIDATE_PATTERNS = (
     re.compile(
         r"\b(?:about|regarding|around|concerning|on|for|with|toward|towards|linked to|related to)\s+(.+?)(?:[?.!,]|$)",
         re.IGNORECASE,
     ),
     re.compile(r"\b(?:think|feel|wonder|care|ask)\s+about\s+(.+?)(?:[?.!,]|$)", re.IGNORECASE),
+)
+
+PRIOR_REFERENT_HEDGE_PREFIXES = (
+    re.compile(r"^(?:i\s+think|i\s+guess|i\s+wonder|maybe|probably|perhaps|it\s+seems(?:\s+like)?|the\s+notes\s+suggest)\s+", re.IGNORECASE),
 )
 
 
@@ -89,18 +93,18 @@ class SemanticCompilerResponse:
 class SemanticCompilerBackend(Protocol):
     mode_name: str
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         ...
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         ...
 
 
-def extract_terms(text: str) -> list[str]:
+def collect_compiler_terms(text: str) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
-    for token in EXTRACTION_TOKEN_RE.findall(text.lower()):
-        if len(token) < 3 or token in EXTRACTION_STOP_WORDS or token.isdigit():
+    for token in COMPILER_TOKEN_RE.findall(text.lower()):
+        if len(token) < 3 or token in COMPILER_STOP_WORDS or token.isdigit():
             continue
         if token not in seen:
             seen.add(token)
@@ -118,15 +122,17 @@ def _default_limitations() -> list[str]:
 
 def _default_contextual_coverage_fields() -> dict[str, Any]:
     return {
-        "must_preserve": [],
-        "should_include": [],
-        "avoid_satisfying_with": [],
-        "query_text": "",
+        "candidate_targets": [],
+        "candidate_relations": [],
+        "resolved_referents": [],
+        "retrieval_hints": _default_retrieval_hints(),
+        "avoidance_hints": [],
+        "compiler_confidence": "low",
         "allow_no_retrieval_needed": False,
     }
 
 
-def _default_activation_hints() -> dict[str, Any]:
+def _default_retrieval_hints() -> dict[str, Any]:
     return {
         "lexical_terms": [],
         "phrases": [],
@@ -178,11 +184,11 @@ def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
             "thread_relevant_context",
             "semantic_pressure",
             "resolved_referents",
-            "perturbation_nodes",
-            "contextual_salt_nodes",
-            "perturbation_semantic_graph",
-            "semantic_target",
-            "activation_hints",
+            "candidate_targets",
+            "candidate_relations",
+            "retrieval_hints",
+            "avoidance_hints",
+            "compiler_confidence",
             "limitations",
         ],
         "properties": {
@@ -211,34 +217,30 @@ def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
                     },
                 },
             },
-            "perturbation_nodes": {
+            "candidate_targets": {"type": "array", "items": {"type": "string"}},
+            "candidate_relations": {"type": "array", "items": {"type": "string"}},
+            "resolved_referents": {
                 "type": "array",
-                "items": {"type": "object"},
-            },
-            "contextual_salt_nodes": {
-                "type": "array",
-                "items": {"type": "object"},
-            },
-            "perturbation_semantic_graph": {"type": "object"},
-            "semantic_target": {
-                "type": "object",
-                "additionalProperties": True,
-                "required": [
-                    "must_preserve",
-                    "should_include",
-                    "avoid_satisfying_with",
-                    "query_text",
-                    "allow_no_retrieval_needed",
-                ],
-                "properties": {
-                    "must_preserve": {"type": "array", "items": {"type": "string"}},
-                    "should_include": {"type": "array", "items": {"type": "string"}},
-                    "avoid_satisfying_with": {"type": "array", "items": {"type": "string"}},
-                    "query_text": {"type": "string"},
-                    "allow_no_retrieval_needed": {"type": "boolean"},
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "required": [
+                        "surface_form",
+                        "resolved_to",
+                        "source",
+                        "confidence",
+                        "required_for_target",
+                    ],
+                    "properties": {
+                        "surface_form": {"type": "string"},
+                        "resolved_to": {"type": "string"},
+                        "source": {"type": "string"},
+                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                        "required_for_target": {"type": "boolean"},
+                    },
                 },
             },
-            "activation_hints": {
+            "retrieval_hints": {
                 "type": "object",
                 "additionalProperties": True,
                 "required": [
@@ -258,6 +260,8 @@ def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
                     "entity_hints": {"type": "array", "items": {"type": "string"}},
                 },
             },
+            "avoidance_hints": {"type": "array", "items": {"type": "string"}},
+            "compiler_confidence": {"type": "string"},
             "followup_detection": {"type": ["object", "null"]},
             "limitations": {"type": "array", "items": {"type": "string"}},
         },
@@ -287,20 +291,9 @@ def _contextual_json_skeleton() -> dict[str, Any]:
         "thread_relevant_context": [],
         "semantic_pressure": None,
         "resolved_referents": [],
-        "perturbation_nodes": [{"id": "", "label": "", "kind": ""}],
-        "contextual_salt_nodes": [{"id": "", "label": "", "kind": ""}],
-        "perturbation_semantic_graph": {
-            "nodes": [{"id": "", "label": "", "kind": ""}],
-            "edges": [{"source": "", "target": "", "kind": ""}],
-        },
-        "semantic_target": {
-            "must_preserve": [],
-            "should_include": [],
-            "avoid_satisfying_with": [],
-            "query_text": "",
-            "allow_no_retrieval_needed": False,
-        },
-        "activation_hints": {
+        "candidate_targets": [],
+        "candidate_relations": [],
+        "retrieval_hints": {
             "lexical_terms": [],
             "phrases": [],
             "conceptual_neighbors": [],
@@ -308,14 +301,14 @@ def _contextual_json_skeleton() -> dict[str, Any]:
             "temporal_hints": [],
             "entity_hints": [],
         },
+        "avoidance_hints": [],
+        "compiler_confidence": "low",
         "followup_detection": {
             "is_referential_followup": False,
             "signals": [],
             "surface_forms": [],
             "requires_referent_resolution": False,
         },
-        "candidate_targets": [],
-        "candidate_relations": [],
         "limitations": _default_limitations(),
     }
 
@@ -336,16 +329,15 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
         ) or bool(packet.get("deterministic_resolved_referent_candidates"))
         mode_instruction = (
             "Hydrate the isolated compiler output with conversation context. Return compiler-stage JSON only. "
-            "semantic_target must be an object, activation_hints must be an object, "
-            "perturbation_nodes and contextual_salt_nodes must be arrays of objects, and "
-            "perturbation_semantic_graph must be an object with nodes and edges arrays. "
+            "Return candidate_targets, candidate_relations, resolved_referents, retrieval_hints, "
+            "avoidance_hints, compiler_confidence, and limitations. "
             "resolved_referents must be an array of objects when follow-up resolution is required."
         )
         if requires_referent_resolution:
             mode_instruction += (
                 " Use deterministic_resolved_referent_candidates when present. "
                 "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-                "For referential follow-ups, semantic_target.must_preserve must include the resolved referent."
+                "When a prior referent is required, include it in resolved_referents and candidate_targets."
             )
     return (
         "Return JSON only.\n"
@@ -435,7 +427,7 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
                 if surface_form in {"it", "that", "this", "those", "they", "them"}:
                     referential_signals.append(f"deictic:{surface_form}")
 
-    question_token_count = len(extract_terms(raw_user_input))
+    question_token_count = len(collect_compiler_terms(raw_user_input))
     if has_recent_context and "?" in raw_user_input and question_token_count <= 8:
         signals.append("short_followup_question")
 
@@ -451,13 +443,22 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
 
 
 def _extract_referent_candidate(text: str) -> str | None:
-    for pattern in REFERENT_EXTRACTION_PATTERNS:
+    for pattern in REFERENT_CANDIDATE_PATTERNS:
         match = pattern.search(text)
         if match:
             candidate = _clean_referent_text(match.group(1))
             if candidate:
                 return candidate
     return None
+
+
+def _clean_prior_referent_candidate(text: str) -> str:
+    candidate = re.sub(r"\s+", " ", str(text or "")).strip().strip("?.! ")
+    if not candidate:
+        return ""
+    for pattern in PRIOR_REFERENT_HEDGE_PREFIXES:
+        candidate = pattern.sub("", candidate).strip()
+    return candidate.strip("?.! ")
 
 
 def _resolve_followup_referents(
@@ -485,6 +486,12 @@ def _resolve_followup_referents(
                 source = "prior_thread_state.recent_semantic_trajectory"
                 break
     if not resolved_to:
+        for candidate_text in reversed(referent_candidates):
+            resolved_to = _clean_prior_referent_candidate(candidate_text)
+            if resolved_to:
+                source = "prior_thread_state.recent_messages"
+                break
+    if not resolved_to:
         return []
 
     surface_form = followup_detection.get("surface_forms", [None])[0] or "it"
@@ -502,7 +509,7 @@ def _resolve_followup_referents(
 class DisabledSemanticCompilerBackend:
     mode_name = "disabled"
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return SemanticCompilerResponse(
             parsed_payload=None,
             raw_response=None,
@@ -514,7 +521,7 @@ class DisabledSemanticCompilerBackend:
             status="disabled",
         )
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return SemanticCompilerResponse(
             parsed_payload=None,
             raw_response=None,
@@ -539,7 +546,7 @@ class StubSemanticCompilerBackend:
         self._isolated_payload = isolated_payload
         self._contextual_payload = contextual_payload
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
         payload = self._isolated_payload or self._build_default_isolated_payload(raw_user_input)
         normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
@@ -554,7 +561,7 @@ class StubSemanticCompilerBackend:
             status="stub",
         )
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input", ""))
         prior_thread_state = packet.get("compiler_thread_context") or packet.get("prior_thread_state") or {}
         isolated_payload = packet.get("isolated_semantic_compiler") or {}
@@ -576,7 +583,7 @@ class StubSemanticCompilerBackend:
         )
 
     def _build_default_isolated_payload(self, raw_user_input: str) -> dict[str, Any]:
-        terms = extract_terms(raw_user_input)
+        terms = collect_compiler_terms(raw_user_input)
         return {
             "raw_user_input": raw_user_input,
             "probable_user_intent": "stub additive semantic compiler interpretation of the latest raw user message",
@@ -598,7 +605,7 @@ class StubSemanticCompilerBackend:
         prior_thread_state: dict[str, Any],
         isolated_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        terms = extract_terms(raw_user_input)
+        terms = collect_compiler_terms(raw_user_input)
         preserved_terms = list(isolated_payload.get("terms_or_phrases_not_to_discard") or [])[:5]
         recent_trajectory = list(prior_thread_state.get("recent_semantic_trajectory") or [])[-2:]
         followup_detection = _detect_followup_signals(raw_user_input, prior_thread_state)
@@ -607,43 +614,19 @@ class StubSemanticCompilerBackend:
             prior_thread_state=prior_thread_state,
             followup_detection=followup_detection,
         )
-        if resolved_referents:
-            must_preserve = [referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")]
-            should_include = [raw_user_input]
-            avoid_satisfying_with = ["feelings", "felt", "anxiety", "urgency", "context", "influence"]
-        else:
-            must_preserve = preserved_terms
-            should_include = list(isolated_payload.get("candidate_targets") or terms[:2])
-            avoid_satisfying_with = []
         return {
             "raw_user_input": raw_user_input,
             "contextual_user_intent": "stub contextual hydration of the isolated semantic compiler output",
             "followup_detection": followup_detection,
             "resolved_referents": resolved_referents,
-            "perturbation_nodes": [{"id": f"term:{term}", "label": term, "kind": "lexical_term"} for term in terms[:4]],
-            "contextual_salt_nodes": [
-                {"id": f"context:{index}", "label": text, "kind": "recent_trajectory"}
-                for index, text in enumerate(recent_trajectory, start=1)
-            ],
-            "perturbation_semantic_graph": {
-                "nodes": [
-                    {"id": f"term:{term}", "label": term, "kind": "lexical_term"}
-                    for term in terms[:4]
-                ],
-                "edges": [],
-            },
-            "semantic_target": {
-                "must_preserve": must_preserve,
-                "should_include": should_include,
-                "avoid_satisfying_with": avoid_satisfying_with,
-                "query_text": raw_user_input,
-                "allow_no_retrieval_needed": False,
-            },
             "thread_relevant_context": recent_trajectory,
             "semantic_pressure": None,
-            "candidate_targets": list(isolated_payload.get("candidate_targets") or terms[:3]),
+            "candidate_targets": list(dict.fromkeys([
+                *list(isolated_payload.get("candidate_targets") or []),
+                *[referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")],
+            ]) or terms[:3]),
             "candidate_relations": list(isolated_payload.get("candidate_relations") or []),
-            "activation_hints": {
+            "retrieval_hints": {
                 "lexical_terms": terms[:4],
                 "phrases": [referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")] or [],
                 "conceptual_neighbors": [],
@@ -651,11 +634,7 @@ class StubSemanticCompilerBackend:
                 "temporal_hints": [],
                 "entity_hints": list(isolated_payload.get("candidate_targets") or [])[:2],
             },
-            "delta_from_isolated_read": {
-                "added_by_context": ["thread_state_available"] if recent_trajectory else [],
-                "removed_or_deemphasized_by_context": [],
-                "unchanged": preserved_terms,
-            },
+            "avoidance_hints": [],
             "ambiguities": [],
             "compiler_confidence": "low",
             "limitations": _default_limitations(),
@@ -670,10 +649,10 @@ class OllamaSemanticCompilerBackend:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._extract(packet)
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._extract(packet)
 
     def _extract(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
@@ -770,10 +749,10 @@ class UnavailableSemanticCompilerBackend:
         self._reason = reason
         self._configured_mode = configured_mode
 
-    def extract_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._response()
 
-    def extract_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         return self._response()
 
     def _response(self) -> SemanticCompilerResponse:
