@@ -84,19 +84,6 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "ingestion_manifests_root": str,
         "latest_ingest_manifest_filename": str,
     },
-    "coverage": {
-        "min_selected_chunks": int,
-        "max_selected_chunks": int,
-        "require_surface_contributions": {
-            "lexical_index_surface": bool,
-            "vector_index_surface": bool,
-            "graph_layer": bool,
-            "primary_corpus": bool,
-            "synthetic_nodes": bool,
-        },
-        "graph_expansion_hop_limit": int,
-        "allow_no_retrieval_needed": bool,
-    },
 }
 
 
@@ -284,26 +271,6 @@ class RuntimeConfig:
     @property
     def storage_latest_ingest_manifest_filename(self) -> str:
         return str(self.raw["storage"]["latest_ingest_manifest_filename"])
-
-    @property
-    def coverage_min_selected_chunks(self) -> int:
-        return int(self.raw["coverage"]["min_selected_chunks"])
-
-    @property
-    def coverage_max_selected_chunks(self) -> int:
-        return int(self.raw["coverage"]["max_selected_chunks"])
-
-    @property
-    def coverage_require_surface_contributions(self) -> dict[str, bool]:
-        return dict(self.raw["coverage"]["require_surface_contributions"])
-
-    @property
-    def coverage_graph_expansion_hop_limit(self) -> int:
-        return int(self.raw["coverage"]["graph_expansion_hop_limit"])
-
-    @property
-    def coverage_allow_no_retrieval_needed(self) -> bool:
-        return bool(self.raw["coverage"]["allow_no_retrieval_needed"])
 
     def resolve_path(self, raw_path: str | Path) -> Path:
         candidate = Path(raw_path)

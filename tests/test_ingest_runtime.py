@@ -468,9 +468,12 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(second_turn.semantic_compiler_status, "fallback")
-        self.assertIn("candy", second_turn.semantic_compiler_packet["retrieval_terms"])
-        self.assertIn("bed", second_turn.semantic_compiler_packet["retrieval_terms"])
+        retrieval_terms = second_turn.semantic_compiler_packet["retrieval_terms"]
+        self.assertIn("candy", retrieval_terms)
+        self.assertIn("bed", retrieval_terms)
         self.assertIn("candy snack food before bed", second_turn.semantic_compiler_packet["vector_query"])
+        for junk_term in ("raw_user_input", "assistant_response_snippet", "selected_chunk_ids", "selected_note_titles", "{"):
+            self.assertNotIn(junk_term, retrieval_terms)
 
     def test_recent_semantic_turns_are_capped_to_small_tail(self) -> None:
         data_root = _prepare_data_root()

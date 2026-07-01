@@ -60,15 +60,3 @@ indexes:
   vector_table: "chunk_vectors"
   graph_nodes_table: "graph_nodes"
   graph_edges_table: "graph_edges"
-
-coverage:
-  min_selected_chunks: 1
-  max_selected_chunks: 18
-  require_surface_contributions:
-    lexical_index_surface: true
-    vector_index_surface: true
-    graph_layer: true
-    primary_corpus: true
-    synthetic_nodes: false
-  graph_expansion_hop_limit: 2
-  allow_no_retrieval_needed: false

@@ -249,14 +249,24 @@ def _snippet(text: str, limit: int = ASSISTANT_SNIPPET_LIMIT) -> str:
     return cleaned[: limit - 1].rstrip() + "…"
 
 
-def _focus_terms_from_value(value: Any) -> list[str]:
+def _semantic_turn_focus_terms(turn: dict[str, Any]) -> list[str]:
     terms: list[str] = []
-    for item in _coerce_string_list(value):
-        for term in _extract_terms(item):
-            if term not in terms:
-                terms.append(term)
-        if item not in terms:
-            terms.append(item)
+    for value in (
+        turn.get("query"),
+        turn.get("retrieval_terms"),
+        turn.get("vector_query"),
+        turn.get("graph_seeds"),
+        turn.get("selected_note_titles"),
+        turn.get("selected_section_labels"),
+        turn.get("entities"),
+        turn.get("relations"),
+    ):
+        for item in _coerce_string_list(value):
+            for term in _extract_terms(item):
+                if term not in terms:
+                    terms.append(term)
+            if item not in terms:
+                terms.append(item)
     return terms
 
 
@@ -405,9 +415,9 @@ def _deterministic_semantic_packet(
     query = raw_user_input.strip()
     focus_terms: list[str] = []
     if _is_referential_user_input(raw_user_input) and len(retrieval_terms) < 4:
-        focus_terms = _focus_terms_from_value(active_focus)
+        focus_terms = _focus_terms(active_focus)
         for turn in recent_semantic_turns[-2:]:
-            focus_terms.extend(_focus_terms_from_value(turn))
+            focus_terms.extend(_semantic_turn_focus_terms(turn))
         focus_terms = list(dict.fromkeys(term for term in focus_terms if term))
         retrieval_terms = list(dict.fromkeys([*retrieval_terms, *focus_terms]))
         if focus_terms:
