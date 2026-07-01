@@ -18,7 +18,7 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 INLINE_LABEL_RE = re.compile(r"^(?P<label>[A-Za-z0-9][A-Za-z0-9/&()'., \-]{0,80}):(?:\s*(?P<remainder>.*))?$")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
 THEMATIC_BREAK_RE = re.compile(r"^\s*(?:---|\*\*\*|___)\s*$")
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
+WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ class NoteRecord:
     frontmatter: dict[str, Any]
     note_hash: str
     tag_values: tuple[str, ...]
-    wikilink_targets: tuple[str, ...]
+    wikilink_targets: tuple[dict[str, Any], ...]
     chunks: tuple[ChunkRecord, ...]
 
 
@@ -343,13 +343,53 @@ def _extract_tag_values(frontmatter: dict[str, Any]) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _extract_wikilink_targets(body_text: str) -> tuple[str, ...]:
-    targets: list[str] = []
+def _extract_wikilink_targets(body_text: str) -> tuple[dict[str, Any], ...]:
+    targets: list[dict[str, Any]] = []
     for match in WIKILINK_RE.findall(body_text):
-        normalized = _normalize_inline_whitespace(match)
-        if normalized and normalized not in targets:
-            targets.append(normalized)
+        parsed = _parse_wikilink_target(match)
+        if parsed is None:
+            continue
+        if parsed not in targets:
+            targets.append(parsed)
     return tuple(targets)
+
+
+def _parse_wikilink_target(raw_link_text: str) -> dict[str, Any] | None:
+    raw_text = _normalize_inline_whitespace(raw_link_text)
+    if not raw_text:
+        return None
+    alias_text: str | None = None
+    if "|" in raw_text:
+        target_part, alias_part = raw_text.split("|", 1)
+        alias_text = _normalize_inline_whitespace(alias_part) or None
+    else:
+        target_part = raw_text
+    target_part = _normalize_inline_whitespace(target_part)
+    if not target_part:
+        return None
+    heading_text: str | None = None
+    if "#" in target_part:
+        target_note_text, heading_part = target_part.split("#", 1)
+        heading_text = _normalize_inline_whitespace(heading_part) or None
+    else:
+        target_note_text = target_part
+    target_note_text = _strip_optional_md_suffix(_normalize_inline_whitespace(target_note_text))
+    if not target_note_text:
+        return None
+    return {
+        "raw_wikilink_text": raw_text,
+        "target_raw": target_part,
+        "target_note": target_note_text,
+        "target_heading": heading_text,
+        "alias": alias_text,
+    }
+
+
+def _strip_optional_md_suffix(value: str) -> str:
+    normalized = _normalize_inline_whitespace(value)
+    if normalized.lower().endswith(".md"):
+        return normalized[:-3].rstrip()
+    return normalized
 
 
 def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
@@ -972,14 +1012,13 @@ def _rebuild_graph_layer(
 
     note_lookup: dict[str, str] = {}
     for note_record in note_records:
-        note_lookup[_normalize_note_reference(note_record.note_title)] = note_record.note_id
-        note_lookup[_normalize_note_reference(Path(note_record.relative_path).stem.replace("_", " "))] = note_record.note_id
+        for lookup_key in _note_lookup_keys(note_record):
+            if lookup_key not in note_lookup:
+                note_lookup[lookup_key] = note_record.note_id
 
     node_rows: list[tuple[Any, ...]] = []
     edge_rows: list[tuple[Any, ...]] = []
     seen_tag_nodes: set[str] = set()
-    seen_unresolved_nodes: set[str] = set()
-
     for note_record in note_records:
         note_node_id = _note_node_id(note_record.note_id)
         node_rows.append(
@@ -1073,33 +1112,30 @@ def _rebuild_graph_layer(
                 )
             )
 
-        for target_label in note_record.wikilink_targets:
-            resolved_note_id = note_lookup.get(_normalize_note_reference(target_label))
-            if resolved_note_id is not None:
-                target_node_id = _note_node_id(resolved_note_id)
-            else:
-                target_node_id = _unresolved_reference_node_id(target_label)
-                if target_node_id not in seen_unresolved_nodes:
-                    node_rows.append(
-                        (
-                            target_node_id,
-                            "unresolved_note_ref",
-                            target_label,
-                            target_label,
-                            json.dumps({"target_label": target_label}, ensure_ascii=True, sort_keys=True),
-                            run_id,
-                            generated_at,
-                        )
-                    )
-                    seen_unresolved_nodes.add(target_node_id)
+        for target_record in note_record.wikilink_targets:
+            target_note = str(target_record.get("target_note") or "").strip()
+            if not target_note:
+                continue
+            resolved_note_id = note_lookup.get(_normalize_note_reference(target_note))
+            if resolved_note_id is None:
+                continue
+            target_node_id = _note_node_id(resolved_note_id)
             edge_rows.append(
                 (
-                    _edge_id("wikilink", note_node_id, target_node_id, target_label),
+                    _edge_id("note_links_note", note_node_id, target_node_id, str(target_record.get("raw_wikilink_text") or "")),
                     note_node_id,
                     target_node_id,
-                    "wikilink",
+                    "note_links_note",
                     json.dumps(
-                        {"target_label": target_label, "resolved_note_id": resolved_note_id},
+                        {
+                            "raw_wikilink_text": target_record.get("raw_wikilink_text"),
+                            "target_raw": target_record.get("target_raw"),
+                            "target_note": target_note,
+                            "target_heading": target_record.get("target_heading"),
+                            "alias": target_record.get("alias"),
+                            "resolved": True,
+                            "resolved_note_id": resolved_note_id,
+                        },
                         ensure_ascii=True,
                         sort_keys=True,
                     ),
@@ -1221,6 +1257,25 @@ def _tag_node_id(tag_value: str) -> str:
     return f"tag::{_normalize_note_reference(tag_value)}"
 
 
+def _note_lookup_keys(note_record: NoteRecord) -> list[str]:
+    keys: list[str] = []
+
+    def add(value: str | None) -> None:
+        if not value:
+            return
+        normalized = _normalize_note_reference(value)
+        if normalized and normalized not in keys:
+            keys.append(normalized)
+
+    add(note_record.note_title)
+    relative_path = _normalize_inline_whitespace(note_record.relative_path)
+    add(relative_path)
+    add(_strip_optional_md_suffix(relative_path))
+    add(Path(note_record.relative_path).stem.replace("_", " "))
+    add(Path(note_record.relative_path).with_suffix("").as_posix())
+    return keys
+
+
 def _unresolved_reference_node_id(target_label: str) -> str:
     return f"unresolved::{_normalize_note_reference(target_label)}"
 
@@ -1272,7 +1327,7 @@ def _build_manifest(
                 "note_hash": note_record.note_hash,
                 "frontmatter": note_record.frontmatter,
                 "tag_values": list(note_record.tag_values),
-                "wikilink_targets": list(note_record.wikilink_targets),
+                "wikilink_targets": [dict(target_record) for target_record in note_record.wikilink_targets],
                 "chunk_ids": [chunk.chunk_id for chunk in note_record.chunks],
             }
             for note_record in note_records
