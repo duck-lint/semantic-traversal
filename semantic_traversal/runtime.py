@@ -1641,12 +1641,12 @@ def _build_turn_compilation_packet(
                 required_surfaces = [
                     surface_name
                     for surface_name, required in config.coverage_require_surface_contributions.items()
-                    if required and surface_name != "primary_corpus"
+                    if required
                 ]
                 optional_surfaces = [
                     surface_name
                     for surface_name, required in config.coverage_require_surface_contributions.items()
-                    if not required or surface_name == "primary_corpus"
+                    if not required
                 ]
                 normalized_coverage_policy["required_surfaces"] = required_surfaces
                 normalized_coverage_policy["optional_surfaces"] = optional_surfaces
@@ -2864,15 +2864,24 @@ def _build_synthesis_context_packet(
         "prior_thread_state": prior_thread_state,
         "visible_transcript_tail": thread_document["messages"][-6:],
         "semantic_compiler_packet": turn_compilation_packet.get("semantic_compiler_packet"),
-        "compiler_stage_diagnostics": turn_compilation_packet.get("compiler_stage_diagnostics", {}),
-        "semantic_compiler": turn_compilation_packet["semantic_compiler"],
-        "turn_compilation_packet": turn_compilation_packet,
         "semantic_traversal_manifest": semantic_traversal_manifest,
-        "retrieval_packet": retrieval_packet,
         "approved_retrieval_packet": retrieval_packet if coverage_decision == "approved" else None,
         "coverage_report": coverage_report,
         "runtime_outcome": "completed" if coverage_decision == "approved" else "blocked",
         "blocking_reasons": list(coverage_report.get("blocking_reasons") or []),
+        "compiler_stage_summary": {
+            "backend_mode": turn_compilation_packet.get("semantic_compiler", {})
+            .get("statuses", {})
+            .get("backend_mode"),
+            "isolated_status": turn_compilation_packet.get("semantic_compiler", {})
+            .get("statuses", {})
+            .get("isolated_status"),
+            "contextual_status": turn_compilation_packet.get("semantic_compiler", {})
+            .get("statuses", {})
+            .get("contextual_status"),
+            "validation_valid": bool(turn_compilation_packet.get("semantic_contract_validation", {}).get("valid")),
+            "validation_reasons": list(turn_compilation_packet.get("semantic_contract_validation", {}).get("reasons") or []),
+        },
         "output_requirements": [
             "Respond directly to the latest raw user input.",
             "Preserve continuity with the prior thread state.",

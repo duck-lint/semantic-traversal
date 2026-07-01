@@ -1027,7 +1027,7 @@
       ]
     },
     "turn_compilation_packet": {
-      "description": "Structured turn packet containing raw_user_utterance, semantic_compiler_packet, runtime diagnostics, and compatibility surfaces needed by current activation, traversal, retrieval, coverage, synthesis, state, and ledger operations.",
+      "description": "Structured compiler-stage turn record containing raw_user_utterance, semantic_compiler_packet, runtime diagnostics, and additive retrieval preparation for current activation, traversal, retrieval, coverage, synthesis, state, and ledger operations.",
       "created_by": "semantic_compiler_packet_generation",
       "consumed_by": [
         "latent_space_activation",

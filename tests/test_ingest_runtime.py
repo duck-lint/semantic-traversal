@@ -660,6 +660,16 @@ class IngestRuntimeTests(unittest.TestCase):
             "contextual_extraction",
             "extractor_thread_context",
             "extraction_confidence",
+            "EXTRACTION_TOKEN_RE",
+            "EXTRACTION_STOP_WORDS",
+            "REFERENT_EXTRACTION_PATTERNS",
+            "extract_isolated",
+            "extract_contextual",
+            "extract_terms",
+            "must_preserve",
+            "should_include",
+            "avoid_satisfying_with",
+            "coverage_target",
             "legacy_semantic",
             "legacy_contract",
             "legacy_payload",
@@ -2691,8 +2701,9 @@ class IngestRuntimeTests(unittest.TestCase):
             )
 
             self.assertIn("semantic_compiler_packet", result.synthesis_context_packet)
-            self.assertIn("compiler_stage_diagnostics", result.synthesis_context_packet)
-            self.assertIn("semantic_compiler_packet", result.synthesis_context_packet["turn_compilation_packet"])
+            self.assertIn("compiler_stage_summary", result.synthesis_context_packet)
+            self.assertNotIn("turn_compilation_packet", result.synthesis_context_packet)
+            self.assertNotIn("retrieval_packet", result.synthesis_context_packet)
             self.assertTrue(
                 any(
                     "Do not invent retrieval results" in requirement
@@ -2700,7 +2711,7 @@ class IngestRuntimeTests(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                result.synthesis_context_packet["turn_compilation_packet"]["semantic_compiler_packet"]["semantic_target"]["entities"][0]["label"],
+                result.synthesis_context_packet["semantic_compiler_packet"]["semantic_target"]["entities"][0]["label"],
                 "Schopenhauer's parallel postulate argument",
             )
 
@@ -3081,9 +3092,10 @@ class IngestRuntimeTests(unittest.TestCase):
                 self.assertEqual(result.runtime_outcome, "blocked")
                 self.assertIsNone(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
+            self.assertIn("semantic_compiler_packet", synthesis_context_packet)
             self.assertEqual(
-                synthesis_context_packet["turn_compilation_packet"]["retrieval_preparation"]["raw_lexical_terms"],
-                turn_compilation_packet["retrieval_preparation"]["raw_lexical_terms"],
+                synthesis_context_packet["semantic_compiler_packet"],
+                turn_compilation_packet["semantic_compiler_packet"],
             )
             self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
             self.assertIn("matched_chunks", coverage_report["limits"]["diagnostic_retrieval_observation"])
@@ -4319,8 +4331,8 @@ class IngestRuntimeTests(unittest.TestCase):
     def test_retrieval_preparation_prioritizes_compiler_plan_terms(self) -> None:
         retrieval_preparation = _build_retrieval_preparation(
             user_input="Please compare latent geometry and hyperbolic drift.",
-            isolated_packet={"parsed_payload": {"candidate_targets": ["legacy target"], "candidate_relations": []}},
-            contextual_packet={"parsed_payload": {"retrieval_hints": {"entity_hints": ["legacy hint"]}}},
+            isolated_packet={"parsed_payload": {"candidate_targets": ["focused compiler candidate"], "candidate_relations": []}},
+            contextual_packet={"parsed_payload": {"retrieval_hints": {"entity_hints": ["focused compiler hint"]}}},
             semantic_target={
                 "intent": "compare latent geometry and hyperbolic drift",
                 "question_type": "comparison_disambiguation",
@@ -4348,8 +4360,7 @@ class IngestRuntimeTests(unittest.TestCase):
         self.assertIn("hyperbolic", retrieval_preparation["combined_candidate_terms"])
         latent_sources = retrieval_preparation["candidate_term_sources"]["riemannian"]
         self.assertTrue(any(source.startswith("semantic_compiler_packet") for source in latent_sources))
-        combined = retrieval_preparation["combined_candidate_terms"]
-        self.assertLess(combined.index("riemannian"), combined.index("legacy"))
+        self.assertIn("semantic_compiler_packet.retrieval_plan.lexical_terms", latent_sources)
 
     def test_runtime_blocks_when_compiler_target_shape_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as data_dir:

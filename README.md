@@ -15,7 +15,7 @@ For each user message, the runtime:
 1. Loads prior `thread_state` and `conversation_thread` artifacts if they exist.
 2. Preserves the raw user input unchanged.
 3. Runs isolated semantic compiler stages from the raw message.
-4. Runs contextual semantic compiler stages using the raw message, prior thread state, and the isolated compiler output.
+4. Runs contextual semantic compiler stages using the raw message, prior thread state, and the isolated compiler-stage output.
 5. Builds additive retrieval preparation from raw lexical terms plus compiler hints.
 6. Activates lexical, primary-corpus, vector, graph, and optional synthetic-node surfaces from the ingestion database when available and configured.
 7. Builds a semantic traversal manifest from activated candidate regions.
@@ -84,7 +84,7 @@ Normal runtime execution is binary:
 
 Coverage uses `decision=approved` or `decision=blocked`. Blocked turns may still persist diagnostic observations, but those observations do not approve synthesis.
 
-Semantic extraction still uses explicit per-pass statuses:
+Semantic compiler stages still use explicit per-pass statuses:
 
 - `parsed`
 - `stub`
@@ -142,7 +142,7 @@ Useful files after a turn:
 - `semantic_compiler_packet.json` for the canonical compiler packet
 - `isolated_semantic_compiler_packet.json` for the isolated compiler-stage request, status, metadata, and parsed payload
 - `contextual_semantic_compiler_packet.json` for the contextual compiler-stage request, including prior thread state
-- `turn_compilation_packet.json` for the non-authoritative turn envelope and additive retrieval preparation
+- `turn_compilation_packet.json` for the non-authoritative compiler-stage turn envelope and additive retrieval preparation
 - `semantic_traversal_manifest.json` for activation surfaces, candidate regions, and selected chunk IDs
 - `retrieval_packet.json` for traversal-selected chunks and retrieval provenance
 - `coverage_report.json` for binary approval-vs-blocked gating plus blocking reasons
