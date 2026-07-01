@@ -73,6 +73,24 @@ class ResponseCompilerBackend:
         )
 
 
+class RecordingCompilerBackend:
+    mode_name = "recording"
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.calls: list[dict[str, Any]] = []
+
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        self.calls.append(packet)
+        return SemanticCompilerResponse(
+            parsed_payload=self.payload,
+            raw_response="recorded raw compiler response",
+            metadata={"backend_mode": self.mode_name},
+            diagnostics={"source": "recording"},
+            status="parsed",
+        )
+
+
 def _prepare_data_root() -> Path:
     temp_dir = tempfile.TemporaryDirectory()
     data_root = Path(temp_dir.name)
@@ -137,6 +155,163 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertEqual(second_turn.prior_thread_state["latest_turn_id"], 1)
             self.assertEqual(second_turn.next_thread_state["latest_turn_id"], 2)
             self.assertEqual(second_turn.prior_thread_state["latest_assistant_response"], first_turn.assistant_response)
+
+    def test_first_turn_writes_active_focus_into_thread_state(self) -> None:
+        data_root = _prepare_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(result.runtime_outcome, "completed")
+        self.assertEqual(result.next_thread_state["latest_turn_id"], 1)
+        self.assertEqual(result.next_thread_state["active_focus"]["query"], "Please retrieve the candy snack food before bed note.")
+        self.assertTrue(result.next_thread_state["active_focus"]["retrieval_terms"])
+        self.assertTrue(result.next_thread_state["active_focus"]["selected_chunk_ids"])
+
+    def test_second_turn_loads_prior_active_focus(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="I wonder if there's anything specific about how it makes me feel?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(second_turn.prior_thread_state["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
+        self.assertEqual(second_turn.prior_thread_state["active_focus"]["selected_note_titles"], first_turn.next_thread_state["active_focus"]["selected_note_titles"])
+
+    def test_referential_second_turn_augments_semantic_compiler_request_with_active_focus(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn_payload = {
+            "raw_user_input": "Please retrieve the candy snack food before bed note.",
+            "intent": "fixture",
+            "query": "candy snack food before bed",
+            "entities": [],
+            "relations": [],
+            "resolved_referents": [],
+            "retrieval_terms": ["candy", "snack", "food", "bed"],
+            "vector_query": "candy snack food before bed",
+            "graph_seeds": ["candy snack food before bed"],
+            "limitations": [],
+        }
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(first_turn_payload),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        second_turn_payload = {
+            "raw_user_input": "I wonder if there's anything specific about how it makes me feel?",
+            "intent": "fixture follow-up",
+            "query": "how does it make me feel",
+            "entities": [],
+            "relations": [],
+            "resolved_referents": [],
+            "retrieval_terms": ["feel"],
+            "vector_query": "how does it make me feel",
+            "graph_seeds": [],
+            "limitations": [],
+        }
+        compiler_backend = RecordingCompilerBackend(second_turn_payload)
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="I wonder if there's anything specific about how it makes me feel?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler_backend.calls), 1)
+        request_packet = compiler_backend.calls[0]
+        self.assertIn("active_focus", request_packet)
+        self.assertTrue(request_packet["active_focus"]["retrieval_terms"])
+        self.assertTrue(request_packet["recent_semantic_turns"])
+        self.assertEqual(request_packet["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
+        self.assertEqual(second_turn.prior_thread_state["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
+
+    def test_deterministic_fallback_uses_active_focus_terms_on_referential_second_turn(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="How does it make me feel?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=ExplodingCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(second_turn.semantic_compiler_status, "fallback")
+        self.assertIn("candy", second_turn.semantic_compiler_packet["retrieval_terms"])
+        self.assertIn("bed", second_turn.semantic_compiler_packet["retrieval_terms"])
+        self.assertIn("candy snack food before bed", second_turn.semantic_compiler_packet["vector_query"])
+
+    def test_recent_semantic_turns_are_capped_to_small_tail(self) -> None:
+        data_root = _prepare_data_root()
+        thread_id: str | None = None
+        last_result = None
+        for turn_number in range(1, 9):
+            last_result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input=f"Please retrieve the candy snack food before bed note {turn_number}.",
+                llm_backend=RecordingLLMBackend(),
+                thread_id=thread_id,
+                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                embedding_backend=FakeEmbeddingBackend(),
+            )
+            thread_id = last_result.thread_id
+        self.assertIsNotNone(last_result)
+        self.assertLessEqual(len(last_result.next_thread_state["recent_semantic_turns"]), 6)
+        self.assertEqual(last_result.next_thread_state["recent_semantic_turns"][-1]["turn_id"], 8)
+
+    def test_synthesis_packet_includes_improved_prior_thread_state(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="How does it make me feel?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        synthesis_packet = _turn_artifact(second_turn.synthesis_context_packet_path)
+        self.assertEqual(synthesis_packet["prior_thread_state"]["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
+        self.assertTrue(synthesis_packet["prior_thread_state"]["recent_semantic_turns"])
+        self.assertNotIn("raw_response", synthesis_packet)
 
     def test_compiler_packet_preserves_raw_user_input(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

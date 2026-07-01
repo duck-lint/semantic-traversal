@@ -88,7 +88,41 @@ def _canonical_stub_packet(raw_user_input: str) -> dict[str, Any]:
     }
 
 
-def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+def _active_focus_terms(packet: dict[str, Any]) -> list[str]:
+    active_focus = packet.get("active_focus")
+    terms: list[str] = []
+    if isinstance(active_focus, dict):
+        for value in (
+            active_focus.get("query"),
+            active_focus.get("vector_query"),
+            active_focus.get("retrieval_terms"),
+            active_focus.get("graph_seeds"),
+            active_focus.get("selected_note_titles"),
+            active_focus.get("selected_section_labels"),
+        ):
+            if isinstance(value, list):
+                candidates = value
+            else:
+                candidates = [value]
+            for candidate in candidates:
+                if candidate is None:
+                    continue
+                for term in collect_compiler_terms(str(candidate)) if isinstance(candidate, str) else []:
+                    if term not in terms:
+                        terms.append(term)
+                if isinstance(candidate, str):
+                    cleaned = candidate.strip()
+                    if cleaned and cleaned not in terms:
+                        terms.append(cleaned)
+    return terms
+
+
+def _is_referential_input(text: str) -> bool:
+    lowered = text.lower()
+    return any(f" {surface} " in f" {lowered} " for surface in ("it", "that", "this", "those", "they", "them"))
+
+
+def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None, *, packet: dict[str, Any] | None = None) -> dict[str, Any]:
     fallback = _canonical_stub_packet(raw_user_input)
     if not isinstance(payload, dict):
         return fallback
@@ -114,6 +148,12 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     result["vector_query"] = vector_query or result["query"]
     if not result["retrieval_terms"]:
         result["retrieval_terms"] = collect_compiler_terms(result["query"])
+    focus_terms = _active_focus_terms(packet or {})
+    if _is_referential_input(raw_user_input) and focus_terms:
+        merged_terms = list(dict.fromkeys([*result["retrieval_terms"], *focus_terms]))
+        result["retrieval_terms"] = merged_terms
+        if result["vector_query"].strip():
+            result["vector_query"] = f"{result['vector_query'].strip()} {' '.join(focus_terms[:6])}".strip()
     if not result["graph_seeds"] and result["retrieval_terms"]:
         result["graph_seeds"] = [result["query"]]
     return result
@@ -123,6 +163,9 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
     return (
         "Return JSON only.\n"
         "Compile a minimal semantic target for traversal. Do not answer the user.\n"
+        "Use active_focus and recent_semantic_turns to resolve referential follow-ups.\n"
+        "For words like it, that, this, those, they, or them, prefer the current active focus unless contradicted by the raw user input.\n"
+        "Preserve the raw user input exactly.\n"
         "Use this exact canonical shape:\n"
         "{"
         '"raw_user_input": "", '
@@ -164,7 +207,7 @@ class StubSemanticCompilerBackend:
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input") or "")
         payload = self._payload or _canonical_stub_packet(raw_user_input)
-        canonical_payload = _canonicalize_response_payload(raw_user_input, payload)
+        canonical_payload = _canonicalize_response_payload(raw_user_input, payload, packet=packet)
         return SemanticCompilerResponse(
             parsed_payload=canonical_payload,
             raw_response=None,
@@ -242,7 +285,7 @@ class OllamaSemanticCompilerBackend:
                 diagnostics={},
                 status="invalid_json",
             )
-        canonical_payload = _canonicalize_response_payload(str(packet.get("raw_user_input") or ""), parsed_payload)
+        canonical_payload = _canonicalize_response_payload(str(packet.get("raw_user_input") or ""), parsed_payload, packet=packet)
         return SemanticCompilerResponse(
             parsed_payload=canonical_payload,
             raw_response=raw_response_text,

@@ -54,6 +54,22 @@ STOP_WORDS = {
     "your",
 }
 REFERENTIAL_SURFACE_WORDS = {"it", "that", "this", "those", "they", "them"}
+RECENT_SEMANTIC_TURN_LIMIT = 6
+ASSISTANT_SNIPPET_LIMIT = 120
+
+
+def _default_active_focus() -> dict[str, Any]:
+    return {
+        "query": None,
+        "entities": [],
+        "relations": [],
+        "retrieval_terms": [],
+        "vector_query": None,
+        "graph_seeds": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+    }
 
 
 @dataclass(frozen=True)
@@ -155,12 +171,183 @@ def _ensure_message_list(messages: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _ensure_recent_semantic_turns(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    turns: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        turn_id = entry.get("turn_id")
+        raw_user_input = str(entry.get("raw_user_input") or "").strip()
+        query = str(entry.get("query") or "").strip()
+        if turn_id is None or not raw_user_input:
+            continue
+        turns.append(
+            {
+                "turn_id": turn_id,
+                "raw_user_input": raw_user_input,
+                "assistant_response_snippet": str(entry.get("assistant_response_snippet") or "").strip(),
+                "query": query,
+                "entities": _coerce_string_list(entry.get("entities")),
+                "relations": _coerce_string_list(entry.get("relations")),
+                "retrieval_terms": _coerce_string_list(entry.get("retrieval_terms")),
+                "vector_query": str(entry.get("vector_query") or "").strip(),
+                "graph_seeds": _coerce_string_list(entry.get("graph_seeds")),
+                "selected_chunk_ids": _coerce_string_list(entry.get("selected_chunk_ids")),
+                "selected_note_titles": _coerce_string_list(entry.get("selected_note_titles")),
+                "selected_section_labels": _coerce_string_list(entry.get("selected_section_labels")),
+            }
+        )
+    return turns[-RECENT_SEMANTIC_TURN_LIMIT:]
+
+
+def _normalize_active_focus(value: Any) -> dict[str, Any]:
+    focus = _default_active_focus()
+    if not isinstance(value, dict):
+        return focus
+    focus["query"] = str(value.get("query") or "").strip() or None
+    focus["entities"] = _coerce_string_list(value.get("entities"))
+    focus["relations"] = _coerce_string_list(value.get("relations"))
+    focus["retrieval_terms"] = _coerce_string_list(value.get("retrieval_terms"))
+    focus["vector_query"] = str(value.get("vector_query") or "").strip() or None
+    focus["graph_seeds"] = _coerce_string_list(value.get("graph_seeds"))
+    focus["selected_chunk_ids"] = _coerce_string_list(value.get("selected_chunk_ids"))
+    focus["selected_note_titles"] = _coerce_string_list(value.get("selected_note_titles"))
+    focus["selected_section_labels"] = _coerce_string_list(value.get("selected_section_labels"))
+    return focus
+
+
+def _focus_terms(focus: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    for value in (
+        focus.get("retrieval_terms"),
+        focus.get("graph_seeds"),
+        focus.get("selected_note_titles"),
+        focus.get("selected_section_labels"),
+        [focus.get("query")],
+        [focus.get("vector_query")],
+    ):
+        for item in _coerce_string_list(value):
+            for term in _extract_terms(item):
+                if term not in terms:
+                    terms.append(term)
+            if item not in terms:
+                terms.append(item)
+    return terms
+
+
+def _is_referential_user_input(text: str) -> bool:
+    lowered = f" {text.lower()} "
+    return any(f" {surface} " in lowered for surface in REFERENTIAL_SURFACE_WORDS)
+
+
+def _snippet(text: str, limit: int = ASSISTANT_SNIPPET_LIMIT) -> str:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+def _focus_terms_from_value(value: Any) -> list[str]:
+    terms: list[str] = []
+    for item in _coerce_string_list(value):
+        for term in _extract_terms(item):
+            if term not in terms:
+                terms.append(term)
+        if item not in terms:
+            terms.append(item)
+    return terms
+
+
+def _compact_active_focus(
+    *,
+    semantic_compiler_packet: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    selected_chunks = retrieval_packet.get("selected_chunks")
+    selected_chunk_ids: list[str] = []
+    selected_note_titles: list[str] = []
+    selected_section_labels: list[str] = []
+    if isinstance(selected_chunks, list):
+        for chunk in selected_chunks:
+            if not isinstance(chunk, dict):
+                continue
+            chunk_id = str(chunk.get("chunk_id") or "").strip()
+            note_title = str(chunk.get("note_title") or "").strip()
+            section_label = str(chunk.get("section_label") or "").strip()
+            if chunk_id and chunk_id not in selected_chunk_ids:
+                selected_chunk_ids.append(chunk_id)
+            if note_title and note_title not in selected_note_titles:
+                selected_note_titles.append(note_title)
+            if section_label and section_label not in selected_section_labels:
+                selected_section_labels.append(section_label)
+    return {
+        "query": str(semantic_compiler_packet.get("query") or "").strip() or None,
+        "entities": _coerce_string_list(semantic_compiler_packet.get("entities")),
+        "relations": _coerce_string_list(semantic_compiler_packet.get("relations")),
+        "retrieval_terms": _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")),
+        "vector_query": str(semantic_compiler_packet.get("vector_query") or "").strip() or None,
+        "graph_seeds": _coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
+        "selected_chunk_ids": selected_chunk_ids,
+        "selected_note_titles": selected_note_titles,
+        "selected_section_labels": selected_section_labels,
+    }
+
+
+def _recent_semantic_turns_from_state(value: Any) -> list[dict[str, Any]]:
+    return _ensure_recent_semantic_turns(value)
+
+
+def _build_recent_semantic_turn(
+    *,
+    turn_id: int,
+    raw_user_input: str,
+    assistant_response: str | None,
+    semantic_compiler_packet: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    selected_chunks = retrieval_packet.get("selected_chunks")
+    selected_chunk_ids: list[str] = []
+    selected_note_titles: list[str] = []
+    selected_section_labels: list[str] = []
+    if isinstance(selected_chunks, list):
+        for chunk in selected_chunks:
+            if not isinstance(chunk, dict):
+                continue
+            chunk_id = str(chunk.get("chunk_id") or "").strip()
+            note_title = str(chunk.get("note_title") or "").strip()
+            section_label = str(chunk.get("section_label") or "").strip()
+            if chunk_id and chunk_id not in selected_chunk_ids:
+                selected_chunk_ids.append(chunk_id)
+            if note_title and note_title not in selected_note_titles:
+                selected_note_titles.append(note_title)
+            if section_label and section_label not in selected_section_labels:
+                selected_section_labels.append(section_label)
+    return {
+        "turn_id": turn_id,
+        "raw_user_input": raw_user_input,
+        "assistant_response_snippet": _snippet(assistant_response or ""),
+        "query": str(semantic_compiler_packet.get("query") or "").strip(),
+        "entities": _coerce_string_list(semantic_compiler_packet.get("entities")),
+        "relations": _coerce_string_list(semantic_compiler_packet.get("relations")),
+        "retrieval_terms": _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")),
+        "vector_query": str(semantic_compiler_packet.get("vector_query") or "").strip(),
+        "graph_seeds": _coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
+        "selected_chunk_ids": selected_chunk_ids,
+        "selected_note_titles": selected_note_titles,
+        "selected_section_labels": selected_section_labels,
+    }
+
+
 def _default_thread_state(thread_id: str, created_at: str) -> dict[str, Any]:
     return {
         "thread_id": thread_id,
         "latest_turn_id": 0,
         "conversation_summary": "",
         "recent_messages": [],
+        "recent_semantic_turns": [],
+        "active_focus": _default_active_focus(),
         "latest_user_input": None,
         "latest_assistant_response": None,
         "updated_at": created_at,
@@ -192,11 +379,15 @@ def _compiler_request_packet(
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
     recent_messages: list[dict[str, Any]],
+    recent_semantic_turns: list[dict[str, Any]],
+    active_focus: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "raw_user_input": raw_user_input,
         "prior_thread_state": prior_thread_state,
         "recent_messages": recent_messages,
+        "recent_semantic_turns": recent_semantic_turns,
+        "active_focus": active_focus,
         "instruction": "Compile a minimal semantic target for traversal. Do not answer the user.",
     }
 
@@ -206,10 +397,21 @@ def _deterministic_semantic_packet(
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
     recent_messages: list[dict[str, Any]],
+    active_focus: dict[str, Any],
+    recent_semantic_turns: list[dict[str, Any]],
     limitations: list[str] | None = None,
 ) -> dict[str, Any]:
     retrieval_terms = _extract_terms(raw_user_input)
     query = raw_user_input.strip()
+    focus_terms: list[str] = []
+    if _is_referential_user_input(raw_user_input) and len(retrieval_terms) < 4:
+        focus_terms = _focus_terms_from_value(active_focus)
+        for turn in recent_semantic_turns[-2:]:
+            focus_terms.extend(_focus_terms_from_value(turn))
+        focus_terms = list(dict.fromkeys(term for term in focus_terms if term))
+        retrieval_terms = list(dict.fromkeys([*retrieval_terms, *focus_terms]))
+        if focus_terms:
+            query = f"{query} {' '.join(focus_terms[:8])}".strip()
     graph_seeds: list[str] = []
     if retrieval_terms:
         graph_seeds.append(query)
@@ -238,6 +440,8 @@ def _canonicalize_compiler_packet(
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
     recent_messages: list[dict[str, Any]],
+    active_focus: dict[str, Any],
+    recent_semantic_turns: list[dict[str, Any]],
     payload: dict[str, Any] | None,
     fallback_limitations: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -245,6 +449,8 @@ def _canonicalize_compiler_packet(
         raw_user_input=raw_user_input,
         prior_thread_state=prior_thread_state,
         recent_messages=recent_messages,
+        active_focus=active_focus,
+        recent_semantic_turns=recent_semantic_turns,
         limitations=fallback_limitations,
     )
     if not isinstance(payload, dict):
@@ -272,6 +478,8 @@ def _compiler_response_to_packet(
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
     recent_messages: list[dict[str, Any]],
+    active_focus: dict[str, Any],
+    recent_semantic_turns: list[dict[str, Any]],
     response: SemanticCompilerResponse,
 ) -> tuple[dict[str, Any], str]:
     payload = response.parsed_payload if isinstance(response.parsed_payload, dict) else None
@@ -281,6 +489,8 @@ def _compiler_response_to_packet(
                 raw_user_input=raw_user_input,
                 prior_thread_state=prior_thread_state,
                 recent_messages=recent_messages,
+                active_focus=active_focus,
+                recent_semantic_turns=recent_semantic_turns,
                 payload=payload,
             ),
             response.status,
@@ -290,6 +500,8 @@ def _compiler_response_to_packet(
             raw_user_input=raw_user_input,
             prior_thread_state=prior_thread_state,
             recent_messages=recent_messages,
+            active_focus=active_focus,
+            recent_semantic_turns=recent_semantic_turns,
             limitations=["semantic compiler backend unavailable; deterministic lexical fallback used"],
         ),
         "fallback",
@@ -788,6 +1000,8 @@ def _update_thread_state(
     turn_id: int,
     raw_user_input: str,
     assistant_response: str | None,
+    semantic_compiler_packet: dict[str, Any],
+    retrieval_packet: dict[str, Any],
     created_at: str,
 ) -> dict[str, Any]:
     recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
@@ -795,11 +1009,28 @@ def _update_thread_state(
     if assistant_response is not None:
         _append_turn_message(messages=recent_messages, role="assistant", content=assistant_response, turn_id=turn_id)
     recent_messages = recent_messages[-6:]
+    recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"))
+    recent_semantic_turns.append(
+        _build_recent_semantic_turn(
+            turn_id=turn_id,
+            raw_user_input=raw_user_input,
+            assistant_response=assistant_response,
+            semantic_compiler_packet=semantic_compiler_packet,
+            retrieval_packet=retrieval_packet,
+        )
+    )
+    recent_semantic_turns = recent_semantic_turns[-RECENT_SEMANTIC_TURN_LIMIT:]
+    active_focus = _compact_active_focus(
+        semantic_compiler_packet=semantic_compiler_packet,
+        retrieval_packet=retrieval_packet,
+    )
     thread_state = {
         "thread_id": thread_id,
         "latest_turn_id": turn_id,
         "conversation_summary": str(prior_thread_state.get("conversation_summary") or ""),
         "recent_messages": recent_messages,
+        "recent_semantic_turns": recent_semantic_turns,
+        "active_focus": active_focus,
         "latest_user_input": raw_user_input,
         "latest_assistant_response": assistant_response,
         "updated_at": created_at,
@@ -876,6 +1107,13 @@ def run_thread_turn(
         data_root=resolved_data_root,
         config=resolved_config,
     )
+    recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
+    recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"))
+    active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
+    prior_thread_state = dict(prior_thread_state)
+    prior_thread_state["recent_messages"] = recent_messages
+    prior_thread_state["recent_semantic_turns"] = recent_semantic_turns
+    prior_thread_state["active_focus"] = active_focus
     thread_id_value = str(conversation_thread.get("thread_id") or prior_thread_state.get("thread_id") or thread_state_path.parent.name)
     parent_perturbation_hash = conversation_thread.get("latest_perturbation_hash")
     turn_id = int(prior_thread_state.get("latest_turn_id") or 0) + 1
@@ -884,11 +1122,12 @@ def run_thread_turn(
     turn_root = turn_paths.turn_root(turn_id)
     turn_root.mkdir(parents=True, exist_ok=True)
 
-    recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
     compiler_request = _compiler_request_packet(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
         recent_messages=recent_messages,
+        recent_semantic_turns=recent_semantic_turns,
+        active_focus=active_focus,
     )
     compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(repo_root=resolved_repo_root, config=resolved_config)
     try:
@@ -906,6 +1145,8 @@ def run_thread_turn(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
         recent_messages=recent_messages,
+        active_focus=active_focus,
+        recent_semantic_turns=recent_semantic_turns,
         response=compiler_response,
     )
 
@@ -979,6 +1220,8 @@ def run_thread_turn(
         turn_id=turn_id,
         raw_user_input=user_input,
         assistant_response=assistant_response_text,
+        semantic_compiler_packet=semantic_compiler_packet,
+        retrieval_packet=retrieval_packet,
         created_at=created_at,
     )
 
