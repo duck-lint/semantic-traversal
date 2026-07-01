@@ -196,27 +196,6 @@ def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
             "contextual_user_intent": {"type": "string"},
             "thread_relevant_context": {"type": "array", "items": {"type": "string"}},
             "semantic_pressure": {"type": ["string", "null"]},
-            "resolved_referents": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": True,
-                    "required": [
-                        "surface_form",
-                        "resolved_to",
-                        "source",
-                        "confidence",
-                        "required_for_target",
-                    ],
-                    "properties": {
-                        "surface_form": {"type": "string"},
-                        "resolved_to": {"type": "string"},
-                        "source": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-                        "required_for_target": {"type": "boolean"},
-                    },
-                },
-            },
             "candidate_targets": {"type": "array", "items": {"type": "string"}},
             "candidate_relations": {"type": "array", "items": {"type": "string"}},
             "resolved_referents": {
@@ -442,7 +421,7 @@ def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, 
     }
 
 
-def _extract_referent_candidate(text: str) -> str | None:
+def _resolve_referent_candidate(text: str) -> str | None:
     for pattern in REFERENT_CANDIDATE_PATTERNS:
         match = pattern.search(text)
         if match:
@@ -474,14 +453,14 @@ def _resolve_followup_referents(
     resolved_to: str | None = None
     source = "prior_thread_state.recent_messages"
     for candidate_text in reversed(referent_candidates):
-        resolved_to = _extract_referent_candidate(candidate_text)
+        resolved_to = _resolve_referent_candidate(candidate_text)
         if resolved_to:
             break
     if not resolved_to:
         for candidate_text in reversed(list(prior_thread_state.get("recent_semantic_trajectory") or [])):
             if not isinstance(candidate_text, str):
                 continue
-            resolved_to = _extract_referent_candidate(candidate_text)
+            resolved_to = _resolve_referent_candidate(candidate_text)
             if resolved_to:
                 source = "prior_thread_state.recent_semantic_trajectory"
                 break
@@ -650,12 +629,12 @@ class OllamaSemanticCompilerBackend:
         self._timeout_seconds = timeout_seconds
 
     def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return self._extract(packet)
+        return self._request_compiler_response(packet)
 
     def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return self._extract(packet)
+        return self._request_compiler_response(packet)
 
-    def _extract(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def _request_compiler_response(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
             return SemanticCompilerResponse(
                 parsed_payload=None,

@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import yaml
 
-from semantic_traversal.config import ConfigError, load_runtime_config
+from semantic_traversal.config import ConfigError, RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import resolve_embedding_backend
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import IngestSourceRoot, build_default_source_roots, run_ingest
@@ -3093,10 +3093,17 @@ class IngestRuntimeTests(unittest.TestCase):
                 self.assertIsNone(synthesis_context_packet["approved_retrieval_packet"])
             self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in retrieval_packet["selected_chunks"]))
             self.assertIn("semantic_compiler_packet", synthesis_context_packet)
+            self.assertIn("semantic_traversal_manifest", synthesis_context_packet)
+            self.assertIn("coverage_report", synthesis_context_packet)
+            self.assertIn("compiler_stage_summary", synthesis_context_packet)
             self.assertEqual(
                 synthesis_context_packet["semantic_compiler_packet"],
                 turn_compilation_packet["semantic_compiler_packet"],
             )
+            self.assertNotIn("turn_compilation_packet", synthesis_context_packet)
+            self.assertNotIn("retrieval_packet", synthesis_context_packet)
+            self.assertNotIn("compiler_stage_diagnostics", synthesis_context_packet)
+            self.assertNotIn("semantic_compiler", synthesis_context_packet)
             self.assertGreater(len(semantic_traversal_manifest["selected_chunk_ids"]), 0)
             self.assertIn("matched_chunks", coverage_report["limits"]["diagnostic_retrieval_observation"])
             self.assertEqual(ledger[-1]["turn_compilation_packet_hash"], sha256_json(turn_compilation_packet))
@@ -3813,6 +3820,120 @@ class IngestRuntimeTests(unittest.TestCase):
             optional_report["semantic_compiler_alignment"]["surface_alignment"]["missing_optional_surfaces"],
             ["graph_layer", "primary_corpus"],
         )
+
+    def test_turn_compilation_packet_surface_policy_uses_config_without_special_casing(self) -> None:
+        compiler_artifacts = SemanticCompilerArtifacts(
+            isolated_packet={
+                "backend_mode": "parsed",
+                "status": "parsed",
+                "parsed_payload": {
+                    "raw_user_input": "surface policy probe",
+                    "candidate_targets": ["surface policy probe"],
+                    "candidate_relations": [],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output"],
+                },
+            },
+            isolated_raw_artifact={},
+            contextual_packet={
+                "backend_mode": "parsed",
+                "status": "parsed",
+                "parsed_payload": {
+                    "raw_user_input": "surface policy probe",
+                    "candidate_targets": ["surface policy probe"],
+                    "candidate_relations": [],
+                    "retrieval_hints": {"entity_hints": ["surface policy probe"]},
+                    "avoidance_hints": [],
+                    "compiler_confidence": "low",
+                    "limitations": ["model-generated compiler-stage output"],
+                },
+            },
+            contextual_raw_artifact={},
+        )
+        thread_document = {"thread_id": "thread-test", "messages": []}
+        prior_thread_state = {}
+
+        required_config = RuntimeConfig(
+            repo_root=REPO_ROOT,
+            config_path=DEFAULT_CONFIG_SOURCE,
+            raw={
+                "runtime": {"data_root": ".semantic-traversal-data", "max_retrieval_chunks": 8},
+                "llm": {"model": "stub", "max_output_tokens": 64},
+                "semantic_compiler": {"provider": "stub", "model": "stub", "base_url": "http://localhost", "request_timeout_seconds": 1},
+                "embeddings": {"provider": "stub", "model": "stub", "base_url": None, "batch_size": 1, "normalize_embeddings": False, "device": None, "request_timeout_seconds": 1},
+                "paths": {"corpus_roots": []},
+                "storage": {
+                    "thread_state_root": ".semantic-traversal-data",
+                    "ledger_filename": "thread_ledger.jsonl",
+                    "manifest_filename": "manifest.json",
+                },
+                "coverage": {
+                    "require_surface_contributions": {
+                        "lexical_index_surface": True,
+                        "primary_corpus": True,
+                        "vector_index_surface": False,
+                        "graph_layer": True,
+                        "synthetic_nodes": False,
+                    },
+                    "graph_expansion_hop_limit": 1,
+                    "allow_no_retrieval_needed": False,
+                    "min_selected_chunks": 1,
+                    "max_selected_chunks": 8,
+                },
+            },
+        )
+
+        required_packet = _build_turn_compilation_packet(
+            thread_document=thread_document,
+            prior_thread_state=prior_thread_state,
+            user_input="surface policy probe",
+            turn_id=1,
+            semantic_compiler=compiler_artifacts,
+            config=required_config,
+        )
+        self.assertIn("primary_corpus", required_packet["semantic_compiler_packet"]["coverage_policy"]["required_surfaces"])
+        self.assertIn("graph_layer", required_packet["semantic_compiler_packet"]["coverage_policy"]["required_surfaces"])
+
+        optional_config = RuntimeConfig(
+            repo_root=REPO_ROOT,
+            config_path=DEFAULT_CONFIG_SOURCE,
+            raw={
+                "runtime": {"data_root": ".semantic-traversal-data", "max_retrieval_chunks": 8},
+                "llm": {"model": "stub", "max_output_tokens": 64},
+                "semantic_compiler": {"provider": "stub", "model": "stub", "base_url": "http://localhost", "request_timeout_seconds": 1},
+                "embeddings": {"provider": "stub", "model": "stub", "base_url": None, "batch_size": 1, "normalize_embeddings": False, "device": None, "request_timeout_seconds": 1},
+                "paths": {"corpus_roots": []},
+                "storage": {
+                    "thread_state_root": ".semantic-traversal-data",
+                    "ledger_filename": "thread_ledger.jsonl",
+                    "manifest_filename": "manifest.json",
+                },
+                "coverage": {
+                    "require_surface_contributions": {
+                        "lexical_index_surface": True,
+                        "primary_corpus": False,
+                        "vector_index_surface": False,
+                        "graph_layer": False,
+                        "synthetic_nodes": False,
+                    },
+                    "graph_expansion_hop_limit": 1,
+                    "allow_no_retrieval_needed": False,
+                    "min_selected_chunks": 1,
+                    "max_selected_chunks": 8,
+                },
+            },
+        )
+
+        optional_packet = _build_turn_compilation_packet(
+            thread_document=thread_document,
+            prior_thread_state=prior_thread_state,
+            user_input="surface policy probe",
+            turn_id=1,
+            semantic_compiler=compiler_artifacts,
+            config=optional_config,
+        )
+        self.assertIn("primary_corpus", optional_packet["semantic_compiler_packet"]["coverage_policy"]["optional_surfaces"])
+        self.assertIn("graph_layer", optional_packet["semantic_compiler_packet"]["coverage_policy"]["optional_surfaces"])
 
     def test_semantic_compiler_deduplicates_anchor_gap_diagnostics(self) -> None:
         inputs = _minimal_compiler_coverage_inputs(
