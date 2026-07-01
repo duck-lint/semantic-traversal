@@ -2,6 +2,21 @@ runtime:
   data_root: ".semantic-traversal-data"
   max_retrieval_chunks: 18
 
+graph_traversal:
+  enabled: true
+  hop_limit: 1
+  max_candidates: 24
+  seed_sources:
+    - graph_seeds
+    - active_focus
+    - retrieval_terms
+  edge_type_allowlist:
+    - note_links_note
+  node_type_allowlist:
+    - note
+  match_mode: "exact_or_token_overlap"
+  min_token_overlap: 2
+
 llm:
   model: "gpt-5.4-mini"
   max_output_tokens: 6000

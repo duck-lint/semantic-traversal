@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from semantic_traversal.config import load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import IngestSourceRoot, run_ingest
@@ -36,6 +37,16 @@ class FakeEmbeddingBackend:
             float(lowered.count("dream")),
             float(lowered.count("bed")),
         ]
+
+
+class UnavailableEmbeddingBackend:
+    mode_name = "unavailable"
+
+    def embed_texts(self, texts: list[str]) -> EmbeddingResponse:
+        return EmbeddingResponse(vectors=None, metadata={"backend_mode": self.mode_name}, status="unavailable")
+
+    def embed_query_text(self, text: str) -> EmbeddingResponse:
+        return self.embed_texts([text])
 
 
 class RecordingLLMBackend:
@@ -107,8 +118,76 @@ def _prepare_data_root() -> Path:
 _prepare_data_root._temp_dirs = []  # type: ignore[attr-defined]
 
 
+def _prepare_graph_fixture_data_root() -> Path:
+    temp_dir = tempfile.TemporaryDirectory()
+    data_root = Path(temp_dir.name)
+    _prepare_graph_fixture_data_root._temp_dirs.append(temp_dir)  # type: ignore[attr-defined]
+    source_root = data_root / "graph-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    (source_root / "A.md").write_text(
+        """
+        # A
+
+        Links to [[B]].
+
+        Links to [[C|see alias]].
+
+        Links to [[B#Sleep Section|sleep alias]].
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (source_root / "B.md").write_text(
+        """
+        # B
+
+        ## Sleep Section
+
+        B content paragraph.
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (source_root / "C.md").write_text(
+        """
+        # C
+
+        C content paragraph.
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = load_runtime_config(repo_root=REPO_ROOT)
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="graph-fixture", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+        config=config,
+    )
+    return data_root
+
+
+_prepare_graph_fixture_data_root._temp_dirs = []  # type: ignore[attr-defined]
+
+
 def _turn_artifact(path: Path) -> dict[str, Any]:
     return load_json(path) or {}
+
+
+def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> dict[str, Any]:
+    return {
+        "raw_user_input": raw_user_input,
+        "intent": "fixture",
+        "query": raw_user_input,
+        "entities": [],
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_terms": [],
+        "vector_query": "",
+        "graph_seeds": graph_seeds,
+        "limitations": [],
+    }
 
 
 class ThesisRuntimeTests(unittest.TestCase):
@@ -193,6 +272,129 @@ class ThesisRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(second_turn.prior_thread_state["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
         self.assertEqual(second_turn.prior_thread_state["active_focus"]["selected_note_titles"], first_turn.next_thread_state["active_focus"]["selected_note_titles"])
+
+    def test_graph_traversal_disabled_is_skipped(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        config.raw["graph_traversal"]["enabled"] = False
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["enabled"], False)
+        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["graph"], 0)
+        self.assertTrue(any("graph traversal disabled" in note for note in result.semantic_traversal_manifest["selection_notes"]))
+
+    def test_graph_traversal_hop_limit_one_retrieves_directly_linked_note(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        config.raw["graph_traversal"]["hop_limit"] = 1
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        selected_titles = [chunk["note_title"] for chunk in result.retrieval_packet["selected_chunks"]]
+        self.assertIn("A", selected_titles)
+        self.assertIn("B", selected_titles)
+        self.assertIn("C", selected_titles)
+        self.assertTrue(any("wikilink hop 1" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
+
+    def test_graph_traversal_hop_limit_zero_does_not_expand_linked_note(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        config.raw["graph_traversal"]["hop_limit"] = 0
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        selected_titles = [chunk["note_title"] for chunk in result.retrieval_packet["selected_chunks"]]
+        self.assertIn("A", selected_titles)
+        self.assertNotIn("B", selected_titles)
+        self.assertNotIn("C", selected_titles)
+
+    def test_alias_wikilink_still_resolves_canonical_target_note(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        selected_titles = [chunk["note_title"] for chunk in result.retrieval_packet["selected_chunks"]]
+        self.assertIn("C", selected_titles)
+        self.assertTrue(any("wikilink hop" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"] if chunk["note_title"] == "C"))
+
+    def test_edge_type_allowlist_controls_traversal(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        config.raw["graph_traversal"]["edge_type_allowlist"] = ["nonexistent_edge_type"]
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["edge_types_used"], [])
+        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["graph"], len([chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["selection_reason"].startswith("graph")]))
+        self.assertFalse(any("wikilink hop" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
+
+    def test_active_focus_can_supply_graph_seeds_on_referential_second_turn(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="What about it?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("What about it?", graph_seeds=[])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(second_turn.semantic_traversal_manifest["graph_traversal"]["enabled"], True)
+        self.assertIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
+        self.assertGreater(second_turn.semantic_traversal_manifest["graph_traversal"]["matched_seed_count"], 0)
+        self.assertTrue(any("wikilink hop" in chunk["selection_reason"] for chunk in second_turn.retrieval_packet["selected_chunks"]))
+
+    def test_graph_traversal_notes_appear_in_manifest(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertIn("graph_traversal", result.semantic_traversal_manifest)
+        self.assertTrue(result.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
+        self.assertTrue(any(note.startswith("graph traversal enabled=") or note == "graph traversal disabled" for note in result.semantic_traversal_manifest["selection_notes"]))
 
     def test_referential_second_turn_augments_semantic_compiler_request_with_active_focus(self) -> None:
         data_root = _prepare_data_root()

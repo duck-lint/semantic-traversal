@@ -553,6 +553,70 @@ def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _graph_seed_values(
+    *,
+    semantic_compiler_packet: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+    config: RuntimeConfig,
+) -> list[tuple[str, str]]:
+    seeds: list[tuple[str, str]] = []
+    active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
+    configured_sources = set(config.graph_traversal_seed_sources)
+    if "graph_seeds" in configured_sources:
+        for value in _coerce_string_list(semantic_compiler_packet.get("graph_seeds")):
+            seeds.append(("graph_seeds", value))
+    if "retrieval_terms" in configured_sources:
+        for value in _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")):
+            seeds.append(("retrieval_terms", value))
+    if "active_focus" in configured_sources:
+        for value in (
+            active_focus.get("query"),
+            active_focus.get("vector_query"),
+            active_focus.get("retrieval_terms"),
+            active_focus.get("graph_seeds"),
+            active_focus.get("selected_note_titles"),
+            active_focus.get("selected_section_labels"),
+        ):
+            for item in _coerce_string_list(value):
+                seeds.append(("active_focus", item))
+    return [(source, seed) for source, seed in seeds if seed]
+
+
+def _graph_token_set(value: str) -> set[str]:
+    return set(_extract_terms(value))
+
+
+def _graph_match_note_nodes(
+    *,
+    seed: str,
+    node_rows: list[dict[str, Any]],
+    node_type_allowlist: set[str],
+    match_mode: str,
+    min_token_overlap: int,
+) -> list[dict[str, Any]]:
+    exact_matches: list[dict[str, Any]] = []
+    overlap_matches: list[dict[str, Any]] = []
+    seed_normalized = _normalize_text(seed)
+    seed_tokens = _graph_token_set(seed)
+    for row in node_rows:
+        node_type = str(row.get("node_type") or "")
+        if node_type not in node_type_allowlist:
+            continue
+        label = str(row.get("label") or "")
+        ref_id = str(row.get("ref_id") or "")
+        normalized_label = _normalize_text(label)
+        normalized_ref = _normalize_text(ref_id)
+        if seed_normalized and seed_normalized in {normalized_label, normalized_ref}:
+            exact_matches.append(dict(row))
+            continue
+        if match_mode != "exact_or_token_overlap":
+            continue
+        node_tokens = _graph_token_set(f"{label} {ref_id}")
+        if len(seed_tokens.intersection(node_tokens)) >= min_token_overlap:
+            overlap_matches.append(dict(row))
+    return exact_matches or overlap_matches
+
+
 def _lexical_candidates(chunk_rows: list[dict[str, Any]], query_terms: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
     candidates: list[dict[str, Any]] = []
     notes: list[str] = []
@@ -651,11 +715,19 @@ def _graph_candidates(
     *,
     connection: sqlite3.Connection,
     config: RuntimeConfig,
-    graph_seeds: list[str],
-) -> tuple[list[dict[str, Any]], list[str]]:
+    semantic_compiler_packet: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
-    if not graph_seeds:
-        return [], ["graph search skipped: no graph seeds"]
+    if not config.graph_traversal_enabled:
+        return [], ["graph traversal disabled"], {
+            "enabled": False,
+            "hop_limit": config.graph_traversal_hop_limit,
+            "seed_sources": list(config.graph_traversal_seed_sources),
+            "matched_seed_count": 0,
+            "expanded_note_count": 0,
+            "edge_types_used": [],
+        }
 
     try:
         node_rows = connection.execute(
@@ -665,64 +737,143 @@ def _graph_candidates(
             f"SELECT source_node_id, target_node_id, edge_type FROM {config.graph_edges_table}"
         ).fetchall()
     except sqlite3.OperationalError:
-        return [], ["graph search unavailable"]
+        return [], ["graph search unavailable"], {
+            "enabled": config.graph_traversal_enabled,
+            "hop_limit": config.graph_traversal_hop_limit,
+            "seed_sources": list(config.graph_traversal_seed_sources),
+            "matched_seed_count": 0,
+            "expanded_note_count": 0,
+            "edge_types_used": [],
+        }
 
     chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
-    nodes_by_id = {str(row["node_id"]): row for row in node_rows}
-    nodes_by_key: dict[str, list[dict[str, Any]]] = {}
-    for row in node_rows:
-        for key in (row["label"], row["ref_id"]):
-            normalized = _normalize_text(key)
-            if normalized:
-                nodes_by_key.setdefault(normalized, []).append(row)
+    nodes_by_id = {str(row["node_id"]): dict(row) for row in node_rows}
+    note_nodes = [dict(row) for row in node_rows if str(row["node_type"]) in set(config.graph_traversal_node_type_allowlist)]
+    edge_type_allowlist = set(config.graph_traversal_edge_type_allowlist)
+    node_type_allowlist = set(config.graph_traversal_node_type_allowlist)
+    seed_values = _graph_seed_values(
+        semantic_compiler_packet=semantic_compiler_packet,
+        prior_thread_state=prior_thread_state,
+        config=config,
+    )
+    if not seed_values:
+        return [], ["graph search skipped: no graph seeds"], {
+            "enabled": config.graph_traversal_enabled,
+            "hop_limit": config.graph_traversal_hop_limit,
+            "seed_sources": list(config.graph_traversal_seed_sources),
+            "matched_seed_count": 0,
+            "expanded_note_count": 0,
+            "edge_types_used": [],
+        }
 
     outgoing: dict[str, list[tuple[str, str]]] = {}
     for row in edge_rows:
         outgoing.setdefault(str(row["source_node_id"]), []).append((str(row["target_node_id"]), str(row["edge_type"])))
 
-    selected_chunk_ids: set[str] = set()
-    selection_notes: list[str] = []
+    selected_note_ids: list[str] = []
+    note_reasons: dict[str, list[str]] = {}
+    matched_seed_count = 0
+    expanded_note_count = 0
+    edge_types_used: list[str] = []
+    queue: list[tuple[str, int]] = []
+    visited_notes: set[str] = set()
 
-    def add_note_chunk(note_id: str, reason: str) -> None:
-        for chunk_row in chunk_rows.values():
-            if str(chunk_row["note_id"]) == note_id and str(chunk_row["chunk_id"]) not in selected_chunk_ids:
-                selected_chunk_ids.add(str(chunk_row["chunk_id"]))
-                selection_notes.append(reason)
-
-    for seed in graph_seeds:
-        normalized = _normalize_text(seed)
-        matched_nodes = nodes_by_key.get(normalized, [])
+    for source_name, seed in seed_values:
+        matched_nodes = _graph_match_note_nodes(
+            seed=seed,
+            node_rows=note_nodes,
+            node_type_allowlist=node_type_allowlist,
+            match_mode=config.graph_traversal_match_mode,
+            min_token_overlap=config.graph_traversal_min_token_overlap,
+        )
         if not matched_nodes:
             continue
+        matched_seed_count += 1
         for node_row in matched_nodes:
-            node_id = str(node_row["node_id"])
-            node_type = str(node_row["node_type"])
-            node_label = str(node_row["label"])
-            if node_type == "chunk":
-                chunk_row = chunk_rows.get(str(node_row["ref_id"] or ""))
-                if chunk_row is not None:
-                    selected_chunk_ids.add(str(chunk_row["chunk_id"]))
-                    selection_notes.append(f"graph seed matched chunk node {node_label}")
-            elif node_type == "note":
-                note_id = str(node_row["ref_id"] or "")
-                if note_id:
-                    add_note_chunk(note_id, f"graph seed matched note node {node_label}")
-                for target_id, edge_type in outgoing.get(node_id, []):
-                    target_node = nodes_by_id.get(target_id)
-                    if target_node is None:
-                        continue
-                    if str(target_node["node_type"]) == "note" and edge_type == "note_links_note":
-                        target_note_id = str(target_node["ref_id"] or "")
-                        if target_note_id:
-                            add_note_chunk(target_note_id, f"graph hop via {node_label} -> {target_node['label']}")
+            note_id = str(node_row.get("ref_id") or "")
+            if not note_id:
+                continue
+            node_label = str(node_row.get("label") or note_id)
+            note_reasons.setdefault(note_id, []).append(f"{source_name} graph seed matched note: {node_label}")
+            if note_id not in visited_notes:
+                visited_notes.add(note_id)
+                selected_note_ids.append(note_id)
+                queue.append((note_id, 0))
 
-    candidates = [dict(chunk_rows[chunk_id], selection_reason="graph expansion", score=1.5, selection_source="graph") for chunk_id in selected_chunk_ids if chunk_id in chunk_rows]
+    while queue:
+        current_note_id, hop = queue.pop(0)
+        if hop >= config.graph_traversal_hop_limit:
+            continue
+        # Avoid relying on helper placement below; note node ids are canonical.
+        current_node_id = f"note::{current_note_id}"
+        current_node = nodes_by_id.get(current_node_id)
+        if current_node is None:
+            continue
+        current_label = str(current_node.get("label") or current_note_id)
+        for target_node_id, edge_type in outgoing.get(current_node_id, []):
+            if edge_type not in edge_type_allowlist:
+                continue
+            if edge_type not in edge_types_used:
+                edge_types_used.append(edge_type)
+            target_node = nodes_by_id.get(target_node_id)
+            if target_node is None:
+                continue
+            if str(target_node.get("node_type") or "") not in node_type_allowlist:
+                continue
+            target_note_id = str(target_node.get("ref_id") or "")
+            if not target_note_id:
+                continue
+            target_label = str(target_node.get("label") or target_note_id)
+            note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1}: {current_label} -> {target_label}")
+            if target_note_id not in visited_notes:
+                visited_notes.add(target_note_id)
+                selected_note_ids.append(target_note_id)
+                queue.append((target_note_id, hop + 1))
+                expanded_note_count += 1
+
+    selected_chunk_ids: list[str] = []
+    for note_id in selected_note_ids:
+        for chunk_row in chunk_rows.values():
+            if str(chunk_row["note_id"]) != note_id:
+                continue
+            chunk_id = str(chunk_row["chunk_id"])
+            if chunk_id in selected_chunk_ids:
+                continue
+            selected_chunk_ids.append(chunk_id)
+            if len(selected_chunk_ids) >= config.graph_traversal_max_candidates:
+                break
+        if len(selected_chunk_ids) >= config.graph_traversal_max_candidates:
+            break
+
+    candidates = []
+    for chunk_id in selected_chunk_ids:
+        chunk_row = chunk_rows.get(chunk_id)
+        if chunk_row is None:
+            continue
+        reason = "; ".join(dict.fromkeys(note_reasons.get(str(chunk_row["note_id"]), ["graph traversal selected note"])))
+        candidates.append(
+            {
+                **chunk_row,
+                "selection_reason": reason,
+                "score": 1.5,
+                "selection_source": "graph",
+            }
+        )
     if candidates:
         notes.append(f"graph search matched {len(candidates)} chunk(s)")
-        notes.extend(selection_notes[:3])
     else:
         notes.append("graph search produced no matches")
-    return candidates, notes
+    notes.append(
+        f"graph traversal enabled={config.graph_traversal_enabled}, hop_limit={config.graph_traversal_hop_limit}, matched_seed_count={matched_seed_count}, expanded_note_count={expanded_note_count}"
+    )
+    return candidates, notes, {
+        "enabled": config.graph_traversal_enabled,
+        "hop_limit": config.graph_traversal_hop_limit,
+        "seed_sources": list(config.graph_traversal_seed_sources),
+        "matched_seed_count": matched_seed_count,
+        "expanded_note_count": expanded_note_count,
+        "edge_types_used": edge_types_used,
+    }
 
 
 def _merge_candidates(
@@ -791,11 +942,11 @@ def _semantic_traversal(
     connection: sqlite3.Connection,
     config: RuntimeConfig,
     semantic_compiler_packet: dict[str, Any],
+    prior_thread_state: dict[str, Any],
     embedding_backend: EmbeddingBackend,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     query_terms = list(semantic_compiler_packet.get("retrieval_terms") or [])
     vector_query = str(semantic_compiler_packet.get("vector_query") or "")
-    graph_seeds = list(semantic_compiler_packet.get("graph_seeds") or [])
 
     chunk_rows = _load_chunk_rows(connection)
     lexical_candidates, lexical_notes = _lexical_candidates(chunk_rows, query_terms)
@@ -805,7 +956,12 @@ def _semantic_traversal(
         embedding_backend=embedding_backend,
         vector_query=vector_query,
     )
-    graph_candidates, graph_notes = _graph_candidates(connection=connection, config=config, graph_seeds=graph_seeds)
+    graph_candidates, graph_notes, graph_traversal_info = _graph_candidates(
+        connection=connection,
+        config=config,
+        semantic_compiler_packet=semantic_compiler_packet,
+        prior_thread_state=prior_thread_state,
+    )
 
     merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates)
     selected_candidates = _select_retrieval_chunks(merged_candidates=merged_candidates, max_chunks=config.max_retrieval_chunks)
@@ -813,13 +969,14 @@ def _semantic_traversal(
     traversal_manifest = {
         "query_terms": query_terms,
         "vector_query": vector_query,
-        "graph_seeds": graph_seeds,
+        "graph_seeds": list(semantic_compiler_packet.get("graph_seeds") or []),
         "candidate_counts": {
             "lexical": len(lexical_candidates),
             "vector": len(vector_candidates),
             "graph": len(graph_candidates),
         },
         "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
+        "graph_traversal": graph_traversal_info,
         "selection_notes": [*lexical_notes, *vector_notes, *graph_notes],
     }
 
@@ -1161,6 +1318,7 @@ def run_thread_turn(
                 connection=connection,
                 config=resolved_config,
                 semantic_compiler_packet=semantic_compiler_packet,
+                prior_thread_state=prior_thread_state,
                 embedding_backend=embedding_backend,
             )
         finally:

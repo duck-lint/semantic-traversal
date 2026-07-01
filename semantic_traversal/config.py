@@ -29,6 +29,16 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "data_root": str,
         "max_retrieval_chunks": int,
     },
+    "graph_traversal": {
+        "enabled": bool,
+        "hop_limit": int,
+        "max_candidates": int,
+        "seed_sources": [str],
+        "edge_type_allowlist": [str],
+        "node_type_allowlist": [str],
+        "match_mode": str,
+        "min_token_overlap": int,
+    },
     "llm": {
         "model": str,
         "max_output_tokens": int,
@@ -119,6 +129,38 @@ class RuntimeConfig:
     @property
     def max_retrieval_chunks(self) -> int:
         return int(self.raw["runtime"]["max_retrieval_chunks"])
+
+    @property
+    def graph_traversal_enabled(self) -> bool:
+        return bool(self.raw["graph_traversal"]["enabled"])
+
+    @property
+    def graph_traversal_hop_limit(self) -> int:
+        return int(self.raw["graph_traversal"]["hop_limit"])
+
+    @property
+    def graph_traversal_max_candidates(self) -> int:
+        return int(self.raw["graph_traversal"]["max_candidates"])
+
+    @property
+    def graph_traversal_seed_sources(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["graph_traversal"]["seed_sources"])
+
+    @property
+    def graph_traversal_edge_type_allowlist(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["graph_traversal"]["edge_type_allowlist"])
+
+    @property
+    def graph_traversal_node_type_allowlist(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["graph_traversal"]["node_type_allowlist"])
+
+    @property
+    def graph_traversal_match_mode(self) -> str:
+        return str(self.raw["graph_traversal"]["match_mode"])
+
+    @property
+    def graph_traversal_min_token_overlap(self) -> int:
+        return int(self.raw["graph_traversal"]["min_token_overlap"])
 
     @property
     def llm_model(self) -> str:
