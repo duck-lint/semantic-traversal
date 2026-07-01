@@ -43,43 +43,6 @@ COMPILER_STOP_WORDS = {
     "your",
 }
 
-FOLLOWUP_SURFACE_FORMS = (
-    "it",
-    "that",
-    "this",
-    "those",
-    "they",
-    "them",
-)
-
-FOLLOWUP_PHRASE_PATTERNS = (
-    (re.compile(r"\bhow\s+(?:it|that|this|those|they|them)\b", re.IGNORECASE), "how it"),
-    (re.compile(r"\bwhat\s+about\s+(?:that|it|this|those|them|they)\b", re.IGNORECASE), "what about that"),
-    (re.compile(r"\bsame\s+thing\b", re.IGNORECASE), "same thing"),
-    (re.compile(r"\bthat\s+makes\s+me\b", re.IGNORECASE), "that makes me"),
-    (re.compile(r"\bhow\s+that\s+makes\s+me\s+feel\b", re.IGNORECASE), "how that makes me feel"),
-    (re.compile(r"\bhow\s+it\s+makes\s+me\s+feel\b", re.IGNORECASE), "how it makes me feel"),
-)
-
-FOLLOWUP_EXPLETIVE_PATTERNS = (
-    re.compile(r"\bis\s+it\s+possible\b", re.IGNORECASE),
-    re.compile(r"\bis\s+it\s+worth\b", re.IGNORECASE),
-    re.compile(r"\bit\s+seems\b", re.IGNORECASE),
-    re.compile(r"\bit\s+looks\s+like\b", re.IGNORECASE),
-)
-
-REFERENT_CANDIDATE_PATTERNS = (
-    re.compile(
-        r"\b(?:about|regarding|around|concerning|on|for|with|toward|towards|linked to|related to)\s+(.+?)(?:[?.!,]|$)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\b(?:think|feel|wonder|care|ask)\s+about\s+(.+?)(?:[?.!,]|$)", re.IGNORECASE),
-)
-
-PRIOR_REFERENT_HEDGE_PREFIXES = (
-    re.compile(r"^(?:i\s+think|i\s+guess|i\s+wonder|maybe|probably|perhaps|it\s+seems(?:\s+like)?|the\s+notes\s+suggest)\s+", re.IGNORECASE),
-)
-
 
 @dataclass(frozen=True)
 class SemanticCompilerResponse:
@@ -93,10 +56,7 @@ class SemanticCompilerResponse:
 class SemanticCompilerBackend(Protocol):
     mode_name: str
 
-    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        ...
-
-    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         ...
 
 
@@ -112,402 +72,84 @@ def collect_compiler_terms(text: str) -> list[str]:
     return terms
 
 
-def _default_limitations() -> list[str]:
-    return [
-        "model-generated compiler-stage output",
-        "additive only",
-        "not authoritative",
-    ]
-
-
-def _default_contextual_coverage_fields() -> dict[str, Any]:
+def _canonical_stub_packet(raw_user_input: str) -> dict[str, Any]:
+    terms = collect_compiler_terms(raw_user_input)
     return {
-        "candidate_targets": [],
-        "candidate_relations": [],
+        "raw_user_input": raw_user_input,
+        "intent": "stub semantic compiler output",
+        "query": raw_user_input.strip(),
+        "entities": [],
+        "relations": [],
         "resolved_referents": [],
-        "retrieval_hints": _default_retrieval_hints(),
-        "avoidance_hints": [],
-        "compiler_confidence": "low",
-        "allow_no_retrieval_needed": False,
+        "retrieval_terms": terms,
+        "vector_query": raw_user_input.strip(),
+        "graph_seeds": [raw_user_input.strip()] if terms else [],
+        "limitations": ["stub semantic compiler backend used"],
     }
 
 
-def _default_retrieval_hints() -> dict[str, Any]:
-    return {
-        "lexical_terms": [],
-        "phrases": [],
-        "conceptual_neighbors": [],
-        "relation_hints": [],
-        "temporal_hints": [],
-        "entity_hints": [],
-    }
-
-
-def _semantic_compiler_schema(mode: str) -> dict[str, Any]:
-    if mode == "isolated":
-        return {
-            "type": "object",
-            "additionalProperties": True,
-            "required": [
-                "raw_user_input",
-                "probable_user_intent",
-                "candidate_targets",
-                "candidate_relations",
-                "question_shape",
-                "explicit_user_constraints",
-                "implicit_needs_or_pressures",
-                "terms_or_phrases_not_to_discard",
-                "ambiguities",
-                "compiler_confidence",
-                "limitations",
-            ],
-            "properties": {
-                "raw_user_input": {"type": "string"},
-                "probable_user_intent": {"type": "string"},
-                "candidate_targets": {"type": "array", "items": {"type": "string"}},
-                "candidate_relations": {"type": "array", "items": {"type": "string"}},
-                "question_shape": {"type": ["string", "null"]},
-                "explicit_user_constraints": {"type": "array", "items": {"type": "string"}},
-                "implicit_needs_or_pressures": {"type": "array", "items": {"type": "string"}},
-                "terms_or_phrases_not_to_discard": {"type": "array", "items": {"type": "string"}},
-                "ambiguities": {"type": "array", "items": {"type": "string"}},
-                "compiler_confidence": {"type": "string"},
-                "limitations": {"type": "array", "items": {"type": "string"}},
-            },
-        }
-    return {
-        "type": "object",
-        "additionalProperties": True,
-        "required": [
-            "raw_user_input",
-            "contextual_user_intent",
-            "thread_relevant_context",
-            "semantic_pressure",
-            "resolved_referents",
-            "candidate_targets",
-            "candidate_relations",
-            "retrieval_hints",
-            "avoidance_hints",
-            "compiler_confidence",
-            "limitations",
-        ],
-        "properties": {
-            "raw_user_input": {"type": "string"},
-            "contextual_user_intent": {"type": "string"},
-            "thread_relevant_context": {"type": "array", "items": {"type": "string"}},
-            "semantic_pressure": {"type": ["string", "null"]},
-            "candidate_targets": {"type": "array", "items": {"type": "string"}},
-            "candidate_relations": {"type": "array", "items": {"type": "string"}},
-            "resolved_referents": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": True,
-                    "required": [
-                        "surface_form",
-                        "resolved_to",
-                        "source",
-                        "confidence",
-                        "required_for_target",
-                    ],
-                    "properties": {
-                        "surface_form": {"type": "string"},
-                        "resolved_to": {"type": "string"},
-                        "source": {"type": "string"},
-                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-                        "required_for_target": {"type": "boolean"},
-                    },
-                },
-            },
-            "retrieval_hints": {
-                "type": "object",
-                "additionalProperties": True,
-                "required": [
-                    "lexical_terms",
-                    "phrases",
-                    "conceptual_neighbors",
-                    "relation_hints",
-                    "temporal_hints",
-                    "entity_hints",
-                ],
-                "properties": {
-                    "lexical_terms": {"type": "array", "items": {"type": "string"}},
-                    "phrases": {"type": "array", "items": {"type": "string"}},
-                    "conceptual_neighbors": {"type": "array", "items": {"type": "string"}},
-                    "relation_hints": {"type": "array", "items": {"type": "string"}},
-                    "temporal_hints": {"type": "array", "items": {"type": "string"}},
-                    "entity_hints": {"type": "array", "items": {"type": "string"}},
-                },
-            },
-            "avoidance_hints": {"type": "array", "items": {"type": "string"}},
-            "compiler_confidence": {"type": "string"},
-            "followup_detection": {"type": ["object", "null"]},
-            "limitations": {"type": "array", "items": {"type": "string"}},
-        },
-    }
-
-
-def _isolated_json_skeleton() -> dict[str, Any]:
-    return {
-        "raw_user_input": "",
-        "probable_user_intent": "",
-        "candidate_targets": [],
-        "candidate_relations": [],
-        "question_shape": None,
-        "explicit_user_constraints": [],
-        "implicit_needs_or_pressures": [],
-        "terms_or_phrases_not_to_discard": [],
-        "ambiguities": [],
-        "compiler_confidence": "low",
-        "limitations": _default_limitations(),
-    }
-
-
-def _contextual_json_skeleton() -> dict[str, Any]:
-    return {
-        "raw_user_input": "",
-        "contextual_user_intent": "",
-        "thread_relevant_context": [],
-        "semantic_pressure": None,
-        "resolved_referents": [],
-        "candidate_targets": [],
-        "candidate_relations": [],
-        "retrieval_hints": {
-            "lexical_terms": [],
-            "phrases": [],
-            "conceptual_neighbors": [],
-            "relation_hints": [],
-            "temporal_hints": [],
-            "entity_hints": [],
-        },
-        "avoidance_hints": [],
-        "compiler_confidence": "low",
-        "followup_detection": {
-            "is_referential_followup": False,
-            "signals": [],
-            "surface_forms": [],
-            "requires_referent_resolution": False,
-        },
-        "limitations": _default_limitations(),
-    }
+def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+    fallback = _canonical_stub_packet(raw_user_input)
+    if not isinstance(payload, dict):
+        return fallback
+    result = dict(fallback)
+    result["raw_user_input"] = raw_user_input
+    result["intent"] = str(payload.get("intent") or result["intent"]).strip() or result["intent"]
+    result["query"] = str(payload.get("query") or result["query"]).strip() or result["query"]
+    for key in ("entities", "relations", "resolved_referents", "retrieval_terms", "graph_seeds", "limitations"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            cleaned = []
+            for item in value:
+                if isinstance(item, dict):
+                    candidate = item.get("label") or item.get("resolved_to") or item.get("surface_form") or item.get("value")
+                else:
+                    candidate = item
+                text = str(candidate).strip()
+                if text and text not in cleaned:
+                    cleaned.append(text)
+            if cleaned:
+                result[key] = cleaned
+    vector_query = str(payload.get("vector_query") or result["query"]).strip()
+    result["vector_query"] = vector_query or result["query"]
+    if not result["retrieval_terms"]:
+        result["retrieval_terms"] = collect_compiler_terms(result["query"])
+    if not result["graph_seeds"] and result["retrieval_terms"]:
+        result["graph_seeds"] = [result["query"]]
+    return result
 
 
 def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
-    mode = str(packet.get("mode") or "contextual").strip().lower()
-    if mode == "isolated":
-        skeleton = _isolated_json_skeleton()
-        mode_instruction = (
-            "Compile isolated semantic structure from the raw user message. Return compiler-stage JSON only. "
-            "Do not include contextual-only fields. Keep every field type correct."
-        )
-    else:
-        skeleton = _contextual_json_skeleton()
-        requires_referent_resolution = bool(
-            isinstance(packet.get("deterministic_followup_detection"), dict)
-            and packet["deterministic_followup_detection"].get("requires_referent_resolution")
-        ) or bool(packet.get("deterministic_resolved_referent_candidates"))
-        mode_instruction = (
-            "Hydrate the isolated compiler output with conversation context. Return compiler-stage JSON only. "
-            "Return candidate_targets, candidate_relations, resolved_referents, retrieval_hints, "
-            "avoidance_hints, compiler_confidence, and limitations. "
-            "resolved_referents must be an array of objects when follow-up resolution is required."
-        )
-        if requires_referent_resolution:
-            mode_instruction += (
-                " Use deterministic_resolved_referent_candidates when present. "
-                "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-                "When a prior referent is required, include it in resolved_referents and candidate_targets."
-            )
     return (
         "Return JSON only.\n"
-        f"{mode_instruction}\n"
-        "Do not answer the user.\n"
-        "Preserve the raw_user_input field exactly.\n"
-        "Return JSON only matching this skeleton.\n"
-        "Use this exact JSON skeleton as the target shape:\n"
-        f"{json.dumps(skeleton, ensure_ascii=True, indent=2)}\n"
+        "Compile a minimal semantic target for traversal. Do not answer the user.\n"
+        "Use this exact canonical shape:\n"
+        "{"
+        '"raw_user_input": "", '
+        '"intent": "", '
+        '"query": "", '
+        '"entities": [], '
+        '"relations": [], '
+        '"resolved_referents": [], '
+        '"retrieval_terms": [], '
+        '"vector_query": "", '
+        '"graph_seeds": [], '
+        '"limitations": []'
+        "}\n"
         "Packet:\n"
         f"{json.dumps(packet, ensure_ascii=True, indent=2)}"
     )
 
 
-def _normalize_raw_user_input(
-    payload: dict[str, Any],
-    raw_user_input: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    model_supplied_present = "raw_user_input" in payload
-    model_supplied_raw_user_input = payload.get("raw_user_input") if model_supplied_present else None
-    model_supplied_matches = model_supplied_raw_user_input == raw_user_input if model_supplied_present else False
-    raw_user_input_repaired = not model_supplied_present or not model_supplied_matches
-    result = dict(payload)
-    result["raw_user_input"] = raw_user_input
-    if "limitations" not in result or not isinstance(result["limitations"], list):
-        result["limitations"] = _default_limitations()
-    return result, {
-        "raw_user_input_validation": {
-            "authoritative_raw_user_input": raw_user_input,
-            "model_supplied_raw_user_input": model_supplied_raw_user_input,
-            "model_supplied_raw_user_input_present": model_supplied_present,
-            "model_supplied_raw_user_input_matches": model_supplied_matches,
-            "raw_user_input_repaired": raw_user_input_repaired,
-        }
-    }
-
-
-def _clean_referent_text(text: str) -> str:
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    cleaned = cleaned.strip(" \t\r\n\"'`")
-    cleaned = re.sub(r"^(?:the|a|an|this|that|these|those)\s+", "", cleaned, flags=re.IGNORECASE)
-    return cleaned.strip(" \t\r\n\"'`")
-
-
-def _recent_user_messages(prior_thread_state: dict[str, Any]) -> list[str]:
-    compact_recent_user_messages = [
-        str(message).strip()
-        for message in list(prior_thread_state.get("recent_user_messages") or [])
-        if str(message).strip()
-    ]
-    if compact_recent_user_messages:
-        return compact_recent_user_messages
-    recent_messages = []
-    for message in list(prior_thread_state.get("recent_messages") or []):
-        if isinstance(message, dict) and str(message.get("role") or "").lower() == "user":
-            content = str(message.get("content") or "").strip()
-            if content:
-                recent_messages.append(content)
-    return recent_messages
-
-
-def _detect_followup_signals(raw_user_input: str, prior_thread_state: dict[str, Any]) -> dict[str, Any]:
-    lowered = raw_user_input.lower()
-    signals: list[str] = []
-    referential_signals: list[str] = []
-    surface_forms: list[str] = []
-    has_recent_context = bool(
-        prior_thread_state.get("recent_messages")
-        or prior_thread_state.get("recent_user_messages")
-        or prior_thread_state.get("recent_semantic_trajectory")
-    )
-    expletive_pattern_matched = any(pattern.search(lowered) for pattern in FOLLOWUP_EXPLETIVE_PATTERNS)
-
-    for pattern, label in FOLLOWUP_PHRASE_PATTERNS:
-        if pattern.search(lowered):
-            signals.append(label)
-            referential_signals.append(label)
-            surface_forms.append(label)
-
-    for surface_form in FOLLOWUP_SURFACE_FORMS:
-        if expletive_pattern_matched and surface_form == "it":
-            continue
-        if re.search(rf"\b{re.escape(surface_form)}\b", lowered):
-            surface_forms.append(surface_form)
-            if has_recent_context:
-                signals.append(f"deictic:{surface_form}")
-                if surface_form in {"it", "that", "this", "those", "they", "them"}:
-                    referential_signals.append(f"deictic:{surface_form}")
-
-    question_token_count = len(collect_compiler_terms(raw_user_input))
-    if has_recent_context and "?" in raw_user_input and question_token_count <= 8:
-        signals.append("short_followup_question")
-
-    is_followup = bool(signals)
-    requires_resolution = bool(referential_signals) and has_recent_context
-    return {
-        "is_referential_followup": is_followup,
-        "requires_referent_resolution": requires_resolution,
-        "signals": signals,
-        "referential_signals": referential_signals,
-        "surface_forms": list(dict.fromkeys(surface_forms)),
-    }
-
-
-def _resolve_referent_candidate(text: str) -> str | None:
-    for pattern in REFERENT_CANDIDATE_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            candidate = _clean_referent_text(match.group(1))
-            if candidate:
-                return candidate
-    return None
-
-
-def _clean_prior_referent_candidate(text: str) -> str:
-    candidate = re.sub(r"\s+", " ", str(text or "")).strip().strip("?.! ")
-    if not candidate:
-        return ""
-    for pattern in PRIOR_REFERENT_HEDGE_PREFIXES:
-        candidate = pattern.sub("", candidate).strip()
-    return candidate.strip("?.! ")
-
-
-def _resolve_followup_referents(
-    *,
-    raw_user_input: str,
-    prior_thread_state: dict[str, Any],
-    followup_detection: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if not followup_detection.get("requires_referent_resolution"):
-        return []
-
-    referent_candidates = _recent_user_messages(prior_thread_state)
-    resolved_to: str | None = None
-    source = "prior_thread_state.recent_messages"
-    for candidate_text in reversed(referent_candidates):
-        resolved_to = _resolve_referent_candidate(candidate_text)
-        if resolved_to:
-            break
-    if not resolved_to:
-        for candidate_text in reversed(list(prior_thread_state.get("recent_semantic_trajectory") or [])):
-            if not isinstance(candidate_text, str):
-                continue
-            resolved_to = _resolve_referent_candidate(candidate_text)
-            if resolved_to:
-                source = "prior_thread_state.recent_semantic_trajectory"
-                break
-    if not resolved_to:
-        for candidate_text in reversed(referent_candidates):
-            resolved_to = _clean_prior_referent_candidate(candidate_text)
-            if resolved_to:
-                source = "prior_thread_state.recent_messages"
-                break
-    if not resolved_to:
-        return []
-
-    surface_form = followup_detection.get("surface_forms", [None])[0] or "it"
-    return [
-        {
-            "surface_form": str(surface_form),
-            "resolved_to": resolved_to,
-            "source": source,
-            "confidence": "high" if source == "prior_thread_state.recent_messages" else "medium",
-            "required_for_target": True,
-        }
-    ]
-
-
 class DisabledSemanticCompilerBackend:
     mode_name = "disabled"
 
-    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        raw_user_input = str(packet.get("raw_user_input") or "")
         return SemanticCompilerResponse(
             parsed_payload=None,
             raw_response=None,
-            metadata={
-                "backend_mode": self.mode_name,
-                "reason": "semantic compiler disabled",
-            },
-            diagnostics={},
-            status="disabled",
-        )
-
-    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return SemanticCompilerResponse(
-            parsed_payload=None,
-            raw_response=None,
-            metadata={
-                "backend_mode": self.mode_name,
-                "reason": "semantic compiler disabled",
-            },
+            metadata={"backend_mode": self.mode_name, "reason": "semantic compiler disabled"},
             diagnostics={},
             status="disabled",
         )
@@ -516,108 +158,20 @@ class DisabledSemanticCompilerBackend:
 class StubSemanticCompilerBackend:
     mode_name = "stub"
 
-    def __init__(
-        self,
-        *,
-        isolated_payload: dict[str, Any] | None = None,
-        contextual_payload: dict[str, Any] | None = None,
-    ) -> None:
-        self._isolated_payload = isolated_payload
-        self._contextual_payload = contextual_payload
+    def __init__(self, *, payload: dict[str, Any] | None = None) -> None:
+        self._payload = payload
 
-    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        raw_user_input = str(packet.get("raw_user_input", ""))
-        payload = self._isolated_payload or self._build_default_isolated_payload(raw_user_input)
-        normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        raw_user_input = str(packet.get("raw_user_input") or "")
+        payload = self._payload or _canonical_stub_packet(raw_user_input)
+        canonical_payload = _canonicalize_response_payload(raw_user_input, payload)
         return SemanticCompilerResponse(
-            parsed_payload=normalized_payload,
+            parsed_payload=canonical_payload,
             raw_response=None,
-            metadata={
-                "backend_mode": self.mode_name,
-                "stub_kind": "deterministic",
-            },
-            diagnostics=diagnostics,
+            metadata={"backend_mode": self.mode_name, "stub_kind": "deterministic"},
+            diagnostics={},
             status="stub",
         )
-
-    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        raw_user_input = str(packet.get("raw_user_input", ""))
-        prior_thread_state = packet.get("compiler_thread_context") or packet.get("prior_thread_state") or {}
-        isolated_payload = packet.get("isolated_semantic_compiler") or {}
-        payload = self._contextual_payload or self._build_default_contextual_payload(
-            raw_user_input=raw_user_input,
-            prior_thread_state=prior_thread_state,
-            isolated_payload=isolated_payload,
-        )
-        normalized_payload, diagnostics = _normalize_raw_user_input(payload, raw_user_input)
-        return SemanticCompilerResponse(
-            parsed_payload=normalized_payload,
-            raw_response=None,
-            metadata={
-                "backend_mode": self.mode_name,
-                "stub_kind": "deterministic",
-            },
-            diagnostics=diagnostics,
-            status="stub",
-        )
-
-    def _build_default_isolated_payload(self, raw_user_input: str) -> dict[str, Any]:
-        terms = collect_compiler_terms(raw_user_input)
-        return {
-            "raw_user_input": raw_user_input,
-            "probable_user_intent": "stub additive semantic compiler interpretation of the latest raw user message",
-            "candidate_targets": terms[:3],
-            "candidate_relations": terms[3:5],
-            "question_shape": "question" if "?" in raw_user_input else None,
-            "explicit_user_constraints": [],
-            "implicit_needs_or_pressures": [],
-            "terms_or_phrases_not_to_discard": terms[:5],
-            "ambiguities": [],
-            "compiler_confidence": "low",
-            "limitations": _default_limitations(),
-        }
-
-    def _build_default_contextual_payload(
-        self,
-        *,
-        raw_user_input: str,
-        prior_thread_state: dict[str, Any],
-        isolated_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        terms = collect_compiler_terms(raw_user_input)
-        preserved_terms = list(isolated_payload.get("terms_or_phrases_not_to_discard") or [])[:5]
-        recent_trajectory = list(prior_thread_state.get("recent_semantic_trajectory") or [])[-2:]
-        followup_detection = _detect_followup_signals(raw_user_input, prior_thread_state)
-        resolved_referents = _resolve_followup_referents(
-            raw_user_input=raw_user_input,
-            prior_thread_state=prior_thread_state,
-            followup_detection=followup_detection,
-        )
-        return {
-            "raw_user_input": raw_user_input,
-            "contextual_user_intent": "stub contextual hydration of the isolated semantic compiler output",
-            "followup_detection": followup_detection,
-            "resolved_referents": resolved_referents,
-            "thread_relevant_context": recent_trajectory,
-            "semantic_pressure": None,
-            "candidate_targets": list(dict.fromkeys([
-                *list(isolated_payload.get("candidate_targets") or []),
-                *[referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")],
-            ]) or terms[:3]),
-            "candidate_relations": list(isolated_payload.get("candidate_relations") or []),
-            "retrieval_hints": {
-                "lexical_terms": terms[:4],
-                "phrases": [referent["resolved_to"] for referent in resolved_referents if referent.get("resolved_to")] or [],
-                "conceptual_neighbors": [],
-                "relation_hints": list(isolated_payload.get("candidate_relations") or []),
-                "temporal_hints": [],
-                "entity_hints": list(isolated_payload.get("candidate_targets") or [])[:2],
-            },
-            "avoidance_hints": [],
-            "ambiguities": [],
-            "compiler_confidence": "low",
-            "limitations": _default_limitations(),
-        }
 
 
 class OllamaSemanticCompilerBackend:
@@ -628,31 +182,17 @@ class OllamaSemanticCompilerBackend:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
 
-    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return self._request_compiler_response(packet)
-
-    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return self._request_compiler_response(packet)
-
-    def _request_compiler_response(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
             return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=None,
-                metadata={
-                    "backend_mode": self.mode_name,
-                    "base_url": self._base_url,
-                    "reason": "SEMANTIC_COMPILER_MODEL not configured",
-                },
+                metadata={"backend_mode": self.mode_name, "base_url": self._base_url, "reason": "model not configured"},
                 diagnostics={},
                 status="unavailable",
             )
         prompt = _build_ollama_prompt(packet=packet)
-        payload = {
-            "model": self._model,
-            "prompt": prompt,
-            "stream": False,
-        }
+        payload = {"model": self._model, "prompt": prompt, "stream": False}
         raw_response_text: str | None = None
         try:
             http_request = request.Request(
@@ -685,11 +225,7 @@ class OllamaSemanticCompilerBackend:
             return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
-                metadata={
-                    "backend_mode": self.mode_name,
-                    "base_url": self._base_url,
-                    "model": self._model,
-                },
+                metadata={"backend_mode": self.mode_name, "base_url": self._base_url, "model": self._model},
                 diagnostics={},
                 status="invalid_json",
             )
@@ -701,22 +237,17 @@ class OllamaSemanticCompilerBackend:
                     "backend_mode": self.mode_name,
                     "base_url": self._base_url,
                     "model": self._model,
-                    "error": f"semantic compiler returned JSON {type(parsed_payload).__name__}; expected object",
+                    "error": f"expected object, got {type(parsed_payload).__name__}",
                 },
                 diagnostics={},
                 status="invalid_json",
             )
-
-        normalized_payload, diagnostics = _normalize_raw_user_input(parsed_payload, str(packet.get("raw_user_input", "")))
+        canonical_payload = _canonicalize_response_payload(str(packet.get("raw_user_input") or ""), parsed_payload)
         return SemanticCompilerResponse(
-            parsed_payload=normalized_payload,
+            parsed_payload=canonical_payload,
             raw_response=raw_response_text,
-            metadata={
-                "backend_mode": self.mode_name,
-                "base_url": self._base_url,
-                "model": self._model,
-            },
-            diagnostics=diagnostics,
+            metadata={"backend_mode": self.mode_name, "base_url": self._base_url, "model": self._model},
+            diagnostics={},
             status="parsed",
         )
 
@@ -728,26 +259,11 @@ class UnavailableSemanticCompilerBackend:
         self._reason = reason
         self._configured_mode = configured_mode
 
-    def compile_isolated(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return self._response()
-
-    def compile_contextual(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        return self._response()
-
-    def _response(self) -> SemanticCompilerResponse:
-        metadata = {
-            "backend_mode": self.mode_name,
-            "reason": self._reason,
-        }
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        metadata = {"backend_mode": self.mode_name, "reason": self._reason}
         if self._configured_mode is not None:
             metadata["configured_mode"] = self._configured_mode
-        return SemanticCompilerResponse(
-            parsed_payload=None,
-            raw_response=None,
-            metadata=metadata,
-            diagnostics={},
-            status="unavailable",
-        )
+        return SemanticCompilerResponse(parsed_payload=None, raw_response=None, metadata=metadata, diagnostics={}, status="unavailable")
 
 
 def resolve_semantic_compiler_backend(
@@ -757,7 +273,7 @@ def resolve_semantic_compiler_backend(
     compiler_mode: str | None = None,
     model_override: str | None = None,
     base_url_override: str | None = None,
-    allow_test_backends: bool = False,
+    allow_test_backends: bool = True,
 ) -> SemanticCompilerBackend:
     configured_mode = compiler_mode.strip().lower() if isinstance(compiler_mode, str) and compiler_mode.strip() else None
     configured_provider = config.semantic_compiler_provider.strip().lower()
@@ -772,24 +288,20 @@ def resolve_semantic_compiler_backend(
             reason=f"{configured_mode} semantic compiler mode is test-only and not valid for the normal runtime",
             configured_mode=configured_mode,
         )
+
     if configured_mode and configured_mode != configured_provider:
-        if configured_mode != "ollama":
-            return UnavailableSemanticCompilerBackend(
-                reason=f"unsupported semantic compiler mode: {configured_mode}",
-                configured_mode=configured_mode,
-            )
+        return UnavailableSemanticCompilerBackend(reason=f"unsupported semantic compiler mode: {configured_mode}", configured_mode=configured_mode)
+
+    if configured_provider == "disabled":
+        return DisabledSemanticCompilerBackend() if allow_test_backends else UnavailableSemanticCompilerBackend(reason="semantic compiler disabled", configured_mode="disabled")
+    if configured_provider == "stub":
+        return StubSemanticCompilerBackend() if allow_test_backends else UnavailableSemanticCompilerBackend(reason="semantic compiler stub mode disabled", configured_mode="stub")
     if configured_provider == "ollama":
-        if not isinstance(configured_model, str) or not configured_model.strip():
-            return UnavailableSemanticCompilerBackend(
-                reason="SEMANTIC_COMPILER_MODEL is not configured for the normal runtime",
-                configured_mode=configured_provider,
-            )
+        if not isinstance(configured_base_url, str) or not configured_base_url.strip():
+            return UnavailableSemanticCompilerBackend(reason="semantic compiler base_url is not configured", configured_mode="ollama")
         return OllamaSemanticCompilerBackend(
             model=configured_model,
-            base_url=configured_base_url,
+            base_url=configured_base_url.strip(),
             timeout_seconds=timeout_seconds,
         )
-    return UnavailableSemanticCompilerBackend(
-        reason=f"unsupported semantic compiler provider: {configured_provider}",
-        configured_mode=configured_provider,
-    )
+    return UnavailableSemanticCompilerBackend(reason=f"unsupported semantic compiler provider: {configured_provider}", configured_mode=configured_provider)

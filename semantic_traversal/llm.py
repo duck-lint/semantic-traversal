@@ -48,7 +48,7 @@ class StubLLMBackend:
         self._prefix = prefix
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
-        user_input = synthesis_context_packet["user_input"]
+        user_input = synthesis_context_packet["raw_user_input"]
         turn_id = synthesis_context_packet["turn_id"]
         text = f"{self._prefix} for turn {turn_id}: {user_input}"
         return LLMResponse(
@@ -71,10 +71,9 @@ class OpenAIResponsesBackend:
         response = self._client.responses.create(
             model=self._model,
             instructions=(
-                "You are a helpful assistant inside the semantic-traversal first build target. "
+                "You are a helpful assistant inside the semantic-traversal runtime. "
                 "Respond directly to the user using the provided synthesis context packet only. "
-                "Treat semantic_compiler_packet as the primary semantic target object. "
-                "Use only approved_retrieval_packet. "
+                "Treat semantic_compiler_packet and approved_retrieval_packet as authoritative. "
                 "Do not invent retrieval results or graph operations. "
                 "Do not decide evidence validity or repair traversal, retrieval, or coverage."
             ),

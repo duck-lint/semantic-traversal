@@ -11,63 +11,14 @@ from typing import Any
 
 from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
-from .hashing import sha256_json, sha256_text
-from .llm import LLMBackend
+from .hashing import sha256_json
+from .llm import LLMBackend, LLMResponse
 from .semantic_compiler import (
-    FOLLOWUP_EXPLETIVE_PATTERNS,
-    SemanticCompilerResponse,
     SemanticCompilerBackend,
-    collect_compiler_terms,
-    _detect_followup_signals,
-    _resolve_followup_referents,
+    SemanticCompilerResponse,
     resolve_semantic_compiler_backend,
 )
-from .storage import append_ledger_record, create_thread_paths, load_json, read_ledger, write_json
-
-
-@dataclass(frozen=True)
-class TurnExecutionResult:
-    thread_id: str
-    turn_id: int
-    thread_root: Path
-    turn_root: Path
-    conversation_thread_path: Path
-    thread_state_path: Path
-    thread_ledger_path: Path
-    semantic_compiler_packet_path: Path
-    turn_compilation_packet_path: Path
-    semantic_traversal_manifest_path: Path
-    retrieval_packet_path: Path
-    coverage_report_path: Path
-    synthesis_context_packet_path: Path
-    state_delta_path: Path
-    isolated_semantic_compiler_packet_path: Path
-    isolated_semantic_compiler_raw_path: Path
-    contextual_semantic_compiler_packet_path: Path
-    contextual_semantic_compiler_raw_path: Path
-    assistant_response: str | None
-    llm_metadata: dict[str, Any]
-    runtime_outcome: str
-    blocking_reasons: list[str]
-    prior_thread_state: dict[str, Any]
-    next_thread_state: dict[str, Any]
-    ledger_record: dict[str, Any]
-    semantic_compiler_packet: dict[str, Any]
-    turn_compilation_packet: dict[str, Any]
-    semantic_traversal_manifest: dict[str, Any]
-    retrieval_packet: dict[str, Any]
-    coverage_report: dict[str, Any]
-    synthesis_context_packet: dict[str, Any]
-    isolated_semantic_compiler_packet: dict[str, Any]
-    contextual_semantic_compiler_packet: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class SemanticCompilerArtifacts:
-    isolated_packet: dict[str, Any]
-    isolated_raw_artifact: dict[str, Any]
-    contextual_packet: dict[str, Any]
-    contextual_raw_artifact: dict[str, Any]
+from .storage import append_ledger_record, create_thread_paths, load_json, write_json
 
 
 QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -102,136 +53,58 @@ STOP_WORDS = {
     "you",
     "your",
 }
+REFERENTIAL_SURFACE_WORDS = {"it", "that", "this", "those", "they", "them"}
 
-GENERIC_RELATION_WORDS = {
-    "about",
-    "analysis",
-    "argument",
-    "assessment",
-    "attitude",
-    "between",
-    "category",
-    "compare",
-    "comparison",
-    "concept",
-    "concrete",
-    "consumption",
-    "effect",
-    "emotional",
-    "emotion",
-    "feel",
-    "feeling",
-    "feelings",
-    "for",
-    "general",
-    "impact",
-    "influence",
-    "objective",
-    "of",
-    "on",
-    "opinion",
-    "perspective",
-    "predicate",
-    "question",
-    "questioning",
-    "relation",
-    "relationship",
-    "response",
-    "shell",
-    "specific",
-    "specificity",
-    "stance",
-    "subjective",
-    "think",
-    "thought",
-    "thoughts",
-    "timing",
-    "topic",
-    "view",
-}
 
-REQUEST_FILLER_WORDS = {
-    "please",
-    "kindly",
-}
-
-CAUSAL_DISAMBIGUATION_PATTERNS = (
-    (re.compile(r"\bcoming from\b", re.IGNORECASE), "coming from"),
-    (re.compile(r"\bcaused by\b", re.IGNORECASE), "caused by"),
-    (re.compile(r"\bcome from\b", re.IGNORECASE), "come from"),
-    (re.compile(r"\bdue to\b", re.IGNORECASE), "due to"),
-    (re.compile(r"\bfrom\b", re.IGNORECASE), "from"),
-    (re.compile(r"\bmake(?:s|d)?\b", re.IGNORECASE), "make"),
-    (re.compile(r"\bcause(?:s|d)?\b", re.IGNORECASE), "cause"),
-    (re.compile(r"\btrigger(?:s|ed)?\b", re.IGNORECASE), "trigger"),
-    (re.compile(r"\baffect(?:s|ed)?\b", re.IGNORECASE), "affect"),
-    (re.compile(r"\bbecause\b", re.IGNORECASE), "because"),
-)
-
-COMPARISON_DISAMBIGUATION_PATTERNS = (
-    (re.compile(r"\bcloser to\b", re.IGNORECASE), "closer to"),
-    (re.compile(r"\bmore likely\b", re.IGNORECASE), "more likely"),
-    (re.compile(r"\bcompare\b", re.IGNORECASE), "compare"),
-    (re.compile(r"\bversus\b", re.IGNORECASE), "versus"),
-    (re.compile(r"\bvs\.?\b", re.IGNORECASE), "vs"),
-    (re.compile(r"\bwhich is\b", re.IGNORECASE), "which is"),
-    (re.compile(r"\bwhich\b", re.IGNORECASE), "which"),
-)
-
-RAW_TOPIC_FRAME_PATTERNS = (
-    re.compile(r"^(?:what|how)\s+do\s+(?:i|you|we|they)\s+(?:think|feel|view|see|assess)\s+about\s+(.+)$", re.IGNORECASE),
-    re.compile(r"^(?:what(?:'s| is)\s+)?(?:my|your|our|their)\s+(?:opinion|view|perspective)\s+(?:about|on|of)\s+(.+)$", re.IGNORECASE),
-    re.compile(r"^(?:what(?:'s| is)\s+)?(?:my|your|our|their)\s+thoughts?\s+(?:about|on)\s+(.+)$", re.IGNORECASE),
-    re.compile(r"^(?:thoughts?|opinions?|views?)\s+(?:about|on)\s+(.+)$", re.IGNORECASE),
-)
+@dataclass(frozen=True)
+class TurnExecutionResult:
+    thread_id: str
+    turn_id: int
+    thread_root: Path
+    turn_root: Path
+    conversation_thread_path: Path
+    thread_state_path: Path
+    thread_ledger_path: Path
+    semantic_compiler_packet_path: Path
+    semantic_traversal_manifest_path: Path
+    retrieval_packet_path: Path
+    coverage_report_path: Path
+    synthesis_context_packet_path: Path
+    state_delta_path: Path
+    assistant_response: str | None
+    llm_metadata: dict[str, Any]
+    runtime_outcome: str
+    blocking_reasons: list[str]
+    prior_thread_state: dict[str, Any]
+    next_thread_state: dict[str, Any]
+    ledger_record: dict[str, Any]
+    semantic_compiler_status: str
+    semantic_compiler_packet: dict[str, Any]
+    semantic_traversal_manifest: dict[str, Any]
+    retrieval_packet: dict[str, Any]
+    coverage_report: dict[str, Any]
+    synthesis_context_packet: dict[str, Any]
+    state_delta: dict[str, Any]
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _default_thread_document(thread_id: str, created_at: str) -> dict[str, Any]:
-    return {
-        "thread_id": thread_id,
-        "created_at": created_at,
-        "updated_at": created_at,
-        "turn_count": 0,
-        "latest_thread_state_hash": None,
-        "latest_perturbation_hash": None,
-        "ledger_record_count": 0,
-        "messages": [],
-    }
+def _resolve_data_path(data_root: Path, raw_path: Path) -> Path:
+    if raw_path.is_absolute():
+        return raw_path.resolve()
+    return (data_root / raw_path).resolve()
 
 
-def _default_thread_state(thread_id: str, created_at: str) -> dict[str, Any]:
-    return {
-        "thread_id": thread_id,
-        "latest_turn_id": 0,
-        "conversation_summary": "",
-        "recent_messages": [],
-        "current_user_goals": [],
-        "open_questions": [],
-        "active_constraints": [],
-        "recent_semantic_trajectory": [],
-        "latest_user_input": None,
-        "latest_assistant_response": None,
-        "updated_at": created_at,
-        "latest_thread_state_hash": None,
-    }
+def _normalize_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
 
 
-def _dedupe_reasons(reasons: list[str]) -> list[str]:
-    deduped: list[str] = []
-    for reason in reasons:
-        if reason not in deduped:
-            deduped.append(reason)
-    return deduped
-
-
-def _extract_lexical_query_terms(user_input: str) -> list[str]:
+def _extract_terms(text: str) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
-    for token in QUERY_TOKEN_RE.findall(user_input.lower()):
+    for token in QUERY_TOKEN_RE.findall(text.lower()):
         if len(token) < 3 or token in STOP_WORDS or token.isdigit():
             continue
         if token not in seen:
@@ -240,2746 +113,747 @@ def _extract_lexical_query_terms(user_input: str) -> list[str]:
     return terms
 
 
-def _collect_string_terms(value: Any) -> list[str]:
+def _coerce_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
     if isinstance(value, str):
-        return collect_compiler_terms(value)
-    if isinstance(value, list):
-        terms: list[str] = []
-        for item in value:
-            if isinstance(item, str):
-                for term in collect_compiler_terms(item):
-                    if term not in terms:
-                        terms.append(term)
-        return terms
-    return []
-
-
-def _collect_compiler_hint_terms(
-    parsed_payload: dict[str, Any] | None,
-    *,
-    compiler_mode: str,
-) -> tuple[list[str], dict[str, list[str]]]:
-    if not parsed_payload:
-        return [], {}
-
-    allowed_fields: list[tuple[str, Any]] = []
-    if compiler_mode == "isolated":
-        allowed_fields = [
-            ("isolated.candidate_targets", parsed_payload.get("candidate_targets")),
-            ("isolated.candidate_relations", parsed_payload.get("candidate_relations")),
-            ("isolated.terms_or_phrases_not_to_discard", parsed_payload.get("terms_or_phrases_not_to_discard")),
-        ]
-    elif compiler_mode == "contextual":
-        retrieval_hints = parsed_payload.get("retrieval_hints")
-        if isinstance(retrieval_hints, dict):
-            allowed_fields = [
-                ("contextual.retrieval_hints.lexical_terms", retrieval_hints.get("lexical_terms")),
-                ("contextual.retrieval_hints.phrases", retrieval_hints.get("phrases")),
-                ("contextual.retrieval_hints.entity_hints", retrieval_hints.get("entity_hints")),
-                ("contextual.retrieval_hints.relation_hints", retrieval_hints.get("relation_hints")),
-            ]
-
-    terms: list[str] = []
-    sources: dict[str, list[str]] = {}
-    for source_label, value in allowed_fields:
-        for term in _collect_string_terms(value):
-            if term not in terms:
-                terms.append(term)
-            if source_label not in sources.setdefault(term, []):
-                sources[term].append(source_label)
-    return terms, sources
-
-
-def _expected_type_name(expected_type: type[Any]) -> str:
-    return getattr(expected_type, "__name__", str(expected_type))
-
-
-def _list_or_empty(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _dict_or_empty(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _normalize_semantic_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
-
-
-def _normalize_resolved_referent_value(value: Any) -> str:
-    return _normalize_semantic_text(value)
-
-
-def _collect_resolved_referent_targets(resolved_referents: Any) -> list[str]:
-    targets: list[str] = []
-    if not isinstance(resolved_referents, list):
-        return targets
-    for resolved_referent in resolved_referents:
-        if isinstance(resolved_referent, dict):
-            resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
-            if resolved_to:
-                normalized = _normalize_resolved_referent_value(resolved_to)
-                if normalized and normalized not in targets:
-                    targets.append(normalized)
-    return targets
-
-
-def classify_semantic_question_shape(
-    *,
-    raw_user_input: str,
-    prior_thread_state: dict[str, Any],
-    candidate_entities: list[str],
-    deterministic_followup_detection: dict[str, Any],
-) -> dict[str, Any]:
-    lowered = raw_user_input.lower()
-    has_recent_context = bool(
-        prior_thread_state.get("recent_messages")
-        or prior_thread_state.get("recent_user_messages")
-        or prior_thread_state.get("recent_semantic_trajectory")
-    )
-    raw_topic_terms = {
-        term
-        for term in _extract_lexical_query_terms(raw_user_input)
-        if term not in GENERIC_RELATION_WORDS
-    }
-    concrete_candidates: list[str] = []
-    for candidate in candidate_entities:
-        if not isinstance(candidate, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
+    if not isinstance(value, list):
+        return [str(value).strip()] if str(value).strip() else []
+    items: list[str] = []
+    for entry in value:
+        candidate: Any = entry
+        if isinstance(entry, dict):
+            candidate = entry.get("label") or entry.get("resolved_to") or entry.get("surface_form") or entry.get("value")
+        if candidate is None:
             continue
-        cleaned = candidate.strip()
-        if not cleaned or _is_generic_relation_shell(cleaned, raw_topic_terms=raw_topic_terms):
+        cleaned = str(candidate).strip()
+        if cleaned and cleaned not in items:
+            items.append(cleaned)
+    return items
+
+
+def _ensure_message_list(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
             continue
-        if cleaned not in concrete_candidates:
-            concrete_candidates.append(cleaned)
+        role = str(message.get("role") or "").strip().lower()
+        content = str(message.get("content") or "").strip()
+        if role and content:
+            normalized.append(
+                {
+                    "role": role,
+                    "content": content,
+                    "turn_id": message.get("turn_id"),
+                    "created_at": message.get("created_at"),
+                }
+            )
+    return normalized
 
-    signals: list[dict[str, Any]] = []
-    limits: list[str] = []
-    question_type = "open_inquiry"
-    confidence = "low"
-    requires_prior_referent = False
-    disambiguation_basis = "default_open_inquiry"
 
-    def add_signal(kind: str, surface: str) -> None:
-        if not any(signal.get("kind") == kind and signal.get("surface") == surface for signal in signals):
-            signals.append({"kind": kind, "surface": surface})
-
-    causal_signals = [surface for pattern, surface in CAUSAL_DISAMBIGUATION_PATTERNS if pattern.search(lowered)]
-    comparison_signals = [surface for pattern, surface in COMPARISON_DISAMBIGUATION_PATTERNS if pattern.search(lowered)]
-    for surface in causal_signals:
-        add_signal("causal_probe", surface)
-    for surface in comparison_signals:
-        add_signal("comparison_probe", surface)
-
-    explicit_concrete_candidates = bool(concrete_candidates)
-    contrastive_or = bool(re.search(r"\bor\b", lowered)) and len(concrete_candidates) >= 2
-    if contrastive_or:
-        add_signal("contrastive_or", "or")
-    has_explicit_disambiguation = bool(causal_signals or comparison_signals or contrastive_or)
-    expletive_it_pattern = any(pattern.search(lowered) for pattern in FOLLOWUP_EXPLETIVE_PATTERNS)
-    has_deterministic_referential_followup = bool(deterministic_followup_detection.get("requires_referent_resolution"))
-
-    if causal_signals and len(concrete_candidates) >= 2:
-        question_type = "causal_disambiguation"
-        confidence = "high" if len(concrete_candidates) >= 2 else "medium"
-        disambiguation_basis = "explicit_contrastive_causal_query"
-    elif (comparison_signals or contrastive_or) and len(concrete_candidates) >= 2:
-        question_type = "comparison_disambiguation"
-        confidence = "high" if len(concrete_candidates) >= 2 else "medium"
-        disambiguation_basis = "explicit_comparison_query"
-    elif (
-        has_deterministic_referential_followup
-        and has_recent_context
-        and not expletive_it_pattern
-        and not has_explicit_disambiguation
-    ):
-        question_type = "referential_followup"
-        confidence = "high" if deterministic_followup_detection.get("referential_signals") else "medium"
-        requires_prior_referent = True
-        disambiguation_basis = "deictic_followup_requires_prior_anchor"
-        for signal in deterministic_followup_detection.get("referential_signals") or []:
-            add_signal("referential_followup", str(signal))
-    elif lowered.startswith(
-        (
-            "what",
-            "how",
-            "why",
-            "which",
-            "who",
-            "where",
-            "when",
-            "is",
-            "are",
-            "do",
-            "does",
-            "did",
-            "can",
-            "could",
-            "would",
-            "should",
-            "will",
-            "tell me about",
-            "tell me ",
-        )
-    ):
-        question_type = "focused_inquiry" if explicit_concrete_candidates else "open_inquiry"
-        confidence = "medium" if explicit_concrete_candidates else "low"
-        disambiguation_basis = "focused_current_turn_inquiry" if explicit_concrete_candidates else "broad_open_inquiry"
-    else:
-        confidence = "medium" if explicit_concrete_candidates else "low"
-        if has_explicit_disambiguation and not explicit_concrete_candidates:
-            limits.append("explicit disambiguation cues present but no concrete current-turn anchors were available")
-
-    if has_deterministic_referential_followup and question_type != "referential_followup":
-        limits.append("deterministic referential follow-up downgraded in favor of explicit current-turn disambiguation")
-    if expletive_it_pattern and has_recent_context:
-        limits.append("expletive it phrase treated as non-referential")
-
+def _default_thread_state(thread_id: str, created_at: str) -> dict[str, Any]:
     return {
-        "question_type": question_type,
-        "confidence": confidence,
-        "signals": signals,
-        "requires_prior_referent": requires_prior_referent,
-        "disambiguation_basis": disambiguation_basis,
-        "limits": limits,
+        "thread_id": thread_id,
+        "latest_turn_id": 0,
+        "conversation_summary": "",
+        "recent_messages": [],
+        "latest_user_input": None,
+        "latest_assistant_response": None,
+        "updated_at": created_at,
+        "latest_thread_state_hash": None,
     }
 
 
-def _resolve_compiler_retrieval_requirement(
+def _default_conversation_thread(thread_id: str, created_at: str) -> dict[str, Any]:
+    return {
+        "thread_id": thread_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "turn_count": 0,
+        "latest_turn_id": 0,
+        "latest_thread_state_hash": None,
+        "latest_perturbation_hash": None,
+        "messages": [],
+    }
+
+
+def _thread_state_hash(thread_state: dict[str, Any]) -> str:
+    payload = dict(thread_state)
+    payload["latest_thread_state_hash"] = None
+    return sha256_json(payload)
+
+
+def _compiler_request_packet(
     *,
-    compiler_payload: dict[str, Any] | None = None,
-    semantic_target: dict[str, Any] | None = None,
-    default_requires_retrieval: bool = True,
-) -> tuple[bool, dict[str, Any]]:
-    resolution = {
-        "source": "default_runtime",
-        "requires_retrieval": bool(default_requires_retrieval),
-        "allow_no_retrieval_needed": not bool(default_requires_retrieval),
-    }
-    if isinstance(compiler_payload, dict):
-        if isinstance(compiler_payload.get("requires_retrieval"), bool):
-            requires_retrieval = bool(compiler_payload.get("requires_retrieval"))
-            resolution.update(
-                {
-                    "source": "compiler_payload.requires_retrieval",
-                    "requires_retrieval": requires_retrieval,
-                    "allow_no_retrieval_needed": not requires_retrieval,
-                }
-            )
-            return requires_retrieval, resolution
-        if isinstance(compiler_payload.get("allow_no_retrieval_needed"), bool):
-            allow_no_retrieval_needed = bool(compiler_payload.get("allow_no_retrieval_needed"))
-            requires_retrieval = not allow_no_retrieval_needed
-            resolution.update(
-                {
-                    "source": "compiler_payload.allow_no_retrieval_needed",
-                    "requires_retrieval": requires_retrieval,
-                    "allow_no_retrieval_needed": allow_no_retrieval_needed,
-                }
-            )
-            return requires_retrieval, resolution
-        coverage_policy = _dict_or_empty(compiler_payload.get("coverage_policy"))
-        if isinstance(coverage_policy.get("requires_retrieval"), bool):
-            requires_retrieval = bool(coverage_policy.get("requires_retrieval"))
-            resolution.update(
-                {
-                    "source": "compiler_payload.coverage_policy.requires_retrieval",
-                    "requires_retrieval": requires_retrieval,
-                    "allow_no_retrieval_needed": not requires_retrieval,
-                }
-            )
-            return requires_retrieval, resolution
-    if isinstance(semantic_target, dict):
-        if isinstance(semantic_target.get("requires_retrieval"), bool):
-            requires_retrieval = bool(semantic_target.get("requires_retrieval"))
-            resolution.update(
-                {
-                    "source": "semantic_target.requires_retrieval",
-                    "requires_retrieval": requires_retrieval,
-                    "allow_no_retrieval_needed": not requires_retrieval,
-                }
-            )
-            return requires_retrieval, resolution
-        if isinstance(semantic_target.get("allow_no_retrieval_needed"), bool):
-            allow_no_retrieval_needed = bool(semantic_target.get("allow_no_retrieval_needed"))
-            requires_retrieval = not allow_no_retrieval_needed
-            resolution.update(
-                {
-                    "source": "semantic_target.allow_no_retrieval_needed",
-                    "requires_retrieval": requires_retrieval,
-                    "allow_no_retrieval_needed": allow_no_retrieval_needed,
-                }
-            )
-            return requires_retrieval, resolution
-    return bool(default_requires_retrieval), resolution
-
-
-def _infer_entity_role(label: str, *, nodes_by_label: dict[str, dict[str, Any]]) -> str:
-    normalized = _normalize_semantic_text(label)
-    node = nodes_by_label.get(normalized, {})
-    kind = str(node.get("kind") or "").strip().lower()
-    if kind in {"topic", "factor", "effect", "constraint", "context"}:
-        return kind
-    if any(token in normalized for token in ("feel", "emotion", "mood", "charged", "anxiety", "melancholy")):
-        return "effect"
-    if any(token in normalized for token in ("sleep", "food", "bed", "quality", "thing", "ate")):
-        return "factor"
-    return "topic" if len(_compiler_target_tokens(label)) >= 2 else "unknown"
-
-
-def _build_compiler_entity_lookup(
-    *,
-    entities: list[dict[str, Any]],
-    graph_nodes: list[dict[str, Any]],
-    candidate_entities: list[str],
-) -> dict[str, str]:
-    lookup: dict[str, str] = {}
-
-    def register(key: Any, entity_id: str) -> None:
-        normalized = _normalize_semantic_text(key)
-        if normalized and normalized not in lookup:
-            lookup[normalized] = entity_id
-
-    candidate_map = {
-        _normalize_semantic_text(label): entity["id"]
-        for label, entity in zip(candidate_entities, entities)
-        if _normalize_semantic_text(label)
-    }
-    for entity in entities:
-        entity_id = str(entity.get("id") or "")
-        register(entity_id, entity_id)
-        register(entity.get("label"), entity_id)
-
-    for node in graph_nodes:
-        if not isinstance(node, dict):
-            continue
-        node_id = str(node.get("id") or "").strip()
-        node_label = str(node.get("label") or "").strip()
-        canonical_id = (
-            candidate_map.get(_normalize_semantic_text(node_label))
-            or candidate_map.get(_normalize_semantic_text(node_id))
-            or lookup.get(_normalize_semantic_text(node_label))
-            or lookup.get(_normalize_semantic_text(node_id))
-        )
-        if canonical_id:
-            register(node_id, canonical_id)
-            register(node_label, canonical_id)
-
-    return lookup
-
-
-def _resolve_compiler_relation_endpoint(
-    endpoint: Any,
-    *,
-    entity_lookup: dict[str, str],
-) -> tuple[str, bool]:
-    endpoint_text = str(endpoint or "").strip()
-    normalized = _normalize_semantic_text(endpoint_text)
-    canonical_id = entity_lookup.get(normalized) if normalized else None
-    if canonical_id:
-        return canonical_id, True
-    return endpoint_text, False
-
-
-def _normalize_compiler_relations(
-    *,
-    graph: dict[str, Any],
-    isolated_payload: dict[str, Any],
-    contextual_payload: dict[str, Any],
-    compiler_stage_payload: dict[str, Any],
-    entities: list[dict[str, Any]],
-    candidate_entities: list[str],
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    relations: list[dict[str, Any]] = []
-    diagnostics = {
-        "normalized_count": 0,
-        "partial_count": 0,
-        "unresolved_count": 0,
-    }
-    graph_nodes = [node for node in _list_or_empty(graph.get("nodes")) if isinstance(node, dict)]
-    entity_lookup = _build_compiler_entity_lookup(
-        entities=entities,
-        graph_nodes=graph_nodes,
-        candidate_entities=candidate_entities,
-    )
-
-    for edge in _list_or_empty(graph.get("edges")):
-        if not isinstance(edge, dict):
-            continue
-        source_entity, source_normalized = _resolve_compiler_relation_endpoint(
-            edge.get("source"),
-            entity_lookup=entity_lookup,
-        )
-        target_entity, target_normalized = _resolve_compiler_relation_endpoint(
-            edge.get("target"),
-            entity_lookup=entity_lookup,
-        )
-        if source_normalized and target_normalized:
-            endpoint_normalization = "normalized"
-            diagnostics["normalized_count"] += 1
-        elif source_normalized or target_normalized:
-            endpoint_normalization = "partial"
-            diagnostics["partial_count"] += 1
-        else:
-            endpoint_normalization = "unresolved"
-            diagnostics["unresolved_count"] += 1
-        relations.append(
-            {
-                "source_entity": source_entity,
-                "relation": str(edge.get("kind") or ""),
-                "target_entity": target_entity,
-                "confidence": "medium",
-                "source": "model_inference",
-                "original_source": str(edge.get("source") or ""),
-                "original_target": str(edge.get("target") or ""),
-                "endpoint_normalization": endpoint_normalization,
-            }
-        )
-
-    if relations:
-        return relations, diagnostics
-
-    relation_sources = (
-        _list_or_empty(compiler_stage_payload.get("candidate_relations"))
-        or _list_or_empty(contextual_payload.get("candidate_relations"))
-        or _list_or_empty(isolated_payload.get("candidate_relations"))
-    )
-    for relation in relation_sources:
-        if isinstance(relation, str) and relation.strip():
-            relations.append(
-                {
-                    "source_entity": entities[0]["id"] if entities else "entity:unknown",
-                    "relation": relation.strip(),
-                    "target_entity": entities[1]["id"] if len(entities) > 1 else "entity:unknown",
-                    "confidence": "low",
-                    "source": "model_inference",
-                    "endpoint_normalization": "normalized" if len(entities) >= 2 else "unresolved",
-                }
-            )
-            if len(entities) >= 2:
-                diagnostics["normalized_count"] += 1
-            else:
-                diagnostics["unresolved_count"] += 1
-    return relations, diagnostics
-
-
-def _build_semantic_compiler_packet(
-    *,
-    user_input: str,
-    prior_thread_state: dict[str, Any],
-    compiler_payload: dict[str, Any],
-    isolated_packet: dict[str, Any],
-    contextual_packet: dict[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
-    compiler_reasons: list[str] = []
-    followup_detection = _detect_followup_signals(user_input, prior_thread_state)
-    compiler_stage_payload = _dict_or_empty(compiler_payload)
-    isolated_payload = _dict_or_empty(isolated_packet.get("parsed_payload"))
-    contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
-    merged_payload = contextual_payload or isolated_payload
-
-    candidate_entities: list[str] = []
-    seen_entities: set[str] = set()
-    for source in (
-        _list_or_empty(isolated_payload.get("candidate_targets")),
-        _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")),
-        _list_or_empty(contextual_payload.get("candidate_targets")),
-        _list_or_empty(compiler_stage_payload.get("candidate_targets")),
-        _list_or_empty(contextual_payload.get("resolved_referents")),
-        _list_or_empty(compiler_stage_payload.get("resolved_referents")),
-        _list_or_empty(_dict_or_empty(contextual_payload.get("retrieval_hints")).get("entity_hints")),
-        _list_or_empty(_dict_or_empty(contextual_payload.get("retrieval_hints")).get("phrases")),
-        _list_or_empty(_dict_or_empty(compiler_stage_payload.get("retrieval_hints")).get("entity_hints")),
-        _list_or_empty(_dict_or_empty(compiler_stage_payload.get("retrieval_hints")).get("phrases")),
-    ):
-        for item in source:
-            if isinstance(item, dict):
-                item = item.get("resolved_to") or item.get("label") or item.get("surface_form")
-            if not isinstance(item, str):
-                continue
-            cleaned = item.strip()
-            normalized = _normalize_semantic_text(cleaned)
-            if not cleaned or not normalized or normalized in seen_entities:
-                continue
-            if len(_compiler_target_tokens(cleaned)) == 0:
-                continue
-            seen_entities.add(normalized)
-            candidate_entities.append(cleaned)
-
-    concrete_candidates = _collect_concrete_anchor_candidates(
-        user_input=user_input,
-        isolated_packet=isolated_packet,
-        contextual_packet=contextual_packet,
-        semantic_payload=merged_payload,
-    )
-    for candidate in concrete_candidates:
-        normalized = _normalize_semantic_text(candidate)
-        if normalized and normalized not in seen_entities:
-            seen_entities.add(normalized)
-            candidate_entities.append(candidate)
-
-    question_shape_classification = classify_semantic_question_shape(
-        raw_user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        candidate_entities=candidate_entities,
-        deterministic_followup_detection=followup_detection,
-    )
-
-    deterministic_referents = _resolve_followup_referents(
-        raw_user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        followup_detection=followup_detection,
-    )
-    deterministic_referent_targets = _collect_resolved_referent_targets(deterministic_referents)
-
-    entities: list[dict[str, Any]] = []
-    for index, label in enumerate(candidate_entities, start=1):
-        normalized = _normalize_semantic_text(label)
-        source = "raw_user_input" if normalized and normalized in _normalize_semantic_text(user_input) else "model_inference"
-        if normalized in set(deterministic_referent_targets):
-            source = "prior_thread_state"
-        entities.append(
-            {
-                "id": f"entity:{index}",
-                "label": label,
-                "role": _infer_entity_role(label, nodes_by_label={}),
-                "source": source,
-            }
-        )
-
-    graph = _dict_or_empty(compiler_stage_payload.get("perturbation_semantic_graph")) or _dict_or_empty(
-        contextual_payload.get("perturbation_semantic_graph")
-    ) or _dict_or_empty(isolated_payload.get("perturbation_semantic_graph"))
-    relations, relation_endpoint_normalization = _normalize_compiler_relations(
-        graph=graph,
-        isolated_payload=isolated_payload,
-        contextual_payload=contextual_payload,
-        compiler_stage_payload=compiler_stage_payload,
-        entities=entities,
-        candidate_entities=candidate_entities,
-    )
-
-    disambiguation_options: list[dict[str, Any]] = []
-    if question_shape_classification["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} and entities:
-        for entity in entities[:3]:
-            if _is_generic_relation_shell(str(entity.get("label") or ""), raw_topic_terms={term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}):
-                continue
-            disambiguation_options.append(
-                {
-                    "label": entity["label"],
-                    "description": f"Interpret the query with emphasis on {entity['label']}",
-                    "entities": [entity["id"]],
-                }
-            )
-
-    required_anchors: list[dict[str, Any]] = []
-    raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
-    if followup_detection.get("requires_referent_resolution") and question_shape_classification["question_type"] not in {
-        "causal_disambiguation",
-        "comparison_disambiguation",
-    }:
-        for target in deterministic_referent_targets:
-            if isinstance(target, str) and target.strip():
-                required_anchors.append(
-                    {
-                        "label": target,
-                        "source": "prior_thread_state",
-                        "coverage_role": "must_touch",
-                        "anchor_kind": "prior_thread_referent",
-                    }
-                )
-    if not required_anchors:
-        filtered_candidate_entities = [
-            candidate
-            for candidate in candidate_entities
-            if isinstance(candidate, str)
-            and candidate.strip()
-            and not _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms)
-        ]
-        anchor_seed_candidates = concrete_candidates or filtered_candidate_entities
-        selected_anchor_kind = "current_turn_entity" if question_shape_classification["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} else "current_turn_phrase"
-        for candidate in anchor_seed_candidates[:3]:
-            required_anchors.append(
-                {
-                    "label": candidate,
-                    "source": "raw_user_input",
-                    "coverage_role": "must_touch",
-                    "anchor_kind": selected_anchor_kind,
-                }
-            )
-
-    lexical_terms = _extract_lexical_query_terms(user_input)
-    entity_terms = [entity["label"] for entity in entities]
-    relation_terms = [str(relation.get("relation") or "") for relation in relations if str(relation.get("relation") or "").strip()]
-    avoidance_hints = _list_or_empty(merged_payload.get("avoidance_hints"))
-    avoid_terms = [str(item) for item in avoidance_hints if isinstance(item, str) and str(item).strip()]
-
-    requires_retrieval, retrieval_requirement_resolution = _resolve_compiler_retrieval_requirement(
-        compiler_payload=compiler_stage_payload or merged_payload,
-        default_requires_retrieval=True,
-    )
-    contextual_retrieval_hints = _dict_or_empty(contextual_payload.get("retrieval_hints"))
-    contextual_phrases = _list_or_empty(contextual_retrieval_hints.get("phrases"))
-    canonical_query = contextual_phrases[0] if contextual_phrases else user_input
-    semantic_target = {
-        "intent": str(
-            contextual_payload.get("contextual_user_intent")
-            or isolated_payload.get("probable_user_intent")
-            or user_input
-        ),
-        "question_type": str(question_shape_classification["question_type"]),
-        "canonical_query": canonical_query or user_input,
-        "entities": entities,
-        "relations": relations,
-        "disambiguation_options": disambiguation_options,
-        "required_anchors": required_anchors,
-        "allow_no_retrieval_needed": bool(retrieval_requirement_resolution["allow_no_retrieval_needed"]),
-        "uncertainties": [
-            str(item)
-            for item in _list_or_empty(isolated_payload.get("ambiguities")) + _list_or_empty(contextual_payload.get("ambiguities"))
-            if isinstance(item, str) and item.strip()
-        ],
-    }
-    retrieval_plan = {
-        "lexical_terms": lexical_terms,
-        "entity_terms": entity_terms,
-        "relation_terms": relation_terms,
-        "vector_query": semantic_target["canonical_query"],
-        "graph_seeds": entity_terms[:4],
-        "avoid_terms": avoid_terms,
-    }
-    coverage_policy = {
-        "requires_retrieval": requires_retrieval,
-        "required_anchor_policy": "touch_any" if semantic_target["question_type"] in {"causal_disambiguation", "comparison_disambiguation"} else "touch_all",
-        "coverage_mode": "provenance_alignment",
-        "block_on_missing_exact_phrase": False,
-    }
-    compiler_packet = {
-        "raw_user_input": user_input,
-        "semantic_target": semantic_target,
-        "retrieval_plan": retrieval_plan,
-        "coverage_policy": coverage_policy,
-        "limitations": [
-            "model-generated semantic compiler output",
-            "raw user input remains authoritative",
-            "retrieval/provenance remain runtime-owned",
-        ],
-        "compiler_diagnostics": {
-            "question_shape_classification": question_shape_classification,
-            "deterministic_followup_detection": followup_detection,
-            "deterministic_referent_targets": deterministic_referent_targets,
-            "model_followup_detection": _dict_or_empty(merged_payload.get("followup_detection")),
-            "relation_endpoint_normalization": relation_endpoint_normalization,
-            "retrieval_requirement_resolution": retrieval_requirement_resolution,
-        },
-    }
-    referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
-        compiler_stage_payload=compiler_stage_payload or merged_payload,
-        compiler_packet=compiler_packet,
-        raw_user_input=user_input,
-        prior_thread_state=prior_thread_state,
-    ) if merged_payload else ([], {
-        "deterministic_followup_detection": followup_detection,
-        "deterministic_referent_targets": deterministic_referent_targets,
-        "model_referent_targets": [],
-        "disagreements": [],
-        "requires_referent_resolution": False,
-        "required_anchor_labels": [],
-    })
-    if referent_validation_reasons:
-        compiler_reasons.extend(referent_validation_reasons)
-    compiler_packet["compiler_diagnostics"]["referent_resolution_diagnostics"] = referent_diagnostics
-    if not semantic_target["entities"]:
-        compiler_reasons.append("semantic compiler packet missing entities")
-    if not semantic_target["required_anchors"]:
-        compiler_reasons.append("semantic compiler packet missing required anchors")
-    if not retrieval_plan["lexical_terms"] and not retrieval_plan["entity_terms"]:
-        compiler_reasons.append("semantic compiler packet missing retrieval terms")
-    return compiler_packet, compiler_reasons
-
-
-def _phrase_token_count(value: str) -> int:
-    return len(_compiler_target_tokens(value))
-
-
-def _strip_question_framing(raw_user_input: str) -> str:
-    cleaned = str(raw_user_input or "").strip().strip("?.! ")
-    if not cleaned:
-        return ""
-    for pattern in RAW_TOPIC_FRAME_PATTERNS:
-        match = pattern.match(cleaned)
-        if match:
-            return str(match.group(1) or "").strip().strip("?.! ")
-    return ""
-
-
-def _anchor_matches(target: str, candidate: str) -> bool:
-    normalized_target = _normalize_semantic_text(target)
-    normalized_candidate = _normalize_semantic_text(candidate)
-    if not normalized_target or not normalized_candidate:
-        return False
-    return (
-        normalized_target == normalized_candidate
-        or normalized_target in normalized_candidate
-        or normalized_candidate in normalized_target
-    )
-
-
-def _is_generic_relation_shell(target: str, *, raw_topic_terms: set[str]) -> bool:
-    target_tokens = _compiler_target_tokens(target)
-    if not target_tokens:
-        return True
-    nongeneric_tokens = [token for token in target_tokens if token not in GENERIC_RELATION_WORDS and token not in REQUEST_FILLER_WORDS]
-    topical_overlap = [token for token in nongeneric_tokens if token in raw_topic_terms]
-    if topical_overlap:
-        return False
-    if not nongeneric_tokens:
-        return True
-    if len(target_tokens) <= 3 and len(nongeneric_tokens) <= 1:
-        return True
-    if len(nongeneric_tokens) * 2 <= len(target_tokens):
-        return True
-    normalized_target = _normalize_semantic_text(target)
-    for suffix in (" about", " on", " of", " between", " for"):
-        if normalized_target.endswith(suffix) and len(nongeneric_tokens) <= 1:
-            return True
-    return False
-
-
-def _collect_concrete_anchor_candidates(
-    *,
-    user_input: str,
-    isolated_packet: dict[str, Any],
-    contextual_packet: dict[str, Any],
-    semantic_payload: dict[str, Any],
-) -> list[str]:
-    raw_topic_terms = {term for term in _extract_lexical_query_terms(user_input) if term not in GENERIC_RELATION_WORDS}
-    scored_candidates: list[tuple[int, str]] = []
-    seen: set[str] = set()
-
-    def add_candidate(value: Any, *, weight: int) -> None:
-        if not isinstance(value, str):
-            return
-        candidate = value.strip()
-        normalized_candidate = _normalize_semantic_text(candidate)
-        if not candidate or not normalized_candidate or normalized_candidate in seen:
-            return
-        if _is_generic_relation_shell(candidate, raw_topic_terms=raw_topic_terms):
-            return
-        token_count = _phrase_token_count(candidate)
-        if token_count == 0:
-            return
-        topical_overlap = len(set(_compiler_target_tokens(candidate)).intersection(raw_topic_terms))
-        score = weight + (token_count * 10) + (topical_overlap * 5)
-        seen.add(normalized_candidate)
-        scored_candidates.append((score, candidate))
-
-    stripped_topic = _strip_question_framing(user_input)
-    add_candidate(stripped_topic, weight=60)
-
-    isolated_payload = _dict_or_empty(isolated_packet.get("parsed_payload"))
-    for candidate in _list_or_empty(isolated_payload.get("candidate_targets")):
-        add_candidate(candidate, weight=50)
-    for candidate in _list_or_empty(isolated_payload.get("terms_or_phrases_not_to_discard")):
-        add_candidate(candidate, weight=45)
-
-    retrieval_hints = _dict_or_empty(semantic_payload.get("retrieval_hints"))
-    for candidate in _list_or_empty(retrieval_hints.get("phrases")):
-        add_candidate(candidate, weight=55)
-    for candidate in _list_or_empty(retrieval_hints.get("entity_hints")):
-        add_candidate(candidate, weight=30)
-
-    contextual_payload = _dict_or_empty(contextual_packet.get("parsed_payload"))
-    contextual_retrieval_hints = _dict_or_empty(contextual_payload.get("retrieval_hints"))
-    for candidate in _list_or_empty(contextual_retrieval_hints.get("phrases")):
-        add_candidate(candidate, weight=35)
-    for candidate in _list_or_empty(contextual_retrieval_hints.get("entity_hints")):
-        add_candidate(candidate, weight=20)
-
-    scored_candidates.sort(key=lambda item: (-item[0], -_phrase_token_count(item[1]), item[1]))
-    return [candidate for _, candidate in scored_candidates]
-
-
-def _validate_resolved_referents(
-    *,
-    compiler_stage_payload: dict[str, Any],
-    compiler_packet: dict[str, Any],
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
-) -> tuple[list[str], dict[str, Any]]:
-    reasons: list[str] = []
-    followup_detection = _detect_followup_signals(raw_user_input, prior_thread_state)
-    semantic_target = _dict_or_empty(compiler_packet.get("semantic_target"))
-    question_type = str(semantic_target.get("question_type") or "")
-    requires_resolution = bool(followup_detection.get("requires_referent_resolution")) and question_type == "referential_followup"
-    resolved_referents = compiler_stage_payload.get("resolved_referents")
-    deterministic_referents = _resolve_followup_referents(
+    recent_messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "raw_user_input": raw_user_input,
+        "prior_thread_state": prior_thread_state,
+        "recent_messages": recent_messages,
+        "instruction": "Compile a minimal semantic target for traversal. Do not answer the user.",
+    }
+
+
+def _deterministic_semantic_packet(
+    *,
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+    recent_messages: list[dict[str, Any]],
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    retrieval_terms = _extract_terms(raw_user_input)
+    query = raw_user_input.strip()
+    graph_seeds: list[str] = []
+    if retrieval_terms:
+        graph_seeds.append(query)
+        if prior_thread_state.get("latest_user_input"):
+            graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
+    if recent_messages and any(surface in raw_user_input.lower() for surface in REFERENTIAL_SURFACE_WORDS):
+        last_message = recent_messages[-1].get("content")
+        if isinstance(last_message, str) and last_message.strip():
+            graph_seeds.append(last_message.strip())
+    return {
+        "raw_user_input": raw_user_input,
+        "intent": "deterministic lexical fallback",
+        "query": query,
+        "entities": [],
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_terms": retrieval_terms,
+        "vector_query": query,
+        "graph_seeds": list(dict.fromkeys(seed for seed in graph_seeds if seed)),
+        "limitations": list(limitations or ["semantic compiler backend unavailable; deterministic lexical fallback used"]),
+    }
+
+
+def _canonicalize_compiler_packet(
+    *,
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+    recent_messages: list[dict[str, Any]],
+    payload: dict[str, Any] | None,
+    fallback_limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    fallback_packet = _deterministic_semantic_packet(
         raw_user_input=raw_user_input,
         prior_thread_state=prior_thread_state,
-        followup_detection=followup_detection,
+        recent_messages=recent_messages,
+        limitations=fallback_limitations,
     )
-    deterministic_targets = _collect_resolved_referent_targets(deterministic_referents)
-    model_targets = _collect_resolved_referent_targets(resolved_referents)
-    disagreements: list[str] = []
+    if not isinstance(payload, dict):
+        return fallback_packet
 
-    if resolved_referents is not None:
-        if not isinstance(resolved_referents, list):
-            actual_type = type(resolved_referents).__name__ if resolved_referents is not None else "missing"
-            reasons.append(f"resolved_referents expected list, got {actual_type}")
-        else:
-            for index, resolved_referent in enumerate(resolved_referents):
-                if not isinstance(resolved_referent, dict):
-                    reasons.append(f"resolved_referents[{index}] expected dict, got {type(resolved_referent).__name__}")
-                    continue
-                required_fields = ("surface_form", "resolved_to", "source", "confidence", "required_for_target")
-                for field_name in required_fields:
-                    if field_name not in resolved_referent:
-                        reasons.append(f"resolved_referents[{index}] missing {field_name}")
-                surface_form = resolved_referent.get("surface_form")
-                resolved_to = resolved_referent.get("resolved_to")
-                source = resolved_referent.get("source")
-                confidence = resolved_referent.get("confidence")
-                required_for_target = resolved_referent.get("required_for_target")
-                if not isinstance(surface_form, str):
-                    reasons.append(
-                        f"resolved_referents[{index}].surface_form expected str, got {type(surface_form).__name__}"
-                    )
-                if not isinstance(resolved_to, str):
-                    reasons.append(
-                        f"resolved_referents[{index}].resolved_to expected str, got {type(resolved_to).__name__}"
-                    )
-                if not isinstance(source, str):
-                    reasons.append(f"resolved_referents[{index}].source expected str, got {type(source).__name__}")
-                if confidence not in {"high", "medium", "low"}:
-                    actual_type = type(confidence).__name__ if confidence is not None else "missing"
-                    reasons.append(
-                        f"resolved_referents[{index}].confidence expected one of high, medium, low, got {actual_type}"
-                    )
-                if not isinstance(required_for_target, bool):
-                    reasons.append(
-                        f"resolved_referents[{index}].required_for_target expected bool, got {type(required_for_target).__name__}"
-                    )
-                if required_for_target is True and isinstance(resolved_to, str) and not resolved_to.strip():
-                    reasons.append(
-                        f"resolved_referents[{index}] required_for_target=true but resolved_to is empty"
-                    )
-
-    required_anchors = [
-        str(anchor.get("label") or "").strip()
-        for anchor in _list_or_empty(semantic_target.get("required_anchors"))
-        if isinstance(anchor, dict) and str(anchor.get("label") or "").strip()
-    ]
-
-    contradictory_referents = [
-        resolved_referent
-        for resolved_referent in _list_or_empty(resolved_referents)
-        if isinstance(resolved_referent, dict)
-        and resolved_referent.get("required_for_target") is False
-        and isinstance(resolved_referent.get("resolved_to"), str)
-        and str(resolved_referent.get("resolved_to")).strip()
-        and (
-            not deterministic_targets
-            or any(
-                _anchor_matches(target, str(resolved_referent.get("resolved_to") or "").strip())
-                for target in deterministic_targets
-            )
-        )
-    ]
-    if contradictory_referents and bool(followup_detection.get("requires_referent_resolution")):
-        reasons.append("follow-up semantic target explicitly marks required resolved referent as non-required")
-
-    if requires_resolution:
-        if not isinstance(resolved_referents, list):
-            if not deterministic_targets:
-                reasons.append("follow-up semantic target missing resolved referent")
-                reasons.append("follow-up semantic target missing required resolved referent")
-        else:
-            required_referents = [
-                resolved_referent
-                for resolved_referent in resolved_referents
-                if isinstance(resolved_referent, dict)
-                and resolved_referent.get("required_for_target") is True
-                and isinstance(resolved_referent.get("resolved_to"), str)
-                and str(resolved_referent.get("resolved_to")).strip()
-            ]
-            if not required_referents and not deterministic_targets:
-                reasons.append("follow-up semantic target missing resolved referent")
-                reasons.append("follow-up semantic target missing required resolved referent")
-            for resolved_referent in required_referents:
-                resolved_to = str(resolved_referent.get("resolved_to") or "").strip()
-                if resolved_to and not any(_anchor_matches(label, resolved_to) for label in required_anchors):
-                    reasons.append(
-                        f"semantic_compiler_packet.semantic_target.required_anchors does not include required resolved referent: {resolved_to}"
-                    )
-
-    if deterministic_targets and model_targets:
-        missing_from_model = [target for target in deterministic_targets if target not in model_targets]
-        missing_from_deterministic = [target for target in model_targets if target not in deterministic_targets]
-        if missing_from_model or missing_from_deterministic:
-            disagreements.extend(
-                [
-                    f"deterministic resolved referent candidate missing from model output: {target}"
-                    for target in missing_from_model
-                ]
-            )
-            disagreements.extend(
-                [
-                    f"model resolved referent candidate not predicted deterministically: {target}"
-                    for target in missing_from_deterministic
-                ]
-            )
-
-    diagnostics = {
-        "deterministic_followup_detection": followup_detection,
-        "deterministic_referent_targets": deterministic_targets,
-        "model_referent_targets": model_targets,
-        "disagreements": disagreements,
-        "requires_referent_resolution": requires_resolution,
-        "required_anchor_labels": required_anchors,
-    }
-    return reasons, diagnostics
+    packet = dict(fallback_packet)
+    packet["intent"] = str(payload.get("intent") or packet["intent"]).strip() or packet["intent"]
+    packet["query"] = str(payload.get("query") or packet["query"]).strip() or packet["query"]
+    packet["entities"] = _coerce_string_list(payload.get("entities")) or packet["entities"]
+    packet["relations"] = _coerce_string_list(payload.get("relations")) or packet["relations"]
+    packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
+    packet["retrieval_terms"] = _coerce_string_list(payload.get("retrieval_terms")) or packet["retrieval_terms"]
+    packet["vector_query"] = str(payload.get("vector_query") or packet["query"]).strip() or packet["query"]
+    packet["graph_seeds"] = _coerce_string_list(payload.get("graph_seeds")) or packet["graph_seeds"]
+    packet["limitations"] = _coerce_string_list(payload.get("limitations")) or packet["limitations"]
+    if not packet["retrieval_terms"]:
+        packet["retrieval_terms"] = _extract_terms(packet["query"])
+    if not packet["graph_seeds"] and packet["retrieval_terms"]:
+        packet["graph_seeds"] = [packet["query"]]
+    return packet
 
 
-def _validate_semantic_compiler_packet(
-    packet: dict[str, Any],
+def _compiler_response_to_packet(
     *,
     raw_user_input: str,
-) -> list[str]:
-    reasons: list[str] = []
-    if packet.get("raw_user_input") != raw_user_input:
-        reasons.append("semantic_compiler_packet did not preserve raw_user_input")
-
-    semantic_target = packet.get("semantic_target")
-    retrieval_plan = packet.get("retrieval_plan")
-    coverage_policy = packet.get("coverage_policy")
-    if not isinstance(semantic_target, dict):
-        reasons.append("semantic_compiler_packet.semantic_target missing or invalid")
-    if not isinstance(retrieval_plan, dict):
-        reasons.append("semantic_compiler_packet.retrieval_plan missing or invalid")
-    if not isinstance(coverage_policy, dict):
-        reasons.append("semantic_compiler_packet.coverage_policy missing or invalid")
-    if reasons:
-        return reasons
-
-    if not isinstance(semantic_target.get("entities"), list):
-        reasons.append("semantic_compiler_packet.semantic_target.entities missing or invalid")
-    if not isinstance(semantic_target.get("required_anchors"), list):
-        reasons.append("semantic_compiler_packet.semantic_target.required_anchors missing or invalid")
-    if coverage_policy.get("coverage_mode") != "provenance_alignment":
-        reasons.append("semantic_compiler_packet.coverage_policy.coverage_mode must be provenance_alignment")
-    if coverage_policy.get("block_on_missing_exact_phrase") is not False:
-        reasons.append("semantic_compiler_packet.coverage_policy.block_on_missing_exact_phrase must be false")
-
-    requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
-    useful_query_surfaces = [
-        *(_collect_string_terms(retrieval_plan.get("lexical_terms"))),
-        *(_collect_string_terms(retrieval_plan.get("entity_terms"))),
-        *(_collect_string_terms(retrieval_plan.get("relation_terms"))),
-        *(_collect_string_terms(retrieval_plan.get("graph_seeds"))),
-        *(_collect_string_terms(retrieval_plan.get("vector_query"))),
-        *(_collect_string_terms(semantic_target.get("canonical_query"))),
-    ]
-    if requires_retrieval and not useful_query_surfaces:
-        reasons.append("semantic_compiler_packet missing retrieval terms")
-    return reasons
-
-
-def _normalize_coverage_text(value: Any) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", str(value).lower())
-    return re.sub(r"\s+", " ", normalized).strip()
-
-
-def _compiler_target_tokens(value: Any) -> list[str]:
-    tokens: list[str] = []
-    seen: set[str] = set()
-    for token in QUERY_TOKEN_RE.findall(str(value).lower()):
-        if len(token) < 3 or token in STOP_WORDS or token.isdigit():
-            continue
-        if token not in seen:
-            seen.add(token)
-            tokens.append(token)
-    return tokens
-
-
-def _chunk_evidence_fields(chunk: dict[str, Any]) -> list[tuple[str, str]]:
-    return [
-        ("paragraph_text", str(chunk.get("paragraph_text") or "")),
-        ("note_title", str(chunk.get("note_title") or "")),
-        ("section_label", str(chunk.get("section_label") or "")),
-        ("relative_path", str(chunk.get("relative_path") or "")),
-        ("note_path", str(chunk.get("note_path") or "")),
-        ("section_path", " / ".join(str(item) for item in list(chunk.get("section_path") or []))),
-        ("frontmatter", json.dumps(chunk.get("frontmatter") or {}, sort_keys=True, ensure_ascii=True)),
-    ]
-
-
-def _build_evidence_excerpt(text: str, target: str, *, max_length: int = 200) -> str:
-    raw_text = str(text)
-    if not raw_text:
-        return ""
-    lowered = raw_text.lower()
-    target_lower = str(target).lower().strip()
-    if target_lower:
-        index = lowered.find(target_lower)
-        if index >= 0:
-            start = max(0, index - 60)
-            end = min(len(raw_text), index + len(target_lower) + 120)
-            return raw_text[start:end].strip()
-    return raw_text[:max_length].strip()
-
-
-def _match_target_to_evidence_fields(target: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
-    normalized_target = _normalize_coverage_text(target)
-    target_tokens = _compiler_target_tokens(target)
-    if not normalized_target and not target_tokens:
-        return None
-    for field_name, field_text in _chunk_evidence_fields(chunk):
-        normalized_field = _normalize_coverage_text(field_text)
-        if not normalized_field:
-            continue
-        if normalized_target and normalized_target in normalized_field:
-            return {
-                "field": field_name,
-                "match_type": "normalized_phrase",
-                "excerpt": _build_evidence_excerpt(field_text, target),
-            }
-    for field_name, field_text in _chunk_evidence_fields(chunk):
-        normalized_field = _normalize_coverage_text(field_text)
-        if not normalized_field:
-            continue
-        if target_tokens:
-            field_tokens = set(_compiler_target_tokens(field_text))
-            if all(token in field_tokens for token in target_tokens):
-                return {
-                    "field": field_name,
-                    "match_type": "token_set_same_chunk",
-                    "excerpt": _build_evidence_excerpt(field_text, target),
-                }
-    return None
-
-
-def _evaluate_semantic_compiler_alignment(
-    *,
-    turn_compilation_packet: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
-    retrieval_packet: dict[str, Any],
-    config: RuntimeConfig,
-) -> dict[str, Any]:
-    compiler_packet = _dict_or_empty(turn_compilation_packet.get("semantic_compiler_packet"))
-    compiler_stage_diagnostics = _dict_or_empty(turn_compilation_packet.get("compiler_stage_diagnostics"))
-    referent_diagnostics = _dict_or_empty(compiler_stage_diagnostics.get("referent_resolution_diagnostics"))
-    semantic_target = _dict_or_empty(compiler_packet.get("semantic_target"))
-    retrieval_plan = _dict_or_empty(compiler_packet.get("retrieval_plan"))
-    coverage_policy = _dict_or_empty(compiler_packet.get("coverage_policy"))
-    selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
-    target_present = bool(compiler_packet)
-    target_valid = bool(semantic_target and retrieval_plan and coverage_policy)
-    if not dict(turn_compilation_packet.get("semantic_contract_validation") or {}).get("valid"):
-        target_valid = False
-
-    selected_chunk_provenance = [
-        {
-            "chunk_id": str(chunk.get("chunk_id") or ""),
-            "note_id": str(chunk.get("note_id") or ""),
-            "source_root_label": str(chunk.get("source_root_label") or ""),
-            "relative_path": str(chunk.get("relative_path") or ""),
-            "has_provenance": bool(chunk.get("chunk_id") and chunk.get("note_id") and chunk.get("relative_path")),
-        }
-        for chunk in selected_chunks
-    ]
-    surface_statuses = {
-        str(surface_name): ("activated" if bool(is_activated) else "blocked")
-        for surface_name, is_activated in dict(semantic_traversal_manifest.get("surface_contributions") or {}).items()
-    }
-    selected_text = " ".join(
-        " ".join(
-            [
-                str(chunk.get("paragraph_text") or ""),
-                str(chunk.get("note_title") or ""),
-                str(chunk.get("section_label") or ""),
-                str(chunk.get("relative_path") or ""),
-            ]
+    prior_thread_state: dict[str, Any],
+    recent_messages: list[dict[str, Any]],
+    response: SemanticCompilerResponse,
+) -> tuple[dict[str, Any], str]:
+    payload = response.parsed_payload if isinstance(response.parsed_payload, dict) else None
+    if response.status in {"parsed", "stub"} and payload is not None:
+        return (
+            _canonicalize_compiler_packet(
+                raw_user_input=raw_user_input,
+                prior_thread_state=prior_thread_state,
+                recent_messages=recent_messages,
+                payload=payload,
+            ),
+            response.status,
         )
-        for chunk in selected_chunks
-    )
-    selected_terms = set(_compiler_target_tokens(selected_text))
-    compiler_query_terms = set(
-        _collect_string_terms(retrieval_plan.get("lexical_terms"))
-        + _collect_string_terms(retrieval_plan.get("entity_terms"))
-        + _collect_string_terms(retrieval_plan.get("relation_terms"))
-    )
-    raw_topic_terms = {
-        term
-        for term in _extract_lexical_query_terms(str(compiler_packet.get("raw_user_input") or ""))
-        if term not in GENERIC_RELATION_WORDS
-    }
-
-    def append_unique(target: list[str], value: str) -> None:
-        if value and value not in target:
-            target.append(value)
-
-    resolved_referents = _list_or_empty(compiler_stage_diagnostics.get("resolved_referents"))
-    deterministic_targets = set(_list_or_empty(referent_diagnostics.get("deterministic_referent_targets")))
-    required_anchor_alignment: list[dict[str, Any]] = []
-    diagnostic_gaps: list[str] = []
-    blocking_gaps: list[str] = []
-    aligned_required_anchors: list[dict[str, Any]] = []
-    missing_required_anchors: list[str] = []
-
-    for anchor in _list_or_empty(semantic_target.get("required_anchors")):
-        if not isinstance(anchor, dict):
-            continue
-        label = str(anchor.get("label") or "").strip()
-        if not label:
-            continue
-        anchor_source = str(anchor.get("source") or "raw_user_input")
-        anchor_kind = str(anchor.get("anchor_kind") or "current_turn_phrase")
-        anchor_tokens = set(_compiler_target_tokens(label))
-        generic_shell = _is_generic_relation_shell(label, raw_topic_terms=raw_topic_terms)
-        aligned = False
-        evidence: list[dict[str, Any]] = []
-        if anchor_source == "prior_thread_state":
-            normalized_anchor = _normalize_resolved_referent_value(label)
-            if normalized_anchor in deterministic_targets or any(
-                _normalize_resolved_referent_value(referent.get("resolved_to")) == normalized_anchor
-                for referent in resolved_referents
-                if isinstance(referent, dict)
-            ):
-                aligned = True
-                evidence.append({"alignment_type": "discourse_anchor", "label": label})
-        if not aligned and anchor_tokens and not generic_shell:
-            for chunk in selected_chunks:
-                match = _match_target_to_evidence_fields(label, chunk)
-                if match is not None:
-                    aligned = True
-                    evidence.append(
-                        {
-                            "alignment_type": "retrieved_term_overlap",
-                            "matched_terms": sorted(anchor_tokens.intersection(set(_compiler_target_tokens(str(chunk.get("paragraph_text") or ""))))),
-                            "chunk_id": str(chunk.get("chunk_id") or ""),
-                            "field": match["field"],
-                            "excerpt": match["excerpt"],
-                        }
-                    )
-                    break
-        anchor_record = {
-            "anchor": label,
-            "source": anchor_source,
-            "coverage_role": str(anchor.get("coverage_role") or "must_touch"),
-            "anchor_kind": anchor_kind,
-            "aligned": aligned,
-            "alignment_surface": evidence[0]["alignment_type"] if evidence else None,
-            "evidence": evidence,
-        }
-        required_anchor_alignment.append(anchor_record)
-        if aligned:
-            aligned_required_anchors.append(anchor_record)
-        else:
-            missing_required_anchors.append(label)
-            append_unique(diagnostic_gaps, f"required anchor not aligned: {label}")
-            if generic_shell and anchor_source != "prior_thread_state":
-                append_unique(diagnostic_gaps, f"generic shell target not treated as proof anchor: {label}")
-
-    retrieval_plan_alignment = {
-        "lexical_term_overlap": sorted(set(_collect_string_terms(retrieval_plan.get("lexical_terms"))).intersection(selected_terms)),
-        "entity_term_overlap": sorted(set(_collect_string_terms(retrieval_plan.get("entity_terms"))).intersection(selected_terms)),
-        "relation_term_overlap": sorted(set(_collect_string_terms(retrieval_plan.get("relation_terms"))).intersection(selected_terms)),
-        "query_term_overlap_count": len(compiler_query_terms.intersection(selected_terms)),
-    }
-
-    avoid_results: list[dict[str, Any]] = []
-    present_avoid_terms: list[str] = []
-    for avoid_term in _list_or_empty(retrieval_plan.get("avoid_terms")):
-        if not isinstance(avoid_term, str):
-            continue
-        matched = False
-        matched_evidence: dict[str, Any] | None = None
-        matched_chunk: dict[str, Any] | None = None
-        for chunk in selected_chunks:
-            matched_evidence = _match_target_to_evidence_fields(avoid_term, chunk)
-            if matched_evidence is not None:
-                matched = True
-                matched_chunk = chunk
-                break
-        if matched:
-            present_avoid_terms.append(avoid_term)
-            avoid_results.append(
-                {
-                    "target": avoid_term,
-                    "present": True,
-                    "match_type": matched_evidence["match_type"] if matched_evidence else "normalized_phrase",
-                    "evidence": [] if matched_evidence is None else [
-                        {
-                            "chunk_id": matched_chunk.get("chunk_id") if matched_chunk else None,
-                            "field": matched_evidence["field"],
-                            "excerpt": matched_evidence["excerpt"],
-                        }
-                    ],
-                }
-            )
-        else:
-            avoid_results.append({"target": avoid_term, "present": False, "match_type": None, "evidence": []})
-
-    if "required_surfaces" in coverage_policy:
-        required_surface_names = [str(item) for item in _list_or_empty(coverage_policy.get("required_surfaces")) if str(item).strip()]
-    else:
-        required_surface_names = [surface_name for surface_name, required in config.coverage_require_surface_contributions.items() if required]
-    if "optional_surfaces" in coverage_policy:
-        optional_surface_names = [str(item) for item in _list_or_empty(coverage_policy.get("optional_surfaces")) if str(item).strip()]
-    else:
-        optional_surface_names = [surface_name for surface_name, required in config.coverage_require_surface_contributions.items() if not required]
-
-    available_surfaces = sorted(surface_name for surface_name, status in surface_statuses.items() if status == "activated")
-    missing_required_surfaces = [surface_name for surface_name in required_surface_names if surface_statuses.get(surface_name) != "activated"]
-    missing_optional_surfaces = [surface_name for surface_name in optional_surface_names if surface_statuses.get(surface_name) != "activated"]
-    for surface_name in missing_required_surfaces:
-        append_unique(diagnostic_gaps, f"required surface unavailable: {surface_name}")
-        append_unique(blocking_gaps, f"required surface unavailable: {surface_name}")
-
-    required_policy = str(coverage_policy.get("required_anchor_policy") or "touch_all")
-    anchor_alignment_satisfied = bool(aligned_required_anchors) if required_policy == "touch_any" else bool(required_anchor_alignment) and all(item.get("aligned") for item in required_anchor_alignment)
-    anchor_alignment = {
-        "policy": required_policy,
-        "required_anchors": [item.get("anchor") for item in required_anchor_alignment],
-        "aligned_anchors": [item.get("anchor") for item in aligned_required_anchors],
-        "missing_anchors": list(missing_required_anchors),
-    }
-    surface_alignment = {
-        "required_surfaces": required_surface_names,
-        "optional_surfaces": optional_surface_names,
-        "available_surfaces": available_surfaces,
-        "missing_required_surfaces": missing_required_surfaces,
-        "missing_optional_surfaces": missing_optional_surfaces,
-    }
-
-    requires_retrieval = bool(coverage_policy.get("requires_retrieval", True))
-    if not required_anchor_alignment and requires_retrieval:
-        append_unique(diagnostic_gaps, "no required anchors compiled for coverage")
-        append_unique(blocking_gaps, "no required anchors compiled for coverage")
-    if required_policy == "touch_all":
-        for label in missing_required_anchors:
-            append_unique(diagnostic_gaps, f"required anchor not aligned: {label}")
-            append_unique(blocking_gaps, f"required anchor not aligned: {label}")
-    elif required_anchor_alignment and not anchor_alignment_satisfied:
-        append_unique(blocking_gaps, "no required anchors aligned under touch_any policy")
-        for label in missing_required_anchors:
-            append_unique(diagnostic_gaps, f"required anchor not aligned: {label}")
-
-    avoid_only_alignment = bool(present_avoid_terms and not aligned_required_anchors)
-    avoid_dominant_without_required_anchor = bool(present_avoid_terms and not aligned_required_anchors and requires_retrieval and bool(selected_chunks))
-    if present_avoid_terms:
-        if aligned_required_anchors:
-            for target in present_avoid_terms:
-                append_unique(diagnostic_gaps, f"avoid term present alongside aligned anchors: {target}")
-        else:
-            for target in present_avoid_terms:
-                append_unique(diagnostic_gaps, f"avoid term present in retrieved evidence: {target}")
-            append_unique(blocking_gaps, "avoid-term alignment without required anchor support")
-
-    provenance_present = all(item["has_provenance"] for item in selected_chunk_provenance) if selected_chunk_provenance else False
-    covered = (
-        target_present
-        and target_valid
-        and (not requires_retrieval or bool(selected_chunks))
-        and (not requires_retrieval or provenance_present)
-        and anchor_alignment_satisfied
-        and not avoid_only_alignment
-        and not avoid_dominant_without_required_anchor
-        and not blocking_gaps
-    )
-    return {
-        "target_present": target_present,
-        "target_valid": target_valid,
-        "coverage_mode": "provenance_alignment",
-        "semantic_compiler_alignment": {
-            "target_present": target_present,
-            "target_valid": target_valid,
-            "coverage_mode": "provenance_alignment",
-            "anchor_alignment": anchor_alignment,
-            "surface_alignment": surface_alignment,
-            "retrieval_plan_alignment": retrieval_plan_alignment,
-            "diagnostic_gaps": diagnostic_gaps,
-            "blocking_gaps": blocking_gaps,
-        },
-        "anchor_alignment": anchor_alignment,
-        "surface_alignment": surface_alignment,
-        "retrieval_plan_alignment": retrieval_plan_alignment,
-        "selected_chunk_provenance": selected_chunk_provenance,
-        "missing_required_surfaces": missing_required_surfaces,
-        "diagnostic_gaps": diagnostic_gaps,
-        "blocking_gaps": blocking_gaps,
-        "avoid_term_audit": {
-            "avoid_terms": [str(term) for term in _list_or_empty(retrieval_plan.get("avoid_terms")) if str(term).strip()],
-            "present_avoid_terms": present_avoid_terms,
-            "avoid_only_alignment": avoid_only_alignment,
-            "avoid_dominant_without_required_anchor": avoid_dominant_without_required_anchor,
-            "limits": [
-                "avoid terms are diagnostic only when concrete required anchors are aligned",
-                "avoid terms cannot satisfy required anchors",
-            ] if present_avoid_terms else [],
-        },
-        "covered": covered,
-    }
-
-
-
-def _build_retrieval_preparation(
-    *,
-    user_input: str,
-    isolated_packet: dict[str, Any],
-    contextual_packet: dict[str, Any],
-    semantic_target: dict[str, Any] | None,
-    semantic_compiler_packet: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    raw_lexical_terms = _extract_lexical_query_terms(user_input)
-    candidate_term_sources: dict[str, list[str]] = {}
-    for term in raw_lexical_terms:
-        candidate_term_sources.setdefault(term, []).append("raw_user_input")
-
-    isolated_compiler_hint_terms, isolated_sources = _collect_compiler_hint_terms(
-        isolated_packet.get("parsed_payload"),
-        compiler_mode="isolated",
-    )
-    contextual_compiler_hint_terms, contextual_sources = _collect_compiler_hint_terms(
-        contextual_packet.get("parsed_payload"),
-        compiler_mode="contextual",
-    )
-    compiler_target_terms: list[str] = []
-    compiler_plan_terms: list[str] = []
-    if isinstance(semantic_compiler_packet, dict):
-        retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
-        for key in ("lexical_terms", "entity_terms", "relation_terms", "graph_seeds", "avoid_terms"):
-            for term in _collect_string_terms(retrieval_plan.get(key)):
-                if term not in compiler_plan_terms:
-                    compiler_plan_terms.append(term)
-                if (
-                    "raw_user_input" not in candidate_term_sources.get(term, [])
-                    and f"semantic_compiler_packet.retrieval_plan.{key}" not in candidate_term_sources.setdefault(term, [])
-                ):
-                    candidate_term_sources[term].append(f"semantic_compiler_packet.retrieval_plan.{key}")
-        semantic_target = _dict_or_empty(semantic_compiler_packet.get("semantic_target"))
-        for anchor in _list_or_empty(semantic_target.get("required_anchors")):
-            if isinstance(anchor, dict):
-                for term in _collect_string_terms(anchor.get("label")):
-                    if term not in compiler_target_terms:
-                        compiler_target_terms.append(term)
-                    if (
-                        "raw_user_input" not in candidate_term_sources.get(term, [])
-                        and "semantic_compiler_packet.semantic_target.required_anchors" not in candidate_term_sources.setdefault(term, [])
-                    ):
-                        candidate_term_sources[term].append("semantic_compiler_packet.semantic_target.required_anchors")
-        for term in _collect_string_terms(semantic_target.get("canonical_query")):
-            if term not in compiler_plan_terms:
-                compiler_plan_terms.append(term)
-            if (
-                "raw_user_input" not in candidate_term_sources.get(term, [])
-                and "semantic_compiler_packet.semantic_target.canonical_query" not in candidate_term_sources.setdefault(term, [])
-            ):
-                candidate_term_sources[term].append("semantic_compiler_packet.semantic_target.canonical_query")
-
-    compiler_hint_terms: list[str] = []
-    for term in isolated_compiler_hint_terms:
-        if term not in compiler_hint_terms:
-            compiler_hint_terms.append(term)
-        for source_label in isolated_sources.get(term, []):
-            if source_label not in candidate_term_sources.setdefault(term, []):
-                candidate_term_sources[term].append(source_label)
-    for term in contextual_compiler_hint_terms:
-        if term not in compiler_hint_terms:
-            compiler_hint_terms.append(term)
-        for source_label in contextual_sources.get(term, []):
-            if source_label not in candidate_term_sources.setdefault(term, []):
-                candidate_term_sources[term].append(source_label)
-
-    combined_candidate_terms: list[str] = []
-    for term in raw_lexical_terms + compiler_plan_terms + compiler_hint_terms + compiler_target_terms:
-        if term not in combined_candidate_terms:
-            combined_candidate_terms.append(term)
-
-    model_proposed_only_terms = [
-        term
-        for term in compiler_plan_terms + compiler_hint_terms + compiler_target_terms
-        if "raw_user_input" not in candidate_term_sources.get(term, [])
-    ]
-    return {
-        "raw_lexical_terms": raw_lexical_terms,
-        "compiler_hint_terms": compiler_hint_terms,
-        "compiler_target_terms": compiler_target_terms,
-        "compiler_plan_terms": compiler_plan_terms,
-        "combined_candidate_terms": combined_candidate_terms,
-        "candidate_term_sources": candidate_term_sources,
-        "model_proposed_only_terms": model_proposed_only_terms,
-        "used_additively_for_retrieval": True,
-    }
-
-
-def _build_turn_compilation_packet(
-    *,
-    thread_document: dict[str, Any],
-    prior_thread_state: dict[str, Any],
-    user_input: str,
-    turn_id: int,
-    semantic_compiler: SemanticCompilerArtifacts,
-    config: RuntimeConfig | None = None,
-) -> dict[str, Any]:
-    isolated_payload = _dict_or_empty(semantic_compiler.isolated_packet.get("parsed_payload"))
-    contextual_payload = _dict_or_empty(semantic_compiler.contextual_packet.get("parsed_payload"))
-    semantic_payload = contextual_payload or isolated_payload
-    semantic_compiler_packet, semantic_compiler_reasons = _build_semantic_compiler_packet(
-        user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        compiler_payload=semantic_payload,
-        isolated_packet=semantic_compiler.isolated_packet,
-        contextual_packet=semantic_compiler.contextual_packet,
-    )
-    if config is not None:
-        coverage_policy = _dict_or_empty(semantic_compiler_packet.get("coverage_policy"))
-        if coverage_policy:
-            normalized_coverage_policy = dict(coverage_policy)
-            if not _list_or_empty(normalized_coverage_policy.get("required_surfaces")) and not _list_or_empty(
-                normalized_coverage_policy.get("optional_surfaces")
-            ):
-                required_surfaces = [
-                    surface_name
-                    for surface_name, required in config.coverage_require_surface_contributions.items()
-                    if required
-                ]
-                optional_surfaces = [
-                    surface_name
-                    for surface_name, required in config.coverage_require_surface_contributions.items()
-                    if not required
-                ]
-                normalized_coverage_policy["required_surfaces"] = required_surfaces
-                normalized_coverage_policy["optional_surfaces"] = optional_surfaces
-                semantic_compiler_packet = dict(semantic_compiler_packet)
-                semantic_compiler_packet["coverage_policy"] = normalized_coverage_policy
-    compiler_validation_reasons = _validate_semantic_compiler_packet(
-        semantic_compiler_packet,
-        raw_user_input=user_input,
-    )
-    referent_validation_reasons, referent_diagnostics = _validate_resolved_referents(
-        compiler_stage_payload=semantic_payload,
-        compiler_packet=semantic_compiler_packet,
-        raw_user_input=user_input,
-        prior_thread_state=prior_thread_state,
-    ) if semantic_payload else ([], {
-        "deterministic_followup_detection": _detect_followup_signals(user_input, prior_thread_state),
-        "deterministic_referent_targets": [],
-        "model_referent_targets": [],
-        "disagreements": [],
-        "requires_referent_resolution": False,
-    })
-    if referent_validation_reasons:
-        compiler_validation_reasons = list(compiler_validation_reasons) + list(referent_validation_reasons)
-    compiler_stage_diagnostics = {
-        "compiler_validation": {
-            "valid": not compiler_validation_reasons,
-            "reasons": compiler_validation_reasons,
-        },
-        "compiler_payload_diagnostics": semantic_compiler_reasons,
-        "referent_resolution_diagnostics": referent_diagnostics,
-        "resolved_referents": _list_or_empty(semantic_payload.get("resolved_referents")),
-    }
-    retrieval_preparation = _build_retrieval_preparation(
-        user_input=user_input,
-        isolated_packet=semantic_compiler.isolated_packet,
-        contextual_packet=semantic_compiler.contextual_packet,
-        semantic_target=semantic_compiler_packet.get("semantic_target"),
-        semantic_compiler_packet=semantic_compiler_packet,
-    )
-    return {
-        "thread_id": thread_document["thread_id"],
-        "turn_id": turn_id,
-        "user_input": user_input,
-        "raw_user_input": user_input,
-        "referential_followup_detection": _detect_followup_signals(user_input, prior_thread_state),
-        "semantic_compiler_packet": semantic_compiler_packet,
-        "compiler_stage_diagnostics": compiler_stage_diagnostics,
-        "retrieval_preparation": retrieval_preparation,
-        "semantic_contract_validation": {
-            "valid": not compiler_validation_reasons,
-            "reasons": compiler_validation_reasons,
-        },
-        "semantic_compiler": {
-            "isolated": semantic_compiler.isolated_packet,
-            "contextual": semantic_compiler.contextual_packet,
-            "statuses": {
-                "backend_mode": semantic_compiler.isolated_packet["backend_mode"],
-                "isolated_status": semantic_compiler.isolated_packet["status"],
-                "contextual_status": semantic_compiler.contextual_packet["status"],
-            },
-        },
-        "prior_thread_state_context": {
-            "latest_turn_id": prior_thread_state.get("latest_turn_id", 0),
-            "conversation_summary": prior_thread_state.get("conversation_summary", ""),
-            "recent_semantic_trajectory": list(prior_thread_state.get("recent_semantic_trajectory") or []),
-            "recent_messages": list(prior_thread_state.get("recent_messages") or [])[-4:],
-        },
-    }
-
-
-def _build_isolated_compiler_request(user_input: str) -> dict[str, Any]:
-    return {
-        "mode": "isolated",
-        "raw_user_input": user_input,
-        "instruction": (
-            "Compile isolated semantic structure from the raw user message. "
-            "Do not answer the user. Do not remove or rewrite the input. Preserve uncertainty."
+    return (
+        _deterministic_semantic_packet(
+            raw_user_input=raw_user_input,
+            prior_thread_state=prior_thread_state,
+            recent_messages=recent_messages,
+            limitations=["semantic compiler backend unavailable; deterministic lexical fallback used"],
         ),
+        "fallback",
+    )
+
+
+def _is_compiler_packet_valid(packet: Any) -> bool:
+    if not isinstance(packet, dict):
+        return False
+    required_keys = {
+        "raw_user_input",
+        "intent",
+        "query",
+        "entities",
+        "relations",
+        "resolved_referents",
+        "retrieval_terms",
+        "vector_query",
+        "graph_seeds",
+        "limitations",
     }
+    if not required_keys.issubset(packet):
+        return False
+    if not isinstance(packet["raw_user_input"], str) or not isinstance(packet["query"], str):
+        return False
+    for key in ("entities", "relations", "resolved_referents", "retrieval_terms", "graph_seeds", "limitations"):
+        if not isinstance(packet.get(key), list):
+            return False
+    if not isinstance(packet.get("vector_query"), str):
+        return False
+    return True
 
 
-def _build_compiler_thread_context(prior_thread_state: dict[str, Any]) -> dict[str, Any]:
-    recent_messages = list(prior_thread_state.get("recent_messages") or [])
-    recent_user_messages = [
-        str(message.get("content") or "").strip()
-        for message in recent_messages
-        if isinstance(message, dict)
-        and str(message.get("role") or "").lower() == "user"
-        and str(message.get("content") or "").strip()
-    ][-4:]
-    assistant_recent_messages = {
-        str(message.get("content") or "").strip()
-        for message in recent_messages
-        if isinstance(message, dict)
-        and str(message.get("role") or "").lower() == "assistant"
-        and str(message.get("content") or "").strip()
-    }
-    recent_semantic_trajectory: list[str] = []
-    for item in list(prior_thread_state.get("recent_semantic_trajectory") or []):
-        if not isinstance(item, str):
-            continue
-        cleaned = item.strip()
-        if not cleaned or cleaned in assistant_recent_messages:
-            continue
-        if cleaned not in recent_semantic_trajectory:
-            recent_semantic_trajectory.append(cleaned)
-    context = {
-        "latest_turn_id": prior_thread_state.get("latest_turn_id", 0),
-        "latest_user_input": prior_thread_state.get("latest_user_input"),
-        "recent_user_messages": recent_user_messages,
-        "recent_semantic_trajectory": recent_semantic_trajectory[-4:],
-        "current_user_goals": list(prior_thread_state.get("current_user_goals") or []),
-        "open_questions": list(prior_thread_state.get("open_questions") or []),
-        "active_constraints": list(prior_thread_state.get("active_constraints") or []),
-    }
-    conversation_summary = str(prior_thread_state.get("conversation_summary") or "").strip()
-    if conversation_summary:
-        context["conversation_summary"] = conversation_summary
-    return context
-
-
-def _build_contextual_compiler_request(
-    *,
-    user_input: str,
-    prior_thread_state: dict[str, Any],
-    isolated_semantic_compiler: dict[str, Any] | None,
-) -> dict[str, Any]:
-    deterministic_followup_detection = _detect_followup_signals(user_input, prior_thread_state)
-    base_instruction = (
-        "Hydrate the isolated compiler output with conversation context. "
-        "Return JSON only. "
-        "Do not answer the user. Preserve the raw message. "
-        "Produce raw_user_input, candidate_targets, candidate_relations, resolved_referents, "
-        "retrieval_hints, avoidance_hints, compiler_confidence, and limitations."
-    )
-    if not deterministic_followup_detection.get("requires_referent_resolution"):
-        return {
-            "mode": "contextual",
-            "raw_user_input": user_input,
-            "prior_thread_state": prior_thread_state,
-            "isolated_semantic_compiler": isolated_semantic_compiler or {},
-            "instruction": base_instruction,
-        }
-
-    deterministic_resolved_referent_candidates = _resolve_followup_referents(
-        raw_user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        followup_detection=deterministic_followup_detection,
-    )
-    return {
-        "mode": "contextual",
-        "raw_user_input": user_input,
-        "compiler_thread_context": _build_compiler_thread_context(prior_thread_state),
-        "deterministic_followup_detection": deterministic_followup_detection,
-        "deterministic_resolved_referent_candidates": deterministic_resolved_referent_candidates,
-        "isolated_semantic_compiler": isolated_semantic_compiler or {},
-        "instruction": (
-            "Hydrate the isolated compiler output with conversation context. "
-            "Return JSON only. "
-            "Do not answer the user. Preserve the raw message. "
-            "Use deterministic_resolved_referent_candidates when present. "
-            "Do not resolve pronouns from scratch unless the candidate is clearly contradicted. "
-            "When a prior referent is required, include it in resolved_referents and candidate_targets. "
-            "Produce raw_user_input, candidate_targets, candidate_relations, resolved_referents, "
-            "retrieval_hints, avoidance_hints, compiler_confidence, and limitations."
-        ),
-    }
-
-
-def _build_compiler_stage_packet(
-    *,
-    thread_id: str,
-    turn_id: int,
-    backend_mode: str,
-    request_packet: dict[str, Any],
-    response: SemanticCompilerResponse,
-) -> dict[str, Any]:
-    limitations = []
-    if isinstance(response.parsed_payload, dict):
-        limitations = list(response.parsed_payload.get("limitations") or [])
-    if not limitations:
-        limitations = [
-            "model-generated compiler-stage output",
-            "raw user input remains authoritative",
-        ]
-    return {
-        "thread_id": thread_id,
-        "turn_id": turn_id,
-        "mode": request_packet["mode"],
-        "backend_mode": backend_mode,
-        "raw_user_input": request_packet["raw_user_input"],
-        "request_packet": request_packet,
-        "status": response.status,
-        "parsed_payload": response.parsed_payload,
-        "diagnostics": response.diagnostics,
-        "metadata": response.metadata,
-        "limitations": limitations,
-    }
-
-
-def _build_compiler_stage_raw_artifact(
-    *,
-    thread_id: str,
-    turn_id: int,
-    mode: str,
-    backend_mode: str,
-    response: SemanticCompilerResponse,
-) -> dict[str, Any]:
-    return {
-        "thread_id": thread_id,
-        "turn_id": turn_id,
-        "mode": mode,
-        "backend_mode": backend_mode,
-        "status": response.status,
-        "raw_response": response.raw_response,
-        "parsed_payload": response.parsed_payload,
-        "diagnostics": response.diagnostics,
-        "metadata": response.metadata,
-    }
-
-
-def _run_semantic_compiler(
-    *,
-    thread_id: str,
-    turn_id: int,
-    user_input: str,
-    prior_thread_state: dict[str, Any],
-    backend: SemanticCompilerBackend,
-) -> SemanticCompilerArtifacts:
-    isolated_request = _build_isolated_compiler_request(user_input)
-    isolated_response = backend.compile_isolated(isolated_request)
-    isolated_packet = _build_compiler_stage_packet(
-        thread_id=thread_id,
-        turn_id=turn_id,
-        backend_mode=backend.mode_name,
-        request_packet=isolated_request,
-        response=isolated_response,
-    )
-    isolated_raw_artifact = _build_compiler_stage_raw_artifact(
-        thread_id=thread_id,
-        turn_id=turn_id,
-        mode="isolated",
-        backend_mode=backend.mode_name,
-        response=isolated_response,
-    )
-
-    contextual_request = _build_contextual_compiler_request(
-        user_input=user_input,
-        prior_thread_state=prior_thread_state,
-        isolated_semantic_compiler=isolated_response.parsed_payload,
-    )
-    contextual_response = backend.compile_contextual(contextual_request)
-    contextual_packet = _build_compiler_stage_packet(
-        thread_id=thread_id,
-        turn_id=turn_id,
-        backend_mode=backend.mode_name,
-        request_packet=contextual_request,
-        response=contextual_response,
-    )
-    contextual_raw_artifact = _build_compiler_stage_raw_artifact(
-        thread_id=thread_id,
-        turn_id=turn_id,
-        mode="contextual",
-        backend_mode=backend.mode_name,
-        response=contextual_response,
-    )
-    return SemanticCompilerArtifacts(
-        isolated_packet=isolated_packet,
-        isolated_raw_artifact=isolated_raw_artifact,
-        contextual_packet=contextual_packet,
-        contextual_raw_artifact=contextual_raw_artifact,
-    )
-
-def _database_path(config: RuntimeConfig, data_root: Path) -> Path:
-    raw_root = config.storage_ingestion_root
-    ingest_root = raw_root if raw_root.is_absolute() else (data_root / raw_root)
-    return (ingest_root / config.storage_ingestion_database_filename).resolve()
-
-
-def _load_chunk_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
-    return connection.execute(
+def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = connection.execute(
         """
         SELECT
-            chunks.chunk_id,
-            chunks.note_id,
-            chunks.source_root_label,
-            chunks.relative_path,
-            chunks.note_path,
-            chunks.note_title,
-            chunks.section_id,
-            chunks.section_label,
-            chunks.section_path_json,
-            chunks.paragraph_ordinal,
-            chunks.paragraph_text,
-            chunks.chunk_hash,
-            notes.frontmatter_json
+            chunk_id,
+            note_id,
+            source_root_label,
+            relative_path,
+            note_title,
+            section_label,
+            paragraph_text,
+            chunk_hash
         FROM chunks
-        JOIN notes ON notes.note_id = chunks.note_id
         """
     ).fetchall()
+    return [dict(row) for row in rows]
 
 
-def _score_fields_for_terms(fields: dict[str, str], query_terms: list[str]) -> tuple[list[str], list[str]]:
-    matched_terms: list[str] = []
-    source_fields: list[str] = []
-    for field_name, raw_value in fields.items():
-        lowered_value = raw_value.lower()
-        field_matched = False
-        for term in query_terms:
-            if term in lowered_value:
-                if term not in matched_terms:
-                    matched_terms.append(term)
-                field_matched = True
-        if field_matched:
-            source_fields.append(field_name)
-    return matched_terms, source_fields
-
-
-def _base_candidate_from_row(
-    row: sqlite3.Row,
-    *,
-    surface: str,
-    matched_terms: list[str],
-    source_fields: list[str],
-    score: float,
-    reason: str,
-    graph_path: list[str] | None = None,
-    hop_count: int | None = None,
-    edge_types: list[str] | None = None,
-) -> dict[str, Any]:
-    section_path = json.loads(row["section_path_json"]) if row["section_path_json"] else []
-    candidate = {
-        "chunk_id": row["chunk_id"],
-        "note_id": row["note_id"],
-        "note_title": row["note_title"],
-        "relative_path": row["relative_path"],
-        "section_id": row["section_id"],
-        "section_label": row["section_label"],
-        "section_path": section_path,
-        "paragraph_ordinal": row["paragraph_ordinal"],
-        "paragraph_text": row["paragraph_text"],
-        "chunk_hash": row["chunk_hash"],
-        "source_root_label": row["source_root_label"],
-        "surface": surface,
-        "surface_score": score,
-        "matched_terms": matched_terms,
-        "source_fields_matched": source_fields,
-        "selection_reason": reason,
-    }
-    if graph_path is not None:
-        candidate["graph_path"] = graph_path
-    if hop_count is not None:
-        candidate["hop_count"] = hop_count
-    if edge_types is not None:
-        candidate["edge_types"] = edge_types
-    return candidate
-
-
-def _query_lexical_candidates(connection: sqlite3.Connection, *, query_terms: list[str]) -> list[dict[str, Any]]:
-    if not query_terms:
-        return []
+def _lexical_candidates(chunk_rows: list[dict[str, Any]], query_terms: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
     candidates: list[dict[str, Any]] = []
-    for row in _load_chunk_rows(connection):
-        matched_terms, source_fields = _score_fields_for_terms(
-            {
-                "paragraph_text": str(row["paragraph_text"]),
-                "note_title": str(row["note_title"]),
-                "section_label": str(row["section_label"]),
-                "relative_path": str(row["relative_path"]),
-                "note_path": str(row["note_path"]),
-            },
-            query_terms,
-        )
+    notes: list[str] = []
+    if not query_terms:
+        return candidates, notes
+    for row in chunk_rows:
+        haystack = " ".join(
+            str(row.get(field) or "")
+            for field in ("note_title", "section_label", "relative_path", "paragraph_text")
+        ).lower()
+        matched_terms = [term for term in query_terms if term in haystack]
         if not matched_terms:
             continue
-        reason = f"lexical index matched {', '.join(matched_terms)}"
         candidates.append(
-            _base_candidate_from_row(
-                row,
-                surface="lexical_index_surface",
-                matched_terms=matched_terms,
-                source_fields=source_fields,
-                score=float(len(matched_terms)) + (0.1 * len(source_fields)),
-                reason=reason,
-            )
-        )
-    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
-    return candidates
-
-
-def _query_primary_corpus_candidates(connection: sqlite3.Connection, *, query_terms: list[str]) -> list[dict[str, Any]]:
-    if not query_terms:
-        return []
-    candidates: list[dict[str, Any]] = []
-    for row in _load_chunk_rows(connection):
-        matched_terms, source_fields = _score_fields_for_terms(
             {
-                "note_title": str(row["note_title"]),
-                "section_label": str(row["section_label"]),
-                "relative_path": str(row["relative_path"]),
-                "note_path": str(row["note_path"]),
-                "source_root_label": str(row["source_root_label"]),
-                "frontmatter_json": str(row["frontmatter_json"]),
-            },
-            query_terms,
+                **row,
+                "selection_reason": f"lexical match: {', '.join(matched_terms)}",
+                "score": len(matched_terms) + 2.0,
+                "selection_source": "lexical",
+            }
         )
-        if not matched_terms:
-            continue
-        reason = f"primary corpus metadata matched {', '.join(matched_terms)}"
-        candidates.append(
-            _base_candidate_from_row(
-                row,
-                surface="primary_corpus",
-                matched_terms=matched_terms,
-                source_fields=source_fields,
-                score=float(len(matched_terms)) + 0.25,
-                reason=reason,
-            )
-        )
-    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
-    return candidates
+    if candidates:
+        notes.append(f"lexical search matched {len(candidates)} chunk(s)")
+    else:
+        notes.append("lexical search produced no matches")
+    return candidates, notes
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
-    if len(left) != len(right) or not left:
+    if not left or not right or len(left) != len(right):
         return 0.0
-    numerator = sum(a * b for a, b in zip(left, right, strict=True))
-    left_norm = math.sqrt(sum(a * a for a in left))
-    right_norm = math.sqrt(sum(b * b for b in right))
-    if left_norm == 0 or right_norm == 0:
+    numerator = sum(x * y for x, y in zip(left, right, strict=True))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0.0 or right_norm == 0.0:
         return 0.0
     return numerator / (left_norm * right_norm)
 
 
-def _build_query_embedding_text(turn_compilation_packet: dict[str, Any]) -> str:
-    semantic_compiler_packet = _dict_or_empty(turn_compilation_packet.get("semantic_compiler_packet"))
-    retrieval_plan = _dict_or_empty(semantic_compiler_packet.get("retrieval_plan"))
-    semantic_target = _dict_or_empty(semantic_compiler_packet.get("semantic_target"))
-    if semantic_target or retrieval_plan:
-        parts = [
-            str(semantic_target.get("canonical_query") or ""),
-            " ".join(str(item) for item in list(retrieval_plan.get("entity_terms") or [])),
-            " ".join(str(item) for item in list(retrieval_plan.get("relation_terms") or [])),
-            " ".join(str(item) for item in list(retrieval_plan.get("lexical_terms") or [])),
-            str(turn_compilation_packet.get("user_input") or ""),
-        ]
-        return " ".join(part for part in parts if part).strip()
-    return str(turn_compilation_packet.get("user_input") or "").strip()
-
-
-def _query_vector_candidates(
-    connection: sqlite3.Connection,
+def _vector_candidates(
     *,
-    query_text: str,
-    embedding_backend: EmbeddingBackend,
+    connection: sqlite3.Connection,
     config: RuntimeConfig,
-) -> tuple[list[dict[str, Any]], str]:
-    if not query_text:
-        return [], "no_query_text"
-    query_embedder = getattr(embedding_backend, "embed_query_text", None)
-    if callable(query_embedder):
-        response = query_embedder(query_text)
-    else:
-        response = embedding_backend.embed_texts([query_text])
+    embedding_backend: EmbeddingBackend,
+    vector_query: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    notes: list[str] = []
+    if not vector_query.strip():
+        return [], ["vector search skipped: empty query"]
+    if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
+        return [], ["vector search unavailable"]
+
+    response = embedding_backend.embed_query_text(vector_query)
     if response.status != "embedded" or not response.vectors:
-        return [], response.status if response.status != "embedded" else "embedding_unavailable"
-    vector_table = config.vector_table
+        return [], [f"vector search unavailable: {response.status}"]
+
+    query_vector = response.vectors[0]
     rows = connection.execute(
-        f"""
-        SELECT
-            {vector_table}.chunk_id,
-            {vector_table}.vector_json,
-            chunks.note_id,
-            chunks.source_root_label,
-            chunks.relative_path,
-            chunks.note_path,
-            chunks.note_title,
-            chunks.section_id,
-            chunks.section_label,
-            chunks.section_path_json,
-            chunks.paragraph_ordinal,
-            chunks.paragraph_text,
-            chunks.chunk_hash
-        FROM {vector_table}
-        JOIN chunks ON chunks.chunk_id = {vector_table}.chunk_id
-        """
+        f"SELECT chunk_id, vector_json FROM {config.vector_table}"
     ).fetchall()
     if not rows:
-        return [], "no_indexed_vectors"
-    query_vector = response.vectors[0]
+        return [], ["vector search found no indexed vectors"]
+
+    chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
     candidates: list[dict[str, Any]] = []
-    valid_vector_rows = 0
     for row in rows:
+        chunk_id = str(row["chunk_id"])
+        chunk_row = chunk_rows.get(chunk_id)
+        if chunk_row is None:
+            continue
         try:
-            stored_vector = json.loads(str(row["vector_json"]))
+            vector = json.loads(str(row["vector_json"]))
         except json.JSONDecodeError:
             continue
-        if not isinstance(stored_vector, list) or not all(isinstance(value, (int, float)) for value in stored_vector):
+        if not isinstance(vector, list) or not all(isinstance(value, (int, float)) for value in vector):
             continue
-        stored_vector_floats = [float(value) for value in stored_vector]
-        if len(stored_vector_floats) != len(query_vector):
-            continue
-        valid_vector_rows += 1
-        score = _cosine_similarity(query_vector, stored_vector_floats)
-        if score <= 0:
+        similarity = _cosine_similarity(query_vector, [float(value) for value in vector])
+        if similarity <= 0.0:
             continue
         candidates.append(
-            _base_candidate_from_row(
-                row,
-                surface="vector_index_surface",
-                matched_terms=[],
-                source_fields=["vector_similarity"],
-                score=score,
-                reason=f"vector similarity score {score:.4f}",
-            )
+            {
+                **chunk_row,
+                "selection_reason": f"vector similarity {similarity:.3f}",
+                "score": similarity + 1.0,
+                "selection_source": "vector",
+            }
         )
-    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
     if candidates:
-        return candidates[: config.max_retrieval_chunks], "activated"
-    if valid_vector_rows == 0:
-        return [], "no_valid_vectors"
-    return [], "no_vector_matches"
+        notes.append(f"vector search matched {len(candidates)} chunk(s)")
+    else:
+        notes.append("vector search produced no matches")
+    return candidates, notes
 
 
-def _query_graph_candidates(
+def _graph_candidates(
+    *,
     connection: sqlite3.Connection,
-    *,
-    seed_chunk_ids: list[str],
     config: RuntimeConfig,
-) -> list[dict[str, Any]]:
-    if not seed_chunk_ids:
-        return []
-    graph_edges_table = config.graph_edges_table
-    hop_limit = config.coverage_graph_expansion_hop_limit
-    placeholders = ",".join("?" for _ in seed_chunk_ids)
-    seed_rows = connection.execute(
-        f"SELECT chunk_id, note_id FROM chunks WHERE chunk_id IN ({placeholders})",
-        tuple(seed_chunk_ids),
-    ).fetchall()
-    seed_chunk_to_note_id = {str(row["chunk_id"]): str(row["note_id"]) for row in seed_rows}
-    seed_note_ids = {str(row["note_id"]) for row in seed_rows}
-    seed_note_to_chunk_id: dict[str, str] = {}
-    for chunk_id in seed_chunk_ids:
-        note_id = seed_chunk_to_note_id.get(chunk_id)
-        if note_id is not None and note_id not in seed_note_to_chunk_id:
-            seed_note_to_chunk_id[note_id] = chunk_id
-    candidates_by_chunk: dict[str, dict[str, Any]] = {}
+    graph_seeds: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    notes: list[str] = []
+    if not graph_seeds:
+        return [], ["graph search skipped: no graph seeds"]
 
-    if seed_note_ids:
-        note_placeholders = ",".join("?" for _ in seed_note_ids)
-        sibling_rows = connection.execute(
-            f"""
-            SELECT
-                chunks.chunk_id,
-                chunks.note_id,
-                chunks.source_root_label,
-                chunks.relative_path,
-                chunks.note_path,
-                chunks.note_title,
-                chunks.section_id,
-                chunks.section_label,
-                chunks.section_path_json,
-                chunks.paragraph_ordinal,
-                chunks.paragraph_text,
-                chunks.chunk_hash
-            FROM chunks
-            WHERE chunks.note_id IN ({note_placeholders})
-            """,
-            tuple(seed_note_ids),
-        ).fetchall()
-        for row in sibling_rows:
-            chunk_id = str(row["chunk_id"])
-            if chunk_id in seed_chunk_ids:
-                continue
-            seed_chunk_id = seed_note_to_chunk_id.get(str(row["note_id"]))
-            candidates_by_chunk[chunk_id] = _base_candidate_from_row(
-                row,
-                surface="graph_layer",
-                matched_terms=[],
-                source_fields=["note_contains_chunk"],
-                score=2.0,
-                reason="graph expansion reached sibling chunk through note_contains_chunk",
-                graph_path=[seed_chunk_id, chunk_id] if seed_chunk_id else None,
-                hop_count=1,
-                edge_types=["sibling"],
-            )
-
-    if hop_limit >= 2 and seed_note_ids:
-        note_node_ids = [f"note::{note_id}" for note_id in seed_note_ids]
-        node_placeholders = ",".join("?" for _ in note_node_ids)
-        wikilink_edges = connection.execute(
-            f"""
-            SELECT source_node_id, target_node_id
-            FROM {graph_edges_table}
-            WHERE edge_type = 'wikilink' AND source_node_id IN ({node_placeholders})
-            """,
-            tuple(note_node_ids),
-        ).fetchall()
-        target_note_ids = {
-            str(row["target_node_id"]).split("note::", 1)[1]
-            for row in wikilink_edges
-            if str(row["target_node_id"]).startswith("note::")
-        }
-        if target_note_ids:
-            source_note_to_target_note_ids: dict[str, set[str]] = {}
-            for row in wikilink_edges:
-                source_node_id = str(row["source_node_id"])
-                target_node_id = str(row["target_node_id"])
-                if not source_node_id.startswith("note::") or not target_node_id.startswith("note::"):
-                    continue
-                source_note_id = source_node_id.split("note::", 1)[1]
-                target_note_id = target_node_id.split("note::", 1)[1]
-                source_note_to_target_note_ids.setdefault(source_note_id, set()).add(target_note_id)
-            target_placeholders = ",".join("?" for _ in target_note_ids)
-            linked_rows = connection.execute(
-                f"""
-                SELECT
-                    chunks.chunk_id,
-                    chunks.note_id,
-                    chunks.source_root_label,
-                    chunks.relative_path,
-                    chunks.note_path,
-                    chunks.note_title,
-                    chunks.section_id,
-                    chunks.section_label,
-                    chunks.section_path_json,
-                    chunks.paragraph_ordinal,
-                    chunks.paragraph_text,
-                    chunks.chunk_hash
-                FROM chunks
-                WHERE chunks.note_id IN ({target_placeholders})
-                """,
-                tuple(target_note_ids),
-            ).fetchall()
-            for row in linked_rows:
-                chunk_id = str(row["chunk_id"])
-                source_note_id = None
-                for candidate_source_note_id, target_ids in source_note_to_target_note_ids.items():
-                    if str(row["note_id"]) in target_ids:
-                        source_note_id = candidate_source_note_id
-                        break
-                seed_chunk_id = seed_note_to_chunk_id.get(source_note_id or "")
-                candidates_by_chunk.setdefault(
-                    chunk_id,
-                    _base_candidate_from_row(
-                        row,
-                        surface="graph_layer",
-                        matched_terms=[],
-                        source_fields=["wikilink"],
-                        score=1.5,
-                        reason="graph expansion reached chunk through wikilink edge",
-                        graph_path=[seed_chunk_id, f"note::{row['note_id']}", chunk_id] if seed_chunk_id else None,
-                        hop_count=1,
-                        edge_types=["wikilink"],
-                    ),
-                )
-
-    candidates = list(candidates_by_chunk.values())
-    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
-    return candidates
-
-
-def _query_synthetic_candidates(
-    connection: sqlite3.Connection,
-    *,
-    query_terms: list[str],
-    config: RuntimeConfig,
-) -> list[dict[str, Any]]:
-    if not query_terms:
-        return []
-    synthetic_root = config.synthetic_nodes_root
-    candidates: list[dict[str, Any]] = []
-    for row in _load_chunk_rows(connection):
-        note_path = Path(str(row["note_path"])).resolve()
-        try:
-            note_path.relative_to(synthetic_root)
-        except ValueError:
-            continue
-        matched_terms, source_fields = _score_fields_for_terms(
-            {
-                "paragraph_text": str(row["paragraph_text"]),
-                "section_label": str(row["section_label"]),
-                "relative_path": str(row["relative_path"]),
-            },
-            query_terms,
-        )
-        if not matched_terms:
-            continue
-        candidates.append(
-            _base_candidate_from_row(
-                row,
-                surface="synthetic_nodes",
-                matched_terms=matched_terms,
-                source_fields=source_fields,
-                score=float(len(matched_terms)) + 0.1,
-                reason=f"synthetic node matched {', '.join(matched_terms)}",
-            )
-        )
-    candidates.sort(key=lambda item: (-item["surface_score"], item["chunk_id"]))
-    return candidates
-
-
-def _build_latent_space_activation(
-    *,
-    repo_root: Path,
-    data_root: Path,
-    config: RuntimeConfig,
-    turn_compilation_packet: dict[str, Any],
-    embedding_backend: EmbeddingBackend,
-) -> dict[str, Any]:
-    database_path = _database_path(config, data_root)
-    retrieval_preparation = dict(turn_compilation_packet.get("retrieval_preparation") or {})
-    query_terms = list(retrieval_preparation.get("combined_candidate_terms") or [])
-    activation_surfaces: list[dict[str, Any]] = []
-    candidate_regions: dict[str, list[dict[str, Any]]] = {
-        "lexical_index_surface": [],
-        "primary_corpus": [],
-        "vector_index_surface": [],
-        "graph_layer": [],
-        "synthetic_nodes": [],
-    }
-    blocked_surfaces: list[dict[str, Any]] = []
-    if not database_path.exists():
-        for surface in candidate_regions:
-            activation_surfaces.append(
-                {
-                    "surface": surface,
-                    "status": "blocked",
-                    "candidate_count": 0,
-                    "reason": "ingestion SQLite database not found",
-                }
-            )
-        activated_regions = {
-            "thread_id": turn_compilation_packet["thread_id"],
-            "turn_id": turn_compilation_packet["turn_id"],
-            "database_path": str(database_path),
-            "query_terms": query_terms,
-            "activation_surfaces": activation_surfaces,
-            "candidate_regions": candidate_regions,
-            "blocked_surfaces": [{"surface": surface, "reason": "ingestion SQLite database not found"} for surface in candidate_regions],
-            "repo_root": str(repo_root),
-        }
-        activated_regions["activated_region_hash"] = sha256_json(activated_regions)
-        return activated_regions
-
-    connection = sqlite3.connect(database_path)
     try:
-        connection.row_factory = sqlite3.Row
-        lexical_candidates = _query_lexical_candidates(connection, query_terms=query_terms)
-        candidate_regions["lexical_index_surface"] = lexical_candidates[: config.max_retrieval_chunks]
-        activation_surfaces.append(
-            {
-                "surface": "lexical_index_surface",
-                "status": "activated" if lexical_candidates else ("no_query_terms" if not query_terms else "no_matches"),
-                "candidate_count": len(lexical_candidates),
-                "reason": None if lexical_candidates else ("no query terms available" if not query_terms else "no lexical matches"),
-            }
-        )
+        node_rows = connection.execute(
+            f"SELECT node_id, node_type, label, ref_id, metadata_json FROM {config.graph_nodes_table}"
+        ).fetchall()
+        edge_rows = connection.execute(
+            f"SELECT source_node_id, target_node_id, edge_type FROM {config.graph_edges_table}"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return [], ["graph search unavailable"]
 
-        primary_candidates = _query_primary_corpus_candidates(connection, query_terms=query_terms)
-        candidate_regions["primary_corpus"] = primary_candidates[: config.max_retrieval_chunks]
-        activation_surfaces.append(
-            {
-                "surface": "primary_corpus",
-                "status": "activated" if primary_candidates else ("no_query_terms" if not query_terms else "no_matches"),
-                "candidate_count": len(primary_candidates),
-                "reason": None if primary_candidates else ("no query terms available" if not query_terms else "no primary corpus metadata matches"),
-            }
-        )
+    chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
+    nodes_by_id = {str(row["node_id"]): row for row in node_rows}
+    nodes_by_key: dict[str, list[dict[str, Any]]] = {}
+    for row in node_rows:
+        for key in (row["label"], row["ref_id"]):
+            normalized = _normalize_text(key)
+            if normalized:
+                nodes_by_key.setdefault(normalized, []).append(row)
 
-        query_text = _build_query_embedding_text(turn_compilation_packet)
-        vector_candidates: list[dict[str, Any]] = []
-        vector_status = "unavailable"
-        if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
-            vector_status = "unavailable"
-        else:
-            vector_candidates, vector_status = _query_vector_candidates(
-                connection,
-                query_text=query_text,
-                embedding_backend=embedding_backend,
-                config=config,
-            )
-        candidate_regions["vector_index_surface"] = vector_candidates
-        activation_surfaces.append(
-            {
-                "surface": "vector_index_surface",
-                "status": "activated" if vector_candidates else vector_status,
-                "candidate_count": len(vector_candidates),
-                "reason": None if vector_candidates else vector_status,
-            }
-        )
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    for row in edge_rows:
+        outgoing.setdefault(str(row["source_node_id"]), []).append((str(row["target_node_id"]), str(row["edge_type"])))
 
-        seed_chunk_ids = [
-            candidate["chunk_id"]
-            for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface")
-            for candidate in candidate_regions[surface_name][: config.max_retrieval_chunks]
-        ]
-        deduped_seed_chunk_ids: list[str] = []
-        for chunk_id in seed_chunk_ids:
-            if chunk_id not in deduped_seed_chunk_ids:
-                deduped_seed_chunk_ids.append(chunk_id)
-        graph_candidates = _query_graph_candidates(connection, seed_chunk_ids=deduped_seed_chunk_ids, config=config)
-        candidate_regions["graph_layer"] = graph_candidates[: config.max_retrieval_chunks]
-        activation_surfaces.append(
-            {
-                "surface": "graph_layer",
-                "status": "activated" if graph_candidates else ("no_seed_candidates" if not deduped_seed_chunk_ids else "no_expansion_matches"),
-                "candidate_count": len(graph_candidates),
-                "reason": None if graph_candidates else ("no seed candidates available for graph expansion" if not deduped_seed_chunk_ids else "graph expansion produced no additional chunk candidates"),
-            }
-        )
+    selected_chunk_ids: set[str] = set()
+    selection_notes: list[str] = []
 
-        synthetic_candidates = _query_synthetic_candidates(connection, query_terms=query_terms, config=config)
-        candidate_regions["synthetic_nodes"] = synthetic_candidates[: config.max_retrieval_chunks]
-        activation_surfaces.append(
-            {
-                "surface": "synthetic_nodes",
-                "status": "activated" if synthetic_candidates else ("no_query_terms" if not query_terms else "no_matches"),
-                "candidate_count": len(synthetic_candidates),
-                "reason": None if synthetic_candidates else ("no query terms available" if not query_terms else "no synthetic node matches"),
-            }
-        )
-    finally:
-        connection.close()
+    def add_note_chunk(note_id: str, reason: str) -> None:
+        for chunk_row in chunk_rows.values():
+            if str(chunk_row["note_id"]) == note_id and str(chunk_row["chunk_id"]) not in selected_chunk_ids:
+                selected_chunk_ids.add(str(chunk_row["chunk_id"]))
+                selection_notes.append(reason)
 
-    for surface in activation_surfaces:
-        if surface["status"] not in {"activated", "no_matches", "no_query_terms", "no_expansion_matches", "no_seed_candidates"}:
-            blocked_surfaces.append({"surface": surface["surface"], "reason": surface["reason"]})
-    activated_regions = {
-        "thread_id": turn_compilation_packet["thread_id"],
-        "turn_id": turn_compilation_packet["turn_id"],
-        "database_path": str(database_path),
-        "query_terms": query_terms,
-        "activation_surfaces": activation_surfaces,
-        "candidate_regions": candidate_regions,
-        "blocked_surfaces": blocked_surfaces,
-        "repo_root": str(repo_root),
-    }
-    activated_regions["activated_region_hash"] = sha256_json(activated_regions)
-    return activated_regions
+    for seed in graph_seeds:
+        normalized = _normalize_text(seed)
+        matched_nodes = nodes_by_key.get(normalized, [])
+        if not matched_nodes:
+            continue
+        for node_row in matched_nodes:
+            node_id = str(node_row["node_id"])
+            node_type = str(node_row["node_type"])
+            node_label = str(node_row["label"])
+            if node_type == "chunk":
+                chunk_row = chunk_rows.get(str(node_row["ref_id"] or ""))
+                if chunk_row is not None:
+                    selected_chunk_ids.add(str(chunk_row["chunk_id"]))
+                    selection_notes.append(f"graph seed matched chunk node {node_label}")
+            elif node_type == "note":
+                note_id = str(node_row["ref_id"] or "")
+                if note_id:
+                    add_note_chunk(note_id, f"graph seed matched note node {node_label}")
+                for target_id, edge_type in outgoing.get(node_id, []):
+                    target_node = nodes_by_id.get(target_id)
+                    if target_node is None:
+                        continue
+                    if str(target_node["node_type"]) == "note" and edge_type == "note_links_note":
+                        target_note_id = str(target_node["ref_id"] or "")
+                        if target_note_id:
+                            add_note_chunk(target_note_id, f"graph hop via {node_label} -> {target_node['label']}")
+
+    candidates = [dict(chunk_rows[chunk_id], selection_reason="graph expansion", score=1.5, selection_source="graph") for chunk_id in selected_chunk_ids if chunk_id in chunk_rows]
+    if candidates:
+        notes.append(f"graph search matched {len(candidates)} chunk(s)")
+        notes.extend(selection_notes[:3])
+    else:
+        notes.append("graph search produced no matches")
+    return candidates, notes
 
 
-def _build_semantic_traversal_manifest(
-    *,
-    turn_compilation_packet: dict[str, Any],
-    activated_semantic_regions: dict[str, Any],
-    config: RuntimeConfig,
-) -> dict[str, Any]:
-    candidate_regions = dict(activated_semantic_regions.get("candidate_regions") or {})
-    aggregate: dict[str, dict[str, Any]] = {}
-    for surface_name, candidates in candidate_regions.items():
-        for candidate in list(candidates or []):
-            chunk_id = str(candidate["chunk_id"])
-            entry = aggregate.setdefault(
-                chunk_id,
-                {
-                    "chunk_id": chunk_id,
-                    "total_score": 0.0,
-                    "surface_contributions": [],
-                    "selection_reasons": [],
-                    "matched_terms": [],
-                },
-            )
-            entry["total_score"] += float(candidate["surface_score"])
-            if surface_name not in entry["surface_contributions"]:
-                entry["surface_contributions"].append(surface_name)
-            selection_reason = str(candidate["selection_reason"])
-            if selection_reason not in entry["selection_reasons"]:
-                entry["selection_reasons"].append(selection_reason)
-            for term in list(candidate.get("matched_terms") or []):
-                if term not in entry["matched_terms"]:
-                    entry["matched_terms"].append(term)
-            if surface_name == "graph_layer":
-                if candidate.get("graph_path") is not None and "graph_path" not in entry:
-                    entry["graph_path"] = list(candidate.get("graph_path") or [])
-                if candidate.get("hop_count") is not None and "hop_count" not in entry:
-                    entry["hop_count"] = int(candidate.get("hop_count"))
-                if candidate.get("edge_types") is not None and "edge_types" not in entry:
-                    entry["edge_types"] = list(candidate.get("edge_types") or [])
+def _merge_candidates(
+    lexical_candidates: list[dict[str, Any]],
+    vector_candidates: list[dict[str, Any]],
+    graph_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    source_priority = {"lexical": 3, "vector": 2, "graph": 1}
 
-    ranked_candidates = sorted(
-        aggregate.values(),
-        key=lambda item: (-float(item["total_score"]), str(item["chunk_id"])),
-    )
-    selected: list[dict[str, Any]] = []
-    selected_chunk_ids: list[str] = []
-    covered_required_surfaces: set[str] = set()
-
-    def _append_selected_candidate(candidate: dict[str, Any]) -> None:
+    def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
-        if chunk_id in selected_chunk_ids:
+        existing = merged.get(chunk_id)
+        source = str(candidate.get("selection_source") or "lexical")
+        if existing is None:
+            merged[chunk_id] = dict(candidate)
+            merged[chunk_id]["sources"] = [source]
             return
-        selected.append(candidate)
-        selected_chunk_ids.append(chunk_id)
-        for surface_name in list(candidate.get("surface_contributions") or []):
-            covered_required_surfaces.add(str(surface_name))
-
-    required_surface_contributions = config.coverage_require_surface_contributions
-    for surface_name, required in required_surface_contributions.items():
-        if len(selected) >= config.max_retrieval_chunks:
-            break
-        if not required or surface_name in covered_required_surfaces:
-            continue
-        required_candidate = next(
-            (
-                candidate
-                for candidate in ranked_candidates
-                if surface_name in list(candidate.get("surface_contributions") or [])
-                and str(candidate["chunk_id"]) not in selected_chunk_ids
-            ),
-            None,
-        )
-        if required_candidate is not None:
-            _append_selected_candidate(required_candidate)
-
-    for candidate in ranked_candidates:
-        if len(selected) >= config.max_retrieval_chunks:
-            break
-        _append_selected_candidate(candidate)
-
-    selection_reasons = [reason for item in selected for reason in item["selection_reasons"]]
-    if not selection_reasons:
-        if not list(activated_semantic_regions.get("query_terms") or []):
-            selection_reasons = ["no lexical or additive compiler candidate terms were available"]
-        elif any(str(surface.get("reason") or "") == "ingestion SQLite database not found" for surface in list(activated_semantic_regions.get("activation_surfaces") or [])):
-            selection_reasons = ["ingestion SQLite database not found"]
-        elif not ranked_candidates:
-            selection_reasons = ["no chunk text or metadata matched the activated candidate terms"]
-    surface_contributions = {
-        surface_name: any(surface_name in list(item["surface_contributions"]) for item in selected)
-        for surface_name in ("lexical_index_surface", "primary_corpus", "vector_index_surface", "graph_layer", "synthetic_nodes")
-    }
-    manifest_validity_reasons: list[str] = []
-    if not turn_compilation_packet.get("semantic_contract_validation", {}).get("valid"):
-        manifest_validity_reasons.append("semantic compiler packet failed validation")
-    if not isinstance(turn_compilation_packet.get("semantic_compiler_packet"), dict):
-        manifest_validity_reasons.append("semantic_compiler_packet missing")
-    if not ranked_candidates:
-        manifest_validity_reasons.append("semantic traversal produced no candidate regions")
-    manifest = {
-        "thread_id": turn_compilation_packet["thread_id"],
-        "turn_id": turn_compilation_packet["turn_id"],
-        "semantic_compiler_packet_hash": (
-            sha256_json(turn_compilation_packet["semantic_compiler_packet"])
-            if isinstance(turn_compilation_packet.get("semantic_compiler_packet"), dict)
-            else None
-        ),
-        "activated_region_hash": activated_semantic_regions.get("activated_region_hash"),
-        "activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
-        "candidate_regions": {
-            surface_name: list(candidates or [])
-            for surface_name, candidates in candidate_regions.items()
-        },
-        "query_terms_available": bool(list(activated_semantic_regions.get("query_terms") or [])),
-        "selected_chunk_ids": selected_chunk_ids,
-        "selection_reasons": selection_reasons,
-        "surface_contributions": surface_contributions,
-        "ranking_inputs": {
-            "query_terms": list(activated_semantic_regions.get("query_terms") or []),
-            "max_selected_chunks": config.max_retrieval_chunks,
-        },
-        "limits": {
-            "max_selected_chunks": config.max_retrieval_chunks,
-            "candidate_count": len(ranked_candidates),
-        },
-        "blocked_surfaces": list(activated_semantic_regions.get("blocked_surfaces") or []),
-        "selected_candidates": selected,
-        "manifest_validity": {
-            "valid": not manifest_validity_reasons,
-            "reasons": manifest_validity_reasons,
-        },
-    }
-    return manifest
-
-
-def _assemble_retrieval_packet(
-    *,
-    data_root: Path,
-    config: RuntimeConfig,
-    semantic_traversal_manifest: dict[str, Any],
-) -> dict[str, Any]:
-    database_path = _database_path(config, data_root)
-    selected_chunk_ids = list(semantic_traversal_manifest.get("selected_chunk_ids") or [])
-    retrieval_packet: dict[str, Any] = {
-        "thread_id": semantic_traversal_manifest["thread_id"],
-        "turn_id": semantic_traversal_manifest["turn_id"],
-        "database_path": str(database_path),
-        "assembled_from_traversal_manifest": True,
-        "selected_chunk_ids_from_manifest": selected_chunk_ids,
-        "selected_chunks": [],
-        "graph_context_available": False,
-        "matched_chunk_count": 0,
-        "retrieval_observation": "not_attempted",
-    }
-    if not database_path.exists() or not selected_chunk_ids:
-        if not database_path.exists():
-            retrieval_packet["retrieval_observation"] = "index_missing"
-        elif not semantic_traversal_manifest.get("query_terms_available"):
-            retrieval_packet["retrieval_observation"] = "no_query_terms"
+        existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
+        existing_score = float(existing.get("score") or 0.0)
+        candidate_score = float(candidate.get("score") or 0.0)
+        if candidate_score > existing_score or (
+            candidate_score == existing_score
+            and source_priority.get(source, 0) > source_priority.get(str(existing.get("selection_source") or ""), 0)
+        ):
+            merged[chunk_id] = dict(candidate)
+            merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
         else:
-            retrieval_packet["retrieval_observation"] = "no_matches"
-        return retrieval_packet
+            existing["score"] = max(existing_score, candidate_score)
+            existing["selection_reason"] = ", ".join(
+                part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
+            )
 
-    connection = sqlite3.connect(database_path)
-    try:
-        connection.row_factory = sqlite3.Row
-        placeholders = ",".join("?" for _ in selected_chunk_ids)
-        rows = connection.execute(
-            f"""
-            SELECT
-                chunks.chunk_id,
-                chunks.note_id,
-                chunks.source_root_label,
-                chunks.relative_path,
-                chunks.note_path,
-                chunks.note_title,
-                chunks.section_id,
-                chunks.section_label,
-                chunks.section_path_json,
-                chunks.paragraph_ordinal,
-                chunks.paragraph_text,
-                chunks.chunk_hash,
-                notes.frontmatter_json
-            FROM chunks
-            JOIN notes ON notes.note_id = chunks.note_id
-            WHERE chunks.chunk_id IN ({placeholders})
-            """,
-            tuple(selected_chunk_ids),
-        ).fetchall()
-    finally:
-        connection.close()
+    for candidate in lexical_candidates + vector_candidates + graph_candidates:
+        absorb(candidate)
 
-    row_map = {str(row["chunk_id"]): row for row in rows}
-    selected_candidates = {
-        str(item["chunk_id"]): item
-        for item in list(semantic_traversal_manifest.get("selected_candidates") or [])
-    }
-    selected_chunks: list[dict[str, Any]] = []
-    for chunk_id in selected_chunk_ids:
-        row = row_map.get(chunk_id)
-        if row is None:
-            continue
-        selected_candidate = selected_candidates.get(chunk_id, {})
-        selected_chunks.append(
-            {
-                "chunk_id": row["chunk_id"],
-                "note_id": row["note_id"],
-                "source_root_label": row["source_root_label"],
-                "relative_path": row["relative_path"],
-                "note_path": row["note_path"],
-                "note_title": row["note_title"],
-                "section_id": row["section_id"],
-                "section_label": row["section_label"],
-                "section_path": json.loads(row["section_path_json"]) if row["section_path_json"] else [],
-                "paragraph_ordinal": row["paragraph_ordinal"],
-                "paragraph_text": row["paragraph_text"],
-                "chunk_hash": row["chunk_hash"],
-                "frontmatter": json.loads(str(row["frontmatter_json"])) if row["frontmatter_json"] else {},
-                "surface_contributions": list(selected_candidate.get("surface_contributions") or []),
-                "selection_reasons": list(selected_candidate.get("selection_reasons") or []),
-                "graph_path": list(selected_candidate.get("graph_path") or []) if selected_candidate.get("graph_path") is not None else None,
-                "hop_count": selected_candidate.get("hop_count"),
-                "edge_types": list(selected_candidate.get("edge_types") or []) if selected_candidate.get("edge_types") is not None else None,
-                "vector_score": next(
-                    (
-                        candidate["surface_score"]
-                        for candidate in list(semantic_traversal_manifest.get("candidate_regions", {}).get("vector_index_surface") or [])
-                        if candidate["chunk_id"] == chunk_id
-                    ),
-                    None,
-                ),
-                "lexical_match_info": next(
-                    (
-                        {
-                            "matched_terms": list(candidate.get("matched_terms") or []),
-                            "source_fields_matched": list(candidate.get("source_fields_matched") or []),
-                        }
-                        for candidate in list(semantic_traversal_manifest.get("candidate_regions", {}).get("lexical_index_surface") or [])
-                        if candidate["chunk_id"] == chunk_id
-                    ),
-                    None,
-                ),
-            }
+    ranked = sorted(
+        merged.values(),
+        key=lambda candidate: (
+            -source_priority.get(str((candidate.get("selection_source") or "lexical")), 0),
+            -float(candidate.get("score") or 0.0),
+            str(candidate["chunk_id"]),
+        ),
+    )
+    for candidate in ranked:
+        sources = candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
+        candidate["selection_reason"] = ", ".join(
+            part for part in [candidate.get("selection_reason"), f"sources: {', '.join(str(source) for source in sources)}"] if part
         )
-    retrieval_packet["selected_chunks"] = selected_chunks
-    retrieval_packet["matched_chunk_count"] = len(selected_chunks)
-    retrieval_packet["retrieval_observation"] = "matched_chunks" if selected_chunks else "no_matches"
-    return retrieval_packet
+    return ranked
 
 
-def _evaluate_retrieval_coverage(
+def _select_retrieval_chunks(
     *,
-    turn_compilation_packet: dict[str, Any],
-    activated_semantic_regions: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
-    retrieval_packet: dict[str, Any],
+    merged_candidates: list[dict[str, Any]],
+    max_chunks: int,
+) -> list[dict[str, Any]]:
+    selected = merged_candidates[: max(0, max_chunks)]
+    for candidate in selected:
+        candidate.pop("sources", None)
+    return selected
+
+
+def _semantic_traversal(
+    *,
+    connection: sqlite3.Connection,
     config: RuntimeConfig,
-    semantic_traversal_manifest_hash: str,
-    retrieval_packet_hash: str,
-) -> dict[str, Any]:
-    statuses = dict(turn_compilation_packet.get("semantic_compiler", {}).get("statuses") or {})
-    backend_mode = str(statuses.get("backend_mode") or "unknown")
-    isolated_status = str(statuses.get("isolated_status") or "unknown")
-    contextual_status = str(statuses.get("contextual_status") or "unknown")
-    reasons: list[str] = []
+    semantic_compiler_packet: dict[str, Any],
+    embedding_backend: EmbeddingBackend,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    query_terms = list(semantic_compiler_packet.get("retrieval_terms") or [])
+    vector_query = str(semantic_compiler_packet.get("vector_query") or "")
+    graph_seeds = list(semantic_compiler_packet.get("graph_seeds") or [])
 
-    if backend_mode in {"disabled", "stub", "unavailable"}:
-        reasons.append(f"semantic compiler backend `{backend_mode}` is not valid for the normal runtime")
-    if contextual_status != "parsed":
-        reasons.append(f"contextual semantic compiler packet did not produce a valid parsed result: {contextual_status}")
-    contract_validation = dict(turn_compilation_packet.get("semantic_contract_validation") or {})
-    if not contract_validation.get("valid"):
-        reasons.extend(list(contract_validation.get("reasons") or []))
-        reasons.append("semantic compiler packet failed validation")
-
-    surface_statuses = {
-        str(surface["surface"]): str(surface["status"])
-        for surface in list(activated_semantic_regions.get("activation_surfaces") or [])
-    }
-    required_surface_contributions = config.coverage_require_surface_contributions
-    if required_surface_contributions.get("lexical_index_surface") and surface_statuses.get("lexical_index_surface") == "blocked":
-        reasons.append("lexical_index_surface unavailable")
-    if required_surface_contributions.get("vector_index_surface") and surface_statuses.get("vector_index_surface") != "activated":
-        reasons.append("vector_index_surface unavailable or missing configured embeddings")
-    if required_surface_contributions.get("graph_layer") and surface_statuses.get("graph_layer") == "blocked" and (
-        "graph_layer" in _list_or_empty((turn_compilation_packet.get("semantic_compiler_packet", {}).get("coverage_policy") or {}).get("required_surfaces"))
-    ):
-        reasons.append("graph_layer unavailable")
-    if required_surface_contributions.get("synthetic_nodes") and surface_statuses.get("synthetic_nodes") != "activated":
-        reasons.append("synthetic_nodes surface required but unavailable")
-
-    manifest_validity = dict(semantic_traversal_manifest.get("manifest_validity") or {})
-    if not manifest_validity.get("valid"):
-        reasons.extend(list(manifest_validity.get("reasons") or []))
-        reasons.append("semantic_traversal_manifest invalid")
-
-    selected_chunk_ids = list(semantic_traversal_manifest.get("selected_chunk_ids") or [])
-    selected_chunks = list(retrieval_packet.get("selected_chunks") or [])
-    if not retrieval_packet.get("assembled_from_traversal_manifest"):
-        reasons.append("retrieval_packet was not assembled from traversal manifest")
-    if [str(chunk["chunk_id"]) for chunk in selected_chunks] != selected_chunk_ids:
-        reasons.append("retrieval_packet selected chunks do not exactly match traversal selected IDs")
-
-    selected_chunk_count = len(selected_chunks)
-    min_selected_chunks = config.coverage_min_selected_chunks
-    max_selected_chunks = config.coverage_max_selected_chunks
-    allow_no_retrieval_needed = config.coverage_allow_no_retrieval_needed
-    semantic_compiler_alignment = _evaluate_semantic_compiler_alignment(
-        turn_compilation_packet=turn_compilation_packet,
-        semantic_traversal_manifest=semantic_traversal_manifest,
-        retrieval_packet=retrieval_packet,
+    chunk_rows = _load_chunk_rows(connection)
+    lexical_candidates, lexical_notes = _lexical_candidates(chunk_rows, query_terms)
+    vector_candidates, vector_notes = _vector_candidates(
+        connection=connection,
         config=config,
+        embedding_backend=embedding_backend,
+        vector_query=vector_query,
     )
-    if not semantic_compiler_alignment["target_present"] or not semantic_compiler_alignment["target_valid"]:
-        reasons.append("semantic compiler packet failed validation")
-    for gap in list(semantic_compiler_alignment.get("blocking_gaps") or []):
-        reasons.append(gap)
-    avoid_term_audit = dict(semantic_compiler_alignment.get("avoid_term_audit") or {})
-    if avoid_term_audit.get("avoid_only_alignment") or avoid_term_audit.get("avoid_dominant_without_required_anchor"):
-        for target in list(avoid_term_audit.get("present_avoid_terms") or []):
-            reasons.append(f"semantic compiler avoid term present in retrieved evidence: {target}")
-    compiler_packet = _dict_or_empty(turn_compilation_packet.get("semantic_compiler_packet"))
-    target_requires_retrieval, _ = _resolve_compiler_retrieval_requirement(
-        compiler_payload=compiler_packet,
-        semantic_target=_dict_or_empty(compiler_packet.get("semantic_target")),
-        default_requires_retrieval=not allow_no_retrieval_needed,
-    )
-    target_allows_no_retrieval = not target_requires_retrieval
-    if selected_chunk_count < min_selected_chunks and not target_allows_no_retrieval:
-        reasons.append(f"selected chunk count below configured minimum: {selected_chunk_count} < {min_selected_chunks}")
-    if selected_chunk_count > max_selected_chunks:
-        reasons.append(f"selected chunk count exceeds configured maximum: {selected_chunk_count} > {max_selected_chunks}")
+    graph_candidates, graph_notes = _graph_candidates(connection=connection, config=config, graph_seeds=graph_seeds)
 
-    actual_surface_contributions = dict(semantic_traversal_manifest.get("surface_contributions") or {})
+    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates)
+    selected_candidates = _select_retrieval_chunks(merged_candidates=merged_candidates, max_chunks=config.max_retrieval_chunks)
 
-    decision = "approved" if not reasons else "blocked"
-    semantic_compiler_packet = turn_compilation_packet.get("semantic_compiler_packet")
-    referent_resolution_diagnostics = dict(turn_compilation_packet.get("referent_resolution_diagnostics") or {})
-    return {
-        "decision": decision,
-        "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet) if isinstance(semantic_compiler_packet, dict) else None,
-        "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
-        "retrieval_packet_hash": retrieval_packet_hash,
-        "evaluated_activation_surfaces": list(activated_semantic_regions.get("activation_surfaces") or []),
-        "semantic_compiler_alignment": semantic_compiler_alignment,
-        "blocking_reasons": _dedupe_reasons(reasons),
-        "referent_resolution_diagnostics": referent_resolution_diagnostics,
-        "limits": {
-            "selection_limit": config.max_retrieval_chunks,
-            "min_selected_chunks": min_selected_chunks,
-            "max_selected_chunks": max_selected_chunks,
-            "selected_chunk_count": selected_chunk_count,
-            "diagnostic_retrieval_observation": retrieval_packet.get("retrieval_observation"),
+    traversal_manifest = {
+        "query_terms": query_terms,
+        "vector_query": vector_query,
+        "graph_seeds": graph_seeds,
+        "candidate_counts": {
+            "lexical": len(lexical_candidates),
+            "vector": len(vector_candidates),
+            "graph": len(graph_candidates),
         },
-        "surface_contributions": actual_surface_contributions,
+        "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
+        "selection_notes": [*lexical_notes, *vector_notes, *graph_notes],
     }
+
+    retrieval_packet = {
+        "selected_chunks": [
+            {
+                "chunk_id": str(candidate["chunk_id"]),
+                "note_id": str(candidate["note_id"]),
+                "source_root_label": str(candidate["source_root_label"]),
+                "relative_path": str(candidate["relative_path"]),
+                "note_title": str(candidate["note_title"]),
+                "section_label": str(candidate["section_label"]),
+                "paragraph_text": str(candidate["paragraph_text"]),
+                "chunk_hash": str(candidate["chunk_hash"]),
+                "selection_reason": str(candidate.get("selection_reason") or ""),
+            }
+            for candidate in selected_candidates
+        ],
+        "matched_chunk_count": len(selected_candidates),
+        "retrieval_observation": "matched_chunks" if selected_candidates else "no_matches",
+        "assembled_from_traversal_manifest": True,
+    }
+
+    return traversal_manifest, retrieval_packet, {
+        "lexical_candidates": lexical_candidates,
+        "vector_candidates": vector_candidates,
+        "graph_candidates": graph_candidates,
+    }
+
+
+def _coverage_report(
+    *,
+    semantic_compiler_packet: Any,
+    traversal_manifest: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    compiler_valid = _is_compiler_packet_valid(semantic_compiler_packet)
+    selected_count = int(retrieval_packet.get("matched_chunk_count") or 0)
+    blocking_reasons: list[str] = []
+    if not compiler_valid:
+        blocking_reasons.append("semantic compiler packet is missing or malformed")
+    query_terms = list(traversal_manifest.get("query_terms") or [])
+    graph_seeds = list(traversal_manifest.get("graph_seeds") or [])
+    if selected_count == 0 and (query_terms or graph_seeds):
+        blocking_reasons.append("retrieval required but no chunks were selected")
+    return {
+        "decision": "approved" if not blocking_reasons and (selected_count > 0 or not (query_terms or graph_seeds)) else "blocked",
+        "blocking_reasons": blocking_reasons,
+        "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet) if compiler_valid else None,
+        "semantic_traversal_manifest_hash": sha256_json(traversal_manifest),
+        "retrieval_packet_hash": sha256_json(retrieval_packet),
+        "selected_chunk_count": selected_count,
+    }
+
+
+def _build_visible_transcript_tail(messages: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+    return messages[-limit:]
 
 
 def _build_synthesis_context_packet(
-    thread_document: dict[str, Any],
-    prior_thread_state: dict[str, Any],
-    user_input: str,
+    *,
+    thread_id: str,
     turn_id: int,
-    turn_compilation_packet: dict[str, Any],
+    raw_user_input: str,
+    prior_thread_state: dict[str, Any],
+    visible_transcript_tail: list[dict[str, Any]],
+    semantic_compiler_packet: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
-    retrieval_packet: dict[str, Any],
+    approved_retrieval_packet: dict[str, Any] | None,
     coverage_report: dict[str, Any],
+    runtime_outcome: str,
+    blocking_reasons: list[str],
 ) -> dict[str, Any]:
-    coverage_decision = str(coverage_report.get("decision") or "blocked")
     return {
-        "thread_id": thread_document["thread_id"],
+        "thread_id": thread_id,
         "turn_id": turn_id,
-        "user_input": user_input,
-        "raw_user_input": user_input,
+        "raw_user_input": raw_user_input,
         "prior_thread_state": prior_thread_state,
-        "visible_transcript_tail": thread_document["messages"][-6:],
-        "semantic_compiler_packet": turn_compilation_packet.get("semantic_compiler_packet"),
+        "visible_transcript_tail": visible_transcript_tail,
+        "semantic_compiler_packet": semantic_compiler_packet,
         "semantic_traversal_manifest": semantic_traversal_manifest,
-        "approved_retrieval_packet": retrieval_packet if coverage_decision == "approved" else None,
+        "approved_retrieval_packet": approved_retrieval_packet,
         "coverage_report": coverage_report,
-        "runtime_outcome": "completed" if coverage_decision == "approved" else "blocked",
-        "blocking_reasons": list(coverage_report.get("blocking_reasons") or []),
-        "compiler_stage_summary": {
-            "backend_mode": turn_compilation_packet.get("semantic_compiler", {})
-            .get("statuses", {})
-            .get("backend_mode"),
-            "isolated_status": turn_compilation_packet.get("semantic_compiler", {})
-            .get("statuses", {})
-            .get("isolated_status"),
-            "contextual_status": turn_compilation_packet.get("semantic_compiler", {})
-            .get("statuses", {})
-            .get("contextual_status"),
-            "validation_valid": bool(turn_compilation_packet.get("semantic_contract_validation", {}).get("valid")),
-            "validation_reasons": list(turn_compilation_packet.get("semantic_contract_validation", {}).get("reasons") or []),
-        },
+        "runtime_outcome": runtime_outcome,
+        "blocking_reasons": blocking_reasons,
         "output_requirements": [
-            "Respond directly to the latest raw user input.",
-            "Preserve continuity with the prior thread state.",
-            "Do not emit a user-facing answer when the runtime outcome is blocked.",
-            "Treat semantic_compiler_packet as the primary semantic target object.",
-            "Use retrieved material only when it has been approved for synthesis.",
-            "Do not invent retrieval results or claim thesis-valid traversal when blocked.",
-            "Do not decide evidence validity or perform retrieval inside the final synthesis step.",
+            "Answer directly and use only the approved retrieval packet if coverage is approved.",
         ],
     }
 
 
-def _persist_turn_artifacts(
+def _append_turn_message(
     *,
-    turn_root: Path,
+    messages: list[dict[str, Any]],
+    role: str,
+    content: str,
+    turn_id: int,
+) -> None:
+    messages.append(
+        {
+            "role": role,
+            "content": content,
+            "turn_id": turn_id,
+            "created_at": _utc_now(),
+        }
+    )
+
+
+def _build_state_delta(
+    *,
+    thread_id: str,
+    turn_id: int,
+    raw_user_input: str,
+    assistant_response: str | None,
+    runtime_outcome: str,
+    blocking_reasons: list[str],
+    semantic_compiler_status: str,
+    coverage_report: dict[str, Any],
+    prior_thread_state_hash: str | None,
+    next_thread_state_hash: str,
+) -> dict[str, Any]:
+    return {
+        "thread_id": thread_id,
+        "turn_id": turn_id,
+        "raw_user_input": raw_user_input,
+        "assistant_response": assistant_response,
+        "runtime_outcome": runtime_outcome,
+        "blocking_reasons": blocking_reasons,
+        "semantic_compiler_status": semantic_compiler_status,
+        "coverage_decision": coverage_report.get("decision"),
+        "prior_thread_state_hash": prior_thread_state_hash,
+        "next_thread_state_hash": next_thread_state_hash,
+    }
+
+
+def _build_ledger_record(
+    *,
+    thread_id: str,
+    turn_id: int,
+    runtime_outcome: str,
+    blocking_reasons: list[str],
+    llm_metadata: dict[str, Any],
+    semantic_compiler_status: str,
     semantic_compiler_packet: dict[str, Any],
-    turn_compilation_packet: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
     coverage_report: dict[str, Any],
     synthesis_context_packet: dict[str, Any],
     state_delta: dict[str, Any],
-    semantic_compiler: SemanticCompilerArtifacts,
-) -> dict[str, Path]:
-    turn_root.mkdir(parents=True, exist_ok=True)
-    semantic_compiler_packet_path = turn_root / "semantic_compiler_packet.json"
-    turn_compilation_packet_path = turn_root / "turn_compilation_packet.json"
-    semantic_traversal_manifest_path = turn_root / "semantic_traversal_manifest.json"
-    retrieval_packet_path = turn_root / "retrieval_packet.json"
-    coverage_report_path = turn_root / "coverage_report.json"
-    synthesis_context_packet_path = turn_root / "synthesis_context_packet.json"
-    state_delta_path = turn_root / "state_delta.json"
-    isolated_semantic_compiler_packet_path = turn_root / "isolated_semantic_compiler_packet.json"
-    isolated_semantic_compiler_raw_path = turn_root / "isolated_semantic_compiler_raw.json"
-    contextual_semantic_compiler_packet_path = turn_root / "contextual_semantic_compiler_packet.json"
-    contextual_semantic_compiler_raw_path = turn_root / "contextual_semantic_compiler_raw.json"
-    write_json(semantic_compiler_packet_path, semantic_compiler_packet)
-    write_json(turn_compilation_packet_path, turn_compilation_packet)
-    write_json(semantic_traversal_manifest_path, semantic_traversal_manifest)
-    write_json(retrieval_packet_path, retrieval_packet)
-    write_json(coverage_report_path, coverage_report)
-    write_json(synthesis_context_packet_path, synthesis_context_packet)
-    write_json(state_delta_path, state_delta)
-    write_json(isolated_semantic_compiler_packet_path, semantic_compiler.isolated_packet)
-    write_json(isolated_semantic_compiler_raw_path, semantic_compiler.isolated_raw_artifact)
-    write_json(contextual_semantic_compiler_packet_path, semantic_compiler.contextual_packet)
-    write_json(contextual_semantic_compiler_raw_path, semantic_compiler.contextual_raw_artifact)
+    conversation_thread: dict[str, Any],
+    thread_state: dict[str, Any],
+    parent_perturbation_hash: str | None,
+) -> dict[str, Any]:
     return {
-        "semantic_compiler_packet_path": semantic_compiler_packet_path,
-        "turn_compilation_packet_path": turn_compilation_packet_path,
-        "semantic_traversal_manifest_path": semantic_traversal_manifest_path,
-        "retrieval_packet_path": retrieval_packet_path,
-        "coverage_report_path": coverage_report_path,
-        "synthesis_context_packet_path": synthesis_context_packet_path,
-        "state_delta_path": state_delta_path,
-        "isolated_semantic_compiler_packet_path": isolated_semantic_compiler_packet_path,
-        "isolated_semantic_compiler_raw_path": isolated_semantic_compiler_raw_path,
-        "contextual_semantic_compiler_packet_path": contextual_semantic_compiler_packet_path,
-        "contextual_semantic_compiler_raw_path": contextual_semantic_compiler_raw_path,
+        "thread_id": thread_id,
+        "turn_id": turn_id,
+        "runtime_outcome": runtime_outcome,
+        "blocking_reasons": blocking_reasons,
+        "llm_mode": llm_metadata.get("mode"),
+        "semantic_compiler_status": semantic_compiler_status,
+        "parent_perturbation_hash": parent_perturbation_hash,
+        "state_perturbation_hash": sha256_json(state_delta),
+        "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet),
+        "semantic_traversal_manifest_hash": sha256_json(semantic_traversal_manifest),
+        "retrieval_packet_hash": sha256_json(retrieval_packet),
+        "coverage_report_hash": sha256_json(coverage_report),
+        "synthesis_context_packet_hash": sha256_json(synthesis_context_packet),
+        "state_delta_hash": sha256_json(state_delta),
+        "conversation_thread_hash": sha256_json(conversation_thread),
+        "thread_state_hash": thread_state["latest_thread_state_hash"],
     }
 
 
-def _project_next_thread_state(
-    thread_id: str,
+def _update_thread_state(
+    *,
     prior_thread_state: dict[str, Any],
-    user_input: str,
-    assistant_response: str | None,
+    thread_id: str,
     turn_id: int,
-    timestamp: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    prior_recent_messages = list(prior_thread_state.get("recent_messages") or [])
-    updated_recent_messages = prior_recent_messages + [{"role": "user", "content": user_input}]
+    raw_user_input: str,
+    assistant_response: str | None,
+    created_at: str,
+) -> dict[str, Any]:
+    recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
+    _append_turn_message(messages=recent_messages, role="user", content=raw_user_input, turn_id=turn_id)
     if assistant_response is not None:
-        updated_recent_messages.append({"role": "assistant", "content": assistant_response})
-    updated_recent_messages = updated_recent_messages[-6:]
-    next_thread_state = {
+        _append_turn_message(messages=recent_messages, role="assistant", content=assistant_response, turn_id=turn_id)
+    recent_messages = recent_messages[-6:]
+    thread_state = {
         "thread_id": thread_id,
         "latest_turn_id": turn_id,
-        "conversation_summary": assistant_response or str(prior_thread_state.get("conversation_summary") or ""),
-        "recent_messages": updated_recent_messages,
-        "current_user_goals": [user_input],
-        "open_questions": list(prior_thread_state.get("open_questions") or []),
-        "active_constraints": list(prior_thread_state.get("active_constraints") or []),
-        "recent_semantic_trajectory": [message["content"] for message in updated_recent_messages[-4:]],
-        "latest_user_input": user_input,
+        "conversation_summary": str(prior_thread_state.get("conversation_summary") or ""),
+        "recent_messages": recent_messages,
+        "latest_user_input": raw_user_input,
         "latest_assistant_response": assistant_response,
-        "updated_at": timestamp,
+        "updated_at": created_at,
+        "latest_thread_state_hash": None,
     }
-    next_thread_state_hash = sha256_json(next_thread_state)
-    next_thread_state["latest_thread_state_hash"] = next_thread_state_hash
-    state_delta = {
-        "from_turn_id": prior_thread_state.get("latest_turn_id", 0),
-        "to_turn_id": turn_id,
-        "latest_user_input": user_input,
-        "latest_assistant_response": assistant_response,
-        "latest_thread_state_hash": next_thread_state_hash,
+    thread_state["latest_thread_state_hash"] = _thread_state_hash(thread_state)
+    return thread_state
+
+
+def _build_conversation_thread(
+    *,
+    prior_thread_document: dict[str, Any],
+    turn_id: int,
+    raw_user_input: str,
+    assistant_response: str | None,
+    thread_state_hash: str,
+    perturbation_hash: str,
+    created_at: str,
+) -> dict[str, Any]:
+    messages = _ensure_message_list(prior_thread_document.get("messages"))
+    _append_turn_message(messages=messages, role="user", content=raw_user_input, turn_id=turn_id)
+    if assistant_response is not None:
+        _append_turn_message(messages=messages, role="assistant", content=assistant_response, turn_id=turn_id)
+    return {
+        "thread_id": str(prior_thread_document.get("thread_id") or ""),
+        "created_at": str(prior_thread_document.get("created_at") or created_at),
+        "updated_at": created_at,
+        "turn_count": turn_id,
+        "latest_turn_id": turn_id,
+        "latest_thread_state_hash": thread_state_hash,
+        "latest_perturbation_hash": perturbation_hash,
+        "messages": messages,
     }
-    return next_thread_state, state_delta
+
+
+def _resolve_thread_state(
+    *,
+    thread_id: str | None,
+    data_root: Path,
+    config: RuntimeConfig,
+) -> tuple[dict[str, Any], dict[str, Any], Path, Path, Path]:
+    thread_paths = create_thread_paths(data_root, config=config, thread_id=thread_id)
+    created_at = _utc_now()
+    conversation_thread_path = thread_paths.conversation_thread_path
+    thread_state_path = thread_paths.thread_state_path
+    thread_ledger_path = thread_paths.thread_ledger_path
+
+    conversation_thread = load_json(conversation_thread_path) or _default_conversation_thread(thread_paths.thread_id, created_at)
+    thread_state = load_json(thread_state_path) or _default_thread_state(thread_paths.thread_id, created_at)
+    return conversation_thread, thread_state, conversation_thread_path, thread_state_path, thread_ledger_path
+
+
+def _load_ingestion_database_path(*, data_root: Path, config: RuntimeConfig) -> Path:
+    return _resolve_data_path(data_root, config.storage_ingestion_root) / config.storage_ingestion_database_filename
 
 
 def run_thread_turn(
@@ -2993,202 +867,210 @@ def run_thread_turn(
     semantic_compiler_backend: SemanticCompilerBackend | None = None,
     embedding_backend: EmbeddingBackend | None = None,
 ) -> TurnExecutionResult:
-    resolved_config = config or load_runtime_config(repo_root=repo_root)
-    timestamp = _utc_now()
-    paths = create_thread_paths(data_root=data_root, config=resolved_config, thread_id=thread_id)
+    resolved_repo_root = repo_root.resolve()
+    resolved_config = config or load_runtime_config(repo_root=resolved_repo_root)
+    resolved_data_root = data_root.resolve()
 
-    thread_document = load_json(paths.conversation_thread_path) or _default_thread_document(paths.thread_id, timestamp)
-    prior_thread_state = load_json(paths.thread_state_path) or _default_thread_state(paths.thread_id, timestamp)
-    ledger_records = read_ledger(paths.thread_ledger_path)
-    turn_id = len(ledger_records) + 1
-    parent_perturbation_hash = ledger_records[-1]["state_perturbation_hash"] if ledger_records else None
-    prior_thread_state_hash = prior_thread_state.get("latest_thread_state_hash")
-    turn_root = paths.turn_root(turn_id)
-    compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(repo_root=repo_root, config=resolved_config)
-    resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
+    conversation_thread, prior_thread_state, conversation_thread_path, thread_state_path, thread_ledger_path = _resolve_thread_state(
+        thread_id=thread_id,
+        data_root=resolved_data_root,
+        config=resolved_config,
+    )
+    thread_id_value = str(conversation_thread.get("thread_id") or prior_thread_state.get("thread_id") or thread_state_path.parent.name)
+    parent_perturbation_hash = conversation_thread.get("latest_perturbation_hash")
+    turn_id = int(prior_thread_state.get("latest_turn_id") or 0) + 1
+    created_at = _utc_now()
+    turn_paths = create_thread_paths(resolved_data_root, config=resolved_config, thread_id=thread_id_value)
+    turn_root = turn_paths.turn_root(turn_id)
+    turn_root.mkdir(parents=True, exist_ok=True)
 
-    semantic_compiler = _run_semantic_compiler(
-        thread_id=paths.thread_id,
-        turn_id=turn_id,
-        user_input=user_input,
+    recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
+    compiler_request = _compiler_request_packet(
+        raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
-        backend=compiler_backend,
+        recent_messages=recent_messages,
     )
-    turn_compilation_packet = _build_turn_compilation_packet(
-        thread_document=thread_document,
+    compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(repo_root=resolved_repo_root, config=resolved_config)
+    try:
+        compiler_response = compiler_backend.compile_turn(compiler_request)
+    except Exception as exc:  # noqa: BLE001
+        compiler_response = SemanticCompilerResponse(
+            parsed_payload=None,
+            raw_response=None,
+            metadata={"backend_mode": getattr(compiler_backend, "mode_name", "unknown"), "error": str(exc)},
+            diagnostics={},
+            status="unavailable",
+        )
+
+    semantic_compiler_packet, semantic_compiler_status = _compiler_response_to_packet(
+        raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
-        user_input=user_input,
-        turn_id=turn_id,
-        semantic_compiler=semantic_compiler,
-        config=config,
+        recent_messages=recent_messages,
+        response=compiler_response,
     )
-    activated_semantic_regions = _build_latent_space_activation(
-        repo_root=repo_root,
-        data_root=data_root,
-        config=resolved_config,
-        turn_compilation_packet=turn_compilation_packet,
-        embedding_backend=resolved_embedding_backend,
-    )
-    semantic_traversal_manifest = _build_semantic_traversal_manifest(
-        turn_compilation_packet=turn_compilation_packet,
-        activated_semantic_regions=activated_semantic_regions,
-        config=resolved_config,
-    )
-    retrieval_packet = _assemble_retrieval_packet(
-        data_root=data_root,
-        config=resolved_config,
-        semantic_traversal_manifest=semantic_traversal_manifest,
-    )
-    semantic_traversal_manifest_hash = sha256_json(semantic_traversal_manifest)
-    retrieval_packet_hash = sha256_json(retrieval_packet)
-    coverage_report = _evaluate_retrieval_coverage(
-        turn_compilation_packet=turn_compilation_packet,
-        activated_semantic_regions=activated_semantic_regions,
-        semantic_traversal_manifest=semantic_traversal_manifest,
+
+    database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
+    if database_path.exists():
+        if embedding_backend is None:
+            embedding_backend = resolve_embedding_backend(resolved_config)
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            semantic_traversal_manifest, retrieval_packet, _ = _semantic_traversal(
+                connection=connection,
+                config=resolved_config,
+                semantic_compiler_packet=semantic_compiler_packet,
+                embedding_backend=embedding_backend,
+            )
+        finally:
+            connection.close()
+    else:
+        semantic_traversal_manifest = {
+            "query_terms": list(semantic_compiler_packet.get("retrieval_terms") or []),
+            "vector_query": str(semantic_compiler_packet.get("vector_query") or ""),
+            "graph_seeds": list(semantic_compiler_packet.get("graph_seeds") or []),
+            "candidate_counts": {"lexical": 0, "vector": 0, "graph": 0},
+            "selected_chunk_ids": [],
+            "selection_notes": ["ingestion database unavailable"],
+        }
+        retrieval_packet = {
+            "selected_chunks": [],
+            "matched_chunk_count": 0,
+            "retrieval_observation": "no_matches",
+            "assembled_from_traversal_manifest": True,
+        }
+
+    coverage_report = _coverage_report(
+        semantic_compiler_packet=semantic_compiler_packet,
+        traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
-        config=resolved_config,
-        semantic_traversal_manifest_hash=semantic_traversal_manifest_hash,
-        retrieval_packet_hash=retrieval_packet_hash,
     )
 
-    synthesis_context_packet = _build_synthesis_context_packet(
-        thread_document=thread_document,
-        prior_thread_state=prior_thread_state,
-        user_input=user_input,
-        turn_id=turn_id,
-        turn_compilation_packet=turn_compilation_packet,
-        semantic_traversal_manifest=semantic_traversal_manifest,
-        retrieval_packet=retrieval_packet,
-        coverage_report=coverage_report,
-    )
-    semantic_compiler_packet = turn_compilation_packet["semantic_compiler_packet"]
-    semantic_compiler_packet_hash = sha256_json(semantic_compiler_packet)
-    turn_compilation_packet_hash = sha256_json(turn_compilation_packet)
-    coverage_report_hash = sha256_json(coverage_report)
-    synthesis_context_packet_hash = sha256_json(synthesis_context_packet)
-    isolated_semantic_compiler_packet_hash = sha256_json(semantic_compiler.isolated_packet)
-    isolated_semantic_compiler_raw_hash = sha256_json(semantic_compiler.isolated_raw_artifact)
-    contextual_semantic_compiler_packet_hash = sha256_json(semantic_compiler.contextual_packet)
-    contextual_semantic_compiler_raw_hash = sha256_json(semantic_compiler.contextual_raw_artifact)
-    coverage_decision = str(coverage_report.get("decision") or "blocked")
-    runtime_outcome = "completed" if coverage_decision == "approved" else "blocked"
+    runtime_outcome = "completed" if coverage_report["decision"] == "approved" else "blocked"
     blocking_reasons = list(coverage_report.get("blocking_reasons") or [])
-    assistant_response: str | None = None
+    approved_retrieval_packet = retrieval_packet if runtime_outcome == "completed" else None
+    visible_transcript_tail = _build_visible_transcript_tail(_ensure_message_list(conversation_thread.get("messages")))
+    synthesis_context_packet = _build_synthesis_context_packet(
+        thread_id=thread_id_value,
+        turn_id=turn_id,
+        raw_user_input=user_input,
+        prior_thread_state=prior_thread_state,
+        visible_transcript_tail=visible_transcript_tail,
+        semantic_compiler_packet=semantic_compiler_packet,
+        semantic_traversal_manifest=semantic_traversal_manifest,
+        approved_retrieval_packet=approved_retrieval_packet,
+        coverage_report=coverage_report,
+        runtime_outcome=runtime_outcome,
+        blocking_reasons=blocking_reasons,
+    )
+
+    assistant_response_text: str | None = None
     llm_metadata: dict[str, Any] = {
-        "mode": "not_called",
-        "blocked": True,
-        "reason": "runtime blocked before llm_call_boundary",
+        "mode": getattr(llm_backend, "mode_name", "unknown"),
     }
     if runtime_outcome == "completed":
         llm_response = llm_backend.generate(synthesis_context_packet)
-        assistant_response = llm_response.assistant_response
-        llm_metadata = llm_response.metadata
+        assistant_response_text = llm_response.assistant_response
+        llm_metadata = dict(llm_response.metadata)
 
-    next_thread_state, state_delta = _project_next_thread_state(
-        thread_id=paths.thread_id,
+    thread_state = _update_thread_state(
         prior_thread_state=prior_thread_state,
-        user_input=user_input,
-        assistant_response=assistant_response,
+        thread_id=thread_id_value,
         turn_id=turn_id,
-        timestamp=timestamp,
+        raw_user_input=user_input,
+        assistant_response=assistant_response_text,
+        created_at=created_at,
     )
-    state_delta["runtime_outcome"] = runtime_outcome
-    state_delta["blocking_reasons"] = blocking_reasons
 
-    artifact_paths = _persist_turn_artifacts(
-        turn_root=turn_root,
+    conversation_thread = _build_conversation_thread(
+        prior_thread_document=conversation_thread,
+        turn_id=turn_id,
+        raw_user_input=user_input,
+        assistant_response=assistant_response_text,
+        thread_state_hash=thread_state["latest_thread_state_hash"],
+        perturbation_hash="",
+        created_at=created_at,
+    )
+    state_delta = _build_state_delta(
+        thread_id=thread_id_value,
+        turn_id=turn_id,
+        raw_user_input=user_input,
+        assistant_response=assistant_response_text,
+        runtime_outcome=runtime_outcome,
+        blocking_reasons=blocking_reasons,
+        semantic_compiler_status=semantic_compiler_status,
+        coverage_report=coverage_report,
+        prior_thread_state_hash=prior_thread_state.get("latest_thread_state_hash"),
+        next_thread_state_hash=thread_state["latest_thread_state_hash"],
+    )
+    state_delta_hash = sha256_json(state_delta)
+    conversation_thread["latest_perturbation_hash"] = state_delta_hash
+    conversation_thread["latest_thread_state_hash"] = thread_state["latest_thread_state_hash"]
+
+    ledger_record = _build_ledger_record(
+        thread_id=thread_id_value,
+        turn_id=turn_id,
+        runtime_outcome=runtime_outcome,
+        blocking_reasons=blocking_reasons,
+        llm_metadata=llm_metadata,
+        semantic_compiler_status=semantic_compiler_status,
         semantic_compiler_packet=semantic_compiler_packet,
-        turn_compilation_packet=turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
         synthesis_context_packet=synthesis_context_packet,
         state_delta=state_delta,
-        semantic_compiler=semantic_compiler,
+        conversation_thread=conversation_thread,
+        thread_state=thread_state,
+        parent_perturbation_hash=parent_perturbation_hash,
     )
+    ledger_record["state_perturbation_hash"] = state_delta_hash
+    ledger_record["state_delta_hash"] = state_delta_hash
 
-    user_message = {"role": "user", "content": user_input, "turn_id": turn_id, "timestamp": timestamp}
-    thread_document["messages"] = list(thread_document.get("messages") or []) + [user_message]
-    if assistant_response is not None:
-        assistant_message = {
-            "role": "assistant",
-            "content": assistant_response,
-            "turn_id": turn_id,
-            "timestamp": timestamp,
-        }
-        thread_document["messages"].append(assistant_message)
-    thread_document["turn_count"] = turn_id
-    thread_document["updated_at"] = timestamp
-    thread_document["latest_thread_state_hash"] = next_thread_state["latest_thread_state_hash"]
+    semantic_compiler_packet_path = turn_root / "semantic_compiler_packet.json"
+    semantic_traversal_manifest_path = turn_root / "semantic_traversal_manifest.json"
+    retrieval_packet_path = turn_root / "retrieval_packet.json"
+    coverage_report_path = turn_root / "coverage_report.json"
+    synthesis_context_packet_path = turn_root / "synthesis_context_packet.json"
+    state_delta_path = turn_root / "state_delta.json"
 
-    ledger_record_base = {
-        "thread_id": paths.thread_id,
-        "turn_id": turn_id,
-        "timestamp": timestamp,
-        "parent_perturbation_hash": parent_perturbation_hash,
-        "prior_thread_state_hash": prior_thread_state_hash,
-        "user_input_hash": sha256_text(user_input),
-        "isolated_semantic_compiler_packet_hash": isolated_semantic_compiler_packet_hash,
-        "isolated_semantic_compiler_raw_hash": isolated_semantic_compiler_raw_hash,
-        "contextual_semantic_compiler_packet_hash": contextual_semantic_compiler_packet_hash,
-        "contextual_semantic_compiler_raw_hash": contextual_semantic_compiler_raw_hash,
-        "semantic_compiler_packet_hash": semantic_compiler_packet_hash,
-        "turn_compilation_packet_hash": turn_compilation_packet_hash,
-        "semantic_traversal_manifest_hash": semantic_traversal_manifest_hash,
-        "retrieval_packet_hash": retrieval_packet_hash,
-        "coverage_report_hash": coverage_report_hash,
-        "synthesis_context_packet_hash": synthesis_context_packet_hash,
-        "assistant_response_hash": sha256_text(assistant_response) if assistant_response is not None else None,
-        "state_delta_hash": sha256_json(state_delta),
-        "next_thread_state_hash": next_thread_state["latest_thread_state_hash"],
-        "llm_call_metadata": llm_metadata,
-        "runtime_outcome": runtime_outcome,
-        "blocking_reasons": blocking_reasons,
-    }
-    state_perturbation_hash = sha256_json(ledger_record_base)
-    ledger_record = dict(ledger_record_base)
-    ledger_record["state_perturbation_hash"] = state_perturbation_hash
+    write_json(semantic_compiler_packet_path, semantic_compiler_packet)
+    write_json(semantic_traversal_manifest_path, semantic_traversal_manifest)
+    write_json(retrieval_packet_path, retrieval_packet)
+    write_json(coverage_report_path, coverage_report)
+    write_json(synthesis_context_packet_path, synthesis_context_packet)
+    write_json(state_delta_path, state_delta)
 
-    append_ledger_record(paths.thread_ledger_path, ledger_record)
-
-    thread_document["latest_perturbation_hash"] = state_perturbation_hash
-    thread_document["ledger_record_count"] = turn_id
-
-    write_json(paths.thread_state_path, next_thread_state)
-    write_json(paths.conversation_thread_path, thread_document)
+    write_json(conversation_thread_path, conversation_thread)
+    write_json(thread_state_path, thread_state)
+    append_ledger_record(thread_ledger_path, ledger_record)
 
     return TurnExecutionResult(
-        thread_id=paths.thread_id,
+        thread_id=thread_id_value,
         turn_id=turn_id,
-        thread_root=paths.thread_root,
+        thread_root=turn_paths.thread_root,
         turn_root=turn_root,
-        conversation_thread_path=paths.conversation_thread_path,
-        thread_state_path=paths.thread_state_path,
-        thread_ledger_path=paths.thread_ledger_path,
-        semantic_compiler_packet_path=artifact_paths["semantic_compiler_packet_path"],
-        turn_compilation_packet_path=artifact_paths["turn_compilation_packet_path"],
-        semantic_traversal_manifest_path=artifact_paths["semantic_traversal_manifest_path"],
-        retrieval_packet_path=artifact_paths["retrieval_packet_path"],
-        coverage_report_path=artifact_paths["coverage_report_path"],
-        synthesis_context_packet_path=artifact_paths["synthesis_context_packet_path"],
-        state_delta_path=artifact_paths["state_delta_path"],
-        isolated_semantic_compiler_packet_path=artifact_paths["isolated_semantic_compiler_packet_path"],
-        isolated_semantic_compiler_raw_path=artifact_paths["isolated_semantic_compiler_raw_path"],
-        contextual_semantic_compiler_packet_path=artifact_paths["contextual_semantic_compiler_packet_path"],
-        contextual_semantic_compiler_raw_path=artifact_paths["contextual_semantic_compiler_raw_path"],
-        assistant_response=assistant_response,
+        conversation_thread_path=conversation_thread_path,
+        thread_state_path=thread_state_path,
+        thread_ledger_path=thread_ledger_path,
+        semantic_compiler_packet_path=semantic_compiler_packet_path,
+        semantic_traversal_manifest_path=semantic_traversal_manifest_path,
+        retrieval_packet_path=retrieval_packet_path,
+        coverage_report_path=coverage_report_path,
+        synthesis_context_packet_path=synthesis_context_packet_path,
+        state_delta_path=state_delta_path,
+        assistant_response=assistant_response_text,
         llm_metadata=llm_metadata,
         runtime_outcome=runtime_outcome,
         blocking_reasons=blocking_reasons,
         prior_thread_state=prior_thread_state,
-        next_thread_state=next_thread_state,
+        next_thread_state=thread_state,
         ledger_record=ledger_record,
+        semantic_compiler_status=semantic_compiler_status,
         semantic_compiler_packet=semantic_compiler_packet,
-        turn_compilation_packet=turn_compilation_packet,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
         synthesis_context_packet=synthesis_context_packet,
-        isolated_semantic_compiler_packet=semantic_compiler.isolated_packet,
-        contextual_semantic_compiler_packet=semantic_compiler.contextual_packet,
+        state_delta=state_delta,
     )
