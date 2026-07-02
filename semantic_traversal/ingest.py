@@ -18,6 +18,13 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 INLINE_LABEL_RE = re.compile(r"^(?P<label>[A-Za-z0-9][A-Za-z0-9/&()'., \-]{0,80}):(?:\s*(?P<remainder>.*))?$")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
 THEMATIC_BREAK_RE = re.compile(r"^\s*(?:---|\*\*\*|___)\s*$")
+APPARATUS_REFERENCE_LINE_RE = re.compile(
+    r"^(?:"
+    r"\d{1,4}"
+    r"|\d{2,4}[a-eA-EаАеЕсС](?:\s+[a-eA-EаАеЕсС]){0,5}"
+    r"|[a-eA-EаАеЕсС](?:\s+[a-eA-EаАеЕсС]){0,5}"
+    r")$"
+)
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
@@ -392,6 +399,11 @@ def _strip_optional_md_suffix(value: str) -> str:
     return normalized
 
 
+def _is_apparatus_reference_line(value: str) -> bool:
+    normalized = _normalize_inline_whitespace(value)
+    return bool(APPARATUS_REFERENCE_LINE_RE.match(normalized))
+
+
 def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
     blocks: list[_Block] = []
     current_lines: list[str] = []
@@ -430,6 +442,9 @@ def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
             flush_paragraph()
             index += 1
             continue
+        if _is_apparatus_reference_line(stripped):
+            index += 1
+            continue
         if LIST_ITEM_RE.match(stripped):
             flush_paragraph()
             item_lines = [stripped]
@@ -439,6 +454,9 @@ def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
                 next_stripped = next_line.strip()
                 if not next_stripped or HEADING_RE.match(next_stripped) or LIST_ITEM_RE.match(next_stripped):
                     break
+                if _is_apparatus_reference_line(next_stripped):
+                    lookahead += 1
+                    continue
                 item_lines.append(next_stripped)
                 lookahead += 1
             blocks.append(_Block(kind="list_item", text=_normalize_inline_whitespace(" ".join(item_lines))))

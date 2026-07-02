@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +240,52 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
 
 
 class ThesisRuntimeTests(unittest.TestCase):
+    def test_ingest_omits_standalone_classical_reference_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            (source_root / "Theaetetus.md").write_text(
+                """
+                # Theaetetus
+
+                This paragraph should survive ingestion.
+
+                142a b
+
+                143a b с
+
+                146а b
+
+                e
+
+                12
+
+                This inline 144e reference should remain because it is part of prose.
+                """.strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+            )
+
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                rows = [
+                    row[0]
+                    for row in connection.execute("SELECT paragraph_text FROM chunks ORDER BY chunk_id").fetchall()
+                ]
+
+            self.assertEqual(result.chunk_count, 2)
+            self.assertIn("This paragraph should survive ingestion.", rows)
+            self.assertIn("This inline 144e reference should remain because it is part of prose.", rows)
+            for omitted_text in ("142a b", "143a b с", "146а b", "e", "12"):
+                self.assertNotIn(omitted_text, rows)
+
     def test_first_turn_creates_thread_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = run_thread_turn(
