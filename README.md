@@ -15,7 +15,7 @@ For each user message, the runtime:
 1. Loads prior `thread_state` and `conversation_thread` artifacts if they exist.
 2. Preserves the raw user input unchanged.
 3. Sends the raw input plus compact prior thread state to the configured local semantic compiler.
-4. Canonicalizes the compiler response into `semantic_compiler_packet`.
+4. Canonicalizes the compiler response into `semantic_compiler_packet` and writes compiler diagnostics separately.
 5. Activates lexical, vector, graph, and primary-corpus surfaces from the ingestion database when available.
 6. Builds `semantic_traversal_manifest` from activated candidate regions.
 7. Assembles `retrieval_packet` only from traversal-selected chunk IDs.
@@ -48,6 +48,7 @@ Default runtime artifacts live under the repo-local configured data root:
 Per turn, the runtime writes:
 
 - `semantic_compiler_packet.json`
+- `semantic_compiler_diagnostic.json`
 - `semantic_traversal_manifest.json`
 - `retrieval_packet.json`
 - `coverage_report.json`
@@ -109,6 +110,7 @@ python -m semantic_traversal.probes fixture-lexical-hit --data-root $env:TEMP\se
 Useful files after a turn:
 
 - `semantic_compiler_packet.json` for the canonical compiler packet
+- `semantic_compiler_diagnostic.json` for compiler response status, metadata, diagnostics, and capped raw-response preview
 - `semantic_traversal_manifest.json` for activation surfaces, graph traversal notes, candidate counts, and selected chunk IDs
 - `retrieval_packet.json` for traversal-selected chunks and retrieval provenance
 - `coverage_report.json` for binary approval-vs-blocked gating plus blocking reasons
@@ -123,6 +125,8 @@ Good break attempts:
 - confirm the raw user message is unchanged across compiler and synthesis artifacts
 - confirm the normal CLI blocks when no real semantic compiler is configured
 - confirm diagnostic fallback packets cannot produce `completed`
+- confirm fallback graph seeds do not include assistant-response prose
+- inspect `semantic_compiler_diagnostic.json` when compiler status is `fallback`
 - inspect traversal notes and verify raw lexical terms are not dropped when compiler extraction is sparse
 - confirm `approved_retrieval_packet` appears only when runtime gating permits synthesis
 - run two turns on the same thread and confirm the compiler request receives prior thread state

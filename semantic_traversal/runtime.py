@@ -11,7 +11,7 @@ from typing import Any
 
 from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
-from .hashing import sha256_json
+from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .semantic_compiler import (
     SemanticCompilerBackend,
@@ -82,6 +82,7 @@ class TurnExecutionResult:
     thread_state_path: Path
     thread_ledger_path: Path
     semantic_compiler_packet_path: Path
+    semantic_compiler_diagnostic_path: Path
     semantic_traversal_manifest_path: Path
     retrieval_packet_path: Path
     coverage_report_path: Path
@@ -96,6 +97,7 @@ class TurnExecutionResult:
     ledger_record: dict[str, Any]
     semantic_compiler_status: str
     semantic_compiler_packet: dict[str, Any]
+    semantic_compiler_diagnostic: dict[str, Any]
     semantic_traversal_manifest: dict[str, Any]
     retrieval_packet: dict[str, Any]
     coverage_report: dict[str, Any]
@@ -406,7 +408,6 @@ def _deterministic_semantic_packet(
     *,
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
-    recent_messages: list[dict[str, Any]],
     active_focus: dict[str, Any],
     recent_semantic_turns: list[dict[str, Any]],
     limitations: list[str] | None = None,
@@ -427,10 +428,6 @@ def _deterministic_semantic_packet(
         graph_seeds.append(query)
         if prior_thread_state.get("latest_user_input"):
             graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
-    if recent_messages and any(surface in raw_user_input.lower() for surface in REFERENTIAL_SURFACE_WORDS):
-        last_message = recent_messages[-1].get("content")
-        if isinstance(last_message, str) and last_message.strip():
-            graph_seeds.append(last_message.strip())
     return {
         "raw_user_input": raw_user_input,
         "intent": "deterministic lexical fallback",
@@ -449,7 +446,6 @@ def _canonicalize_compiler_packet(
     *,
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
-    recent_messages: list[dict[str, Any]],
     active_focus: dict[str, Any],
     recent_semantic_turns: list[dict[str, Any]],
     payload: dict[str, Any] | None,
@@ -458,7 +454,6 @@ def _canonicalize_compiler_packet(
     fallback_packet = _deterministic_semantic_packet(
         raw_user_input=raw_user_input,
         prior_thread_state=prior_thread_state,
-        recent_messages=recent_messages,
         active_focus=active_focus,
         recent_semantic_turns=recent_semantic_turns,
         limitations=fallback_limitations,
@@ -487,7 +482,6 @@ def _compiler_response_to_packet(
     *,
     raw_user_input: str,
     prior_thread_state: dict[str, Any],
-    recent_messages: list[dict[str, Any]],
     active_focus: dict[str, Any],
     recent_semantic_turns: list[dict[str, Any]],
     response: SemanticCompilerResponse,
@@ -498,7 +492,6 @@ def _compiler_response_to_packet(
             _canonicalize_compiler_packet(
                 raw_user_input=raw_user_input,
                 prior_thread_state=prior_thread_state,
-                recent_messages=recent_messages,
                 active_focus=active_focus,
                 recent_semantic_turns=recent_semantic_turns,
                 payload=payload,
@@ -509,13 +502,30 @@ def _compiler_response_to_packet(
         _deterministic_semantic_packet(
             raw_user_input=raw_user_input,
             prior_thread_state=prior_thread_state,
-            recent_messages=recent_messages,
             active_focus=active_focus,
             recent_semantic_turns=recent_semantic_turns,
             limitations=["semantic compiler backend unavailable; deterministic lexical fallback used"],
         ),
         "fallback",
     )
+
+
+def _semantic_compiler_diagnostic_packet(
+    *,
+    response: SemanticCompilerResponse,
+    semantic_compiler_status: str,
+) -> dict[str, Any]:
+    raw_response = response.raw_response if isinstance(response.raw_response, str) else None
+    return {
+        "semantic_compiler_response_status": response.status,
+        "canonical_semantic_compiler_status": semantic_compiler_status,
+        "metadata": response.metadata,
+        "diagnostics": response.diagnostics,
+        "parsed_payload_available": isinstance(response.parsed_payload, dict),
+        "raw_response_available": bool(raw_response),
+        "raw_response_hash": sha256_text(raw_response) if raw_response else None,
+        "raw_response_preview": _snippet(raw_response, limit=1200) if raw_response else None,
+    }
 
 
 def _is_compiler_packet_valid(packet: Any) -> bool:
@@ -1017,6 +1027,7 @@ def _coverage_report(
     *,
     semantic_compiler_packet: Any,
     semantic_compiler_status: str,
+    semantic_compiler_diagnostic: dict[str, Any],
     traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1034,6 +1045,9 @@ def _coverage_report(
     return {
         "decision": "approved" if not blocking_reasons and (selected_count > 0 or not (query_terms or graph_seeds)) else "blocked",
         "blocking_reasons": blocking_reasons,
+        "semantic_compiler_status": semantic_compiler_status,
+        "semantic_compiler_response_status": semantic_compiler_diagnostic.get("semantic_compiler_response_status"),
+        "semantic_compiler_diagnostic_hash": sha256_json(semantic_compiler_diagnostic),
         "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet) if compiler_valid else None,
         "semantic_traversal_manifest_hash": sha256_json(traversal_manifest),
         "retrieval_packet_hash": sha256_json(retrieval_packet),
@@ -1130,6 +1144,7 @@ def _build_ledger_record(
     llm_metadata: dict[str, Any],
     semantic_compiler_status: str,
     semantic_compiler_packet: dict[str, Any],
+    semantic_compiler_diagnostic: dict[str, Any],
     semantic_traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
     coverage_report: dict[str, Any],
@@ -1149,6 +1164,7 @@ def _build_ledger_record(
         "parent_perturbation_hash": parent_perturbation_hash,
         "state_perturbation_hash": sha256_json(state_delta),
         "semantic_compiler_packet_hash": sha256_json(semantic_compiler_packet),
+        "semantic_compiler_diagnostic_hash": sha256_json(semantic_compiler_diagnostic),
         "semantic_traversal_manifest_hash": sha256_json(semantic_traversal_manifest),
         "retrieval_packet_hash": sha256_json(retrieval_packet),
         "coverage_report_hash": sha256_json(coverage_report),
@@ -1310,10 +1326,13 @@ def run_thread_turn(
     semantic_compiler_packet, semantic_compiler_status = _compiler_response_to_packet(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
-        recent_messages=recent_messages,
         active_focus=active_focus,
         recent_semantic_turns=recent_semantic_turns,
         response=compiler_response,
+    )
+    semantic_compiler_diagnostic = _semantic_compiler_diagnostic_packet(
+        response=compiler_response,
+        semantic_compiler_status=semantic_compiler_status,
     )
 
     database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
@@ -1351,6 +1370,7 @@ def run_thread_turn(
     coverage_report = _coverage_report(
         semantic_compiler_packet=semantic_compiler_packet,
         semantic_compiler_status=semantic_compiler_status,
+        semantic_compiler_diagnostic=semantic_compiler_diagnostic,
         traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
     )
@@ -1429,6 +1449,7 @@ def run_thread_turn(
         llm_metadata=llm_metadata,
         semantic_compiler_status=semantic_compiler_status,
         semantic_compiler_packet=semantic_compiler_packet,
+        semantic_compiler_diagnostic=semantic_compiler_diagnostic,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,
@@ -1442,6 +1463,7 @@ def run_thread_turn(
     ledger_record["state_delta_hash"] = state_delta_hash
 
     semantic_compiler_packet_path = turn_root / "semantic_compiler_packet.json"
+    semantic_compiler_diagnostic_path = turn_root / "semantic_compiler_diagnostic.json"
     semantic_traversal_manifest_path = turn_root / "semantic_traversal_manifest.json"
     retrieval_packet_path = turn_root / "retrieval_packet.json"
     coverage_report_path = turn_root / "coverage_report.json"
@@ -1449,6 +1471,7 @@ def run_thread_turn(
     state_delta_path = turn_root / "state_delta.json"
 
     write_json(semantic_compiler_packet_path, semantic_compiler_packet)
+    write_json(semantic_compiler_diagnostic_path, semantic_compiler_diagnostic)
     write_json(semantic_traversal_manifest_path, semantic_traversal_manifest)
     write_json(retrieval_packet_path, retrieval_packet)
     write_json(coverage_report_path, coverage_report)
@@ -1468,6 +1491,7 @@ def run_thread_turn(
         thread_state_path=thread_state_path,
         thread_ledger_path=thread_ledger_path,
         semantic_compiler_packet_path=semantic_compiler_packet_path,
+        semantic_compiler_diagnostic_path=semantic_compiler_diagnostic_path,
         semantic_traversal_manifest_path=semantic_traversal_manifest_path,
         retrieval_packet_path=retrieval_packet_path,
         coverage_report_path=coverage_report_path,
@@ -1482,6 +1506,7 @@ def run_thread_turn(
         ledger_record=ledger_record,
         semantic_compiler_status=semantic_compiler_status,
         semantic_compiler_packet=semantic_compiler_packet,
+        semantic_compiler_diagnostic=semantic_compiler_diagnostic,
         semantic_traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
         coverage_report=coverage_report,

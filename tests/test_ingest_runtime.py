@@ -247,6 +247,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertTrue(result.thread_state_path.exists())
             self.assertTrue(result.thread_ledger_path.exists())
             self.assertTrue(result.semantic_compiler_packet_path.exists())
+            self.assertTrue(result.semantic_compiler_diagnostic_path.exists())
             self.assertTrue(result.semantic_traversal_manifest_path.exists())
             self.assertTrue(result.retrieval_packet_path.exists())
             self.assertTrue(result.coverage_report_path.exists())
@@ -585,6 +586,35 @@ class ThesisRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(result.semantic_compiler_status, "fallback")
             self.assertIn("deterministic lexical fallback used", result.semantic_compiler_packet["limitations"][0])
+            diagnostic = _turn_artifact(result.semantic_compiler_diagnostic_path)
+            self.assertEqual(diagnostic["semantic_compiler_response_status"], "unavailable")
+            self.assertEqual(diagnostic["canonical_semantic_compiler_status"], "fallback")
+            self.assertIn("compiler backend exploded", diagnostic["metadata"]["error"])
+            self.assertEqual(result.coverage_report["semantic_compiler_response_status"], "unavailable")
+
+    def test_fallback_graph_seeds_do_not_include_assistant_response_text(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="thinking about doing a problem space enthusiast video on 4-Fold Root",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="I think some good anecdotes from the journal would be really good to tie in here, additionally some isomorphic bridges",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=ExplodingCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(second_turn.semantic_compiler_status, "fallback")
+        joined_graph_seeds = "\n".join(second_turn.semantic_compiler_packet["graph_seeds"])
+        self.assertNotIn("Recorded assistant response", joined_graph_seeds)
+        self.assertNotIn("assistant response", joined_graph_seeds.lower())
 
     def test_lexical_traversal_retrieves_ingested_fixture(self) -> None:
         data_root = _prepare_data_root()
@@ -703,12 +733,14 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(len(ledger), 1)
         record = ledger[-1]
         semantic_compiler_packet = _turn_artifact(result.semantic_compiler_packet_path)
+        semantic_compiler_diagnostic = _turn_artifact(result.semantic_compiler_diagnostic_path)
         semantic_traversal_manifest = _turn_artifact(result.semantic_traversal_manifest_path)
         retrieval_packet = _turn_artifact(result.retrieval_packet_path)
         coverage_report = _turn_artifact(result.coverage_report_path)
         synthesis_context_packet = _turn_artifact(result.synthesis_context_packet_path)
         state_delta = _turn_artifact(result.state_delta_path)
         self.assertEqual(record["semantic_compiler_packet_hash"], sha256_json(semantic_compiler_packet))
+        self.assertEqual(record["semantic_compiler_diagnostic_hash"], sha256_json(semantic_compiler_diagnostic))
         self.assertEqual(record["semantic_traversal_manifest_hash"], sha256_json(semantic_traversal_manifest))
         self.assertEqual(record["retrieval_packet_hash"], sha256_json(retrieval_packet))
         self.assertEqual(record["coverage_report_hash"], sha256_json(coverage_report))
