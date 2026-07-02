@@ -1276,10 +1276,6 @@ def _note_lookup_keys(note_record: NoteRecord) -> list[str]:
     return keys
 
 
-def _unresolved_reference_node_id(target_label: str) -> str:
-    return f"unresolved::{_normalize_note_reference(target_label)}"
-
-
 def _normalize_note_reference(value: str) -> str:
     return _normalize_inline_whitespace(value).replace("_", " ").lower()
 

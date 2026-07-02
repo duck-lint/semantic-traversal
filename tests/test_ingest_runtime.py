@@ -9,14 +9,56 @@ from semantic_traversal.config import load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import IngestSourceRoot, run_ingest
-from semantic_traversal.llm import StubLLMBackend
+from semantic_traversal.llm import LLMResponse
 from semantic_traversal.runtime import run_thread_turn
-from semantic_traversal.semantic_compiler import SemanticCompilerResponse, StubSemanticCompilerBackend
+from semantic_traversal.semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from semantic_traversal.storage import load_json, read_ledger
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "JOURNAL"
+
+
+class TestLLMBackend:
+    mode_name = "test"
+
+    def __init__(self, prefix: str = "Test assistant response") -> None:
+        self._prefix = prefix
+
+    def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
+        user_input = synthesis_context_packet["raw_user_input"]
+        turn_id = synthesis_context_packet["turn_id"]
+        return LLMResponse(
+            assistant_response=f"{self._prefix} for turn {turn_id}: {user_input}",
+            metadata={"mode": self.mode_name, "provider": "test", "model": "test"},
+        )
+
+
+class TestSemanticCompilerBackend:
+    mode_name = "test"
+
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        raw_user_input = str(packet.get("raw_user_input") or "")
+        query = raw_user_input.strip()
+        terms = collect_compiler_terms(raw_user_input)
+        return SemanticCompilerResponse(
+            parsed_payload={
+                "raw_user_input": raw_user_input,
+                "intent": "test semantic compiler output",
+                "query": query,
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "retrieval_terms": terms,
+                "vector_query": query,
+                "graph_seeds": [query] if terms else [],
+                "limitations": ["test compiler backend used"],
+            },
+            raw_response=None,
+            metadata={"backend_mode": self.mode_name},
+            diagnostics={},
+            status="parsed",
+        )
 
 
 class FakeEmbeddingBackend:
@@ -57,7 +99,7 @@ class RecordingLLMBackend:
 
     def generate(self, synthesis_context_packet: dict[str, Any]):
         self.calls.append(synthesis_context_packet)
-        return StubLLMBackend(prefix="Recorded assistant response").generate(synthesis_context_packet)
+        return TestLLMBackend(prefix="Recorded assistant response").generate(synthesis_context_packet)
 
 
 class ExplodingCompilerBackend:
@@ -197,8 +239,8 @@ class ThesisRuntimeTests(unittest.TestCase):
                 repo_root=REPO_ROOT,
                 data_root=Path(temp_dir),
                 user_input="Hello from the barebones runtime.",
-                llm_backend=StubLLMBackend(),
-                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                llm_backend=TestLLMBackend(),
+                semantic_compiler_backend=TestSemanticCompilerBackend(),
             )
             self.assertEqual(result.turn_id, 1)
             self.assertTrue(result.conversation_thread_path.exists())
@@ -220,16 +262,16 @@ class ThesisRuntimeTests(unittest.TestCase):
                 repo_root=REPO_ROOT,
                 data_root=data_root,
                 user_input="Please retrieve the candy snack food before bed note.",
-                llm_backend=StubLLMBackend(prefix="First assistant"),
-                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                llm_backend=TestLLMBackend(prefix="First assistant"),
+                semantic_compiler_backend=TestSemanticCompilerBackend(),
             )
             second_turn = run_thread_turn(
                 repo_root=REPO_ROOT,
                 data_root=data_root,
                 user_input="And what about that one again?",
-                llm_backend=StubLLMBackend(prefix="Second assistant"),
+                llm_backend=TestLLMBackend(prefix="Second assistant"),
                 thread_id=first_turn.thread_id,
-                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                semantic_compiler_backend=TestSemanticCompilerBackend(),
             )
             self.assertEqual(second_turn.prior_thread_state["latest_turn_id"], 1)
             self.assertEqual(second_turn.next_thread_state["latest_turn_id"], 2)
@@ -242,7 +284,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(result.runtime_outcome, "completed")
@@ -258,7 +300,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         second_turn = run_thread_turn(
@@ -267,7 +309,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             user_input="I wonder if there's anything specific about how it makes me feel?",
             llm_backend=RecordingLLMBackend(),
             thread_id=first_turn.thread_id,
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(second_turn.prior_thread_state["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
@@ -455,7 +497,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         second_turn = run_thread_turn(
@@ -486,7 +528,7 @@ class ThesisRuntimeTests(unittest.TestCase):
                 user_input=f"Please retrieve the candy snack food before bed note {turn_number}.",
                 llm_backend=RecordingLLMBackend(),
                 thread_id=thread_id,
-                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                semantic_compiler_backend=TestSemanticCompilerBackend(),
                 embedding_backend=FakeEmbeddingBackend(),
             )
             thread_id = last_result.thread_id
@@ -501,7 +543,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         second_turn = run_thread_turn(
@@ -510,7 +552,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             user_input="How does it make me feel?",
             llm_backend=RecordingLLMBackend(),
             thread_id=first_turn.thread_id,
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         synthesis_packet = _turn_artifact(second_turn.synthesis_context_packet_path)
@@ -525,8 +567,8 @@ class ThesisRuntimeTests(unittest.TestCase):
                 repo_root=REPO_ROOT,
                 data_root=Path(temp_dir),
                 user_input=user_input,
-                llm_backend=StubLLMBackend(),
-                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                llm_backend=TestLLMBackend(),
+                semantic_compiler_backend=TestSemanticCompilerBackend(),
             )
             compiler_packet = _turn_artifact(result.semantic_compiler_packet_path)
             self.assertEqual(compiler_packet["raw_user_input"], user_input)
@@ -538,7 +580,7 @@ class ThesisRuntimeTests(unittest.TestCase):
                 repo_root=REPO_ROOT,
                 data_root=Path(temp_dir),
                 user_input="Please retrieve the candy snack food before bed note.",
-                llm_backend=StubLLMBackend(),
+                llm_backend=TestLLMBackend(),
                 semantic_compiler_backend=ExplodingCompilerBackend(),
             )
             self.assertEqual(result.semantic_compiler_status, "fallback")
@@ -551,7 +593,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(result.coverage_report["decision"], "approved")
@@ -566,7 +608,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         chunk = result.retrieval_packet["selected_chunks"][0]
@@ -591,7 +633,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=llm_backend,
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(result.runtime_outcome, "completed")
@@ -610,7 +652,7 @@ class ThesisRuntimeTests(unittest.TestCase):
                 data_root=Path(temp_dir),
                 user_input="qzxyv qzxyv qzxyv",
                 llm_backend=llm_backend,
-                semantic_compiler_backend=StubSemanticCompilerBackend(),
+                semantic_compiler_backend=TestSemanticCompilerBackend(),
             )
         self.assertEqual(result.runtime_outcome, "blocked")
         self.assertEqual(len(llm_backend.calls), 0)
@@ -654,7 +696,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="Please retrieve the candy snack food before bed note.",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=StubSemanticCompilerBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
             embedding_backend=FakeEmbeddingBackend(),
         )
         ledger = read_ledger(result.thread_ledger_path)

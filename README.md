@@ -1,56 +1,42 @@
 # semantic-traversal
 
-`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, compiles a canonical `semantic_compiler_packet`, activates retrieval surfaces, builds a traversal manifest, evaluates coverage, optionally synthesizes through the LLM boundary, updates thread state, and appends a hash-chained ledger record.
+`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, compiles a canonical `semantic_compiler_packet`, activates retrieval surfaces, builds a traversal manifest, evaluates coverage, optionally synthesizes through the frontier LLM boundary, updates thread state, and appends a hash-chained ledger record.
 
 The current runtime keeps three practical layers visible:
 
-- additive semantic compiler packets and compiler-stage diagnostics
+- canonical semantic compiler packets
 - SQLite-backed lexical, vector, graph, and primary-corpus activation surfaces
 - inspectable per-turn artifacts and ledger hashes
 
-## What A Turn Does
+## Runtime Shape
 
 For each user message, the runtime:
 
 1. Loads prior `thread_state` and `conversation_thread` artifacts if they exist.
 2. Preserves the raw user input unchanged.
-3. Runs isolated semantic compiler stages from the raw message.
-4. Runs contextual semantic compiler stages using the raw message, prior thread state, and the isolated compiler-stage output.
-5. Builds additive retrieval preparation from raw lexical terms plus compiler hints.
-6. Activates lexical, primary-corpus, vector, graph, and optional synthetic-node surfaces from the ingestion database when available and configured.
-7. Builds a semantic traversal manifest from activated candidate regions.
-8. Assembles a retrieval packet only from traversal-selected chunk IDs.
-9. Evaluates coverage as `approved` or `blocked`.
-10. Builds a synthesis context packet that keeps the raw user input authoritative.
-11. Calls the LLM backend only when the runtime outcome is `completed`.
-12. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
-
-Synthetic node promotion is still deferred.
+3. Sends the raw input plus compact prior thread state to the configured local semantic compiler.
+4. Canonicalizes the compiler response into `semantic_compiler_packet`.
+5. Activates lexical, vector, graph, and primary-corpus surfaces from the ingestion database when available.
+6. Builds `semantic_traversal_manifest` from activated candidate regions.
+7. Assembles `retrieval_packet` only from traversal-selected chunk IDs.
+8. Evaluates coverage as `approved` or `blocked`.
+9. Builds `synthesis_context_packet` with raw input, prior thread state, compiler packet, traversal manifest, coverage report, and approved retrieval only when runtime gating permits it.
+10. Calls the frontier LLM backend only when the runtime outcome is `completed`.
+11. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
 
 ## Config And Secrets
 
 Checked-in runtime authority lives in [`semantic_traversal.runtime.yaml`](semantic_traversal.runtime.yaml).
 
-Use that YAML for:
+Use that YAML for runtime paths, provider/model/base URLs, traversal knobs, storage names, and index table names.
 
-- runtime paths
-- surface requirements
-- provider/model/base URLs
-- coverage limits and thresholds
+Use `.env.local` only for secrets such as `OPENAI_API_KEY`. The YAML must not contain API keys or credentials.
 
-Use `.env.local` only for secrets such as `OPENAI_API_KEY`.
-
-The YAML must not contain API keys or credentials.
-
-Install the declared dependencies before running vector-enabled runtime paths:
+Install dependencies before running vector-enabled runtime paths:
 
 ```powershell
 pip install -r requirements.txt
 ```
-
-`requirements.txt` declares the runtime/test dependencies used by the checked-in config and embedding stack, including `PyYAML` and `sentence-transformers`.
-
-Normal turn execution does not expose semantic compiler mode selection on the CLI. Disabled and stub semantic compilers remain test-only or probe-only.
 
 ## Artifact Layout
 
@@ -61,19 +47,14 @@ Default runtime artifacts live under the repo-local configured data root:
 
 Per turn, the runtime writes:
 
-- `isolated_semantic_compiler_packet.json`
-- `isolated_semantic_compiler_raw.json`
-- `contextual_semantic_compiler_packet.json`
-- `contextual_semantic_compiler_raw.json`
 - `semantic_compiler_packet.json`
-- `turn_compilation_packet.json`
 - `semantic_traversal_manifest.json`
 - `retrieval_packet.json`
 - `coverage_report.json`
 - `synthesis_context_packet.json`
 - `state_delta.json`
 
-The ledger records hashes for all of those persisted turn artifacts, plus the next thread state.
+The ledger records hashes for those persisted turn artifacts, the conversation thread, and the next thread state.
 
 ## Runtime Decisions
 
@@ -84,13 +65,14 @@ Normal runtime execution is binary:
 
 Coverage uses `decision=approved` or `decision=blocked`. Blocked turns may still persist diagnostic observations, but those observations do not approve synthesis.
 
-Semantic compiler stages still use explicit per-pass statuses:
+Semantic compiler statuses are:
 
 - `parsed`
-- `stub`
-- `disabled`
 - `unavailable`
 - `invalid_json`
+- `fallback`
+
+Only `parsed` compiler output may pass normal runtime coverage. Fallback packets are diagnostic scaffolding for artifact inspection; they do not authorize synthesis.
 
 ## Quick Start
 
@@ -100,39 +82,26 @@ Run the test suite:
 python -m unittest discover -s tests -v
 ```
 
-Run a normal CLI turn:
-
-```powershell
-python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --llm-mode stub --repo-root .
-```
-
-Without a configured real semantic compiler, that command emits blocked diagnostic artifacts and exits non-zero.
-
-## Ingest The Notes
-
 Build or refresh the local ingestion database:
 
 ```powershell
 python -m semantic_traversal ingest --repo-root .
 ```
 
-That command reads the configured corpus roots, stores notes/chunks plus graph/vector surfaces in SQLite, and writes a JSON manifest for inspection.
+Run a normal CLI turn:
+
+```powershell
+python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --repo-root .
+```
+
+A real turn requires a configured semantic compiler and, for completed synthesis, a configured frontier LLM key. Missing compiler or LLM configuration blocks the runtime rather than substituting a local pretend answer.
 
 ## Probe Commands
 
 ```powershell
-python -m semantic_traversal.probes probe_lexical_retrieval_fixture_hit --repo-root . --data-root $env:TEMP\semantic-traversal-probes-hit
-python -m semantic_traversal.probes probe_lexical_retrieval_no_index --repo-root . --data-root $env:TEMP\semantic-traversal-probes-noindex
-python -m semantic_traversal.probes probe_lexical_retrieval_no_match --repo-root . --data-root $env:TEMP\semantic-traversal-probes-nomatch
-python -m semantic_traversal.probes probe_lexical_retrieval_no_query_terms --repo-root . --data-root $env:TEMP\semantic-traversal-probes-noquery
-python -m semantic_traversal.probes probe_ledger_hash_artifact_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-integrity
-python -m semantic_traversal.probes probe_turn_cli_artifact_paths --repo-root . --data-root $env:TEMP\semantic-traversal-probes-cli
-python -m semantic_traversal.probes probe_same_thread_continuation_turn --llm-mode stub --data-root $env:TEMP\semantic-traversal-thread-continuity
-python -m semantic_traversal.probes probe_semantic_compiler_stub_packets --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-stub
-python -m semantic_traversal.probes probe_blocked_runtime_with_disabled_compiler --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-disabled
-python -m semantic_traversal.probes probe_semantic_compiler_contextual_thread_state --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-context
-python -m semantic_traversal.probes probe_semantic_compiler_hash_integrity --repo-root . --data-root $env:TEMP\semantic-traversal-probes-extract-integrity
-python -m semantic_traversal.probes probe_blocked_runtime_with_stub_compiler --repo-root . --data-root $env:TEMP\semantic-traversal-probes-full-stub
+python -m semantic_traversal.probes new-thread --data-root $env:TEMP\semantic-traversal-probes-new
+python -m semantic_traversal.probes continue-thread --data-root $env:TEMP\semantic-traversal-probes-continuation
+python -m semantic_traversal.probes fixture-lexical-hit --data-root $env:TEMP\semantic-traversal-probes-fixture
 ```
 
 ## How To Inspect A Turn
@@ -140,34 +109,28 @@ python -m semantic_traversal.probes probe_blocked_runtime_with_stub_compiler --r
 Useful files after a turn:
 
 - `semantic_compiler_packet.json` for the canonical compiler packet
-- `isolated_semantic_compiler_packet.json` for the isolated compiler-stage request, status, metadata, and parsed payload
-- `contextual_semantic_compiler_packet.json` for the contextual compiler-stage request, including prior thread state
-- `turn_compilation_packet.json` for the non-authoritative compiler-stage turn envelope and additive retrieval preparation
-- `semantic_traversal_manifest.json` for activation surfaces, candidate regions, and selected chunk IDs
+- `semantic_traversal_manifest.json` for activation surfaces, graph traversal notes, candidate counts, and selected chunk IDs
 - `retrieval_packet.json` for traversal-selected chunks and retrieval provenance
 - `coverage_report.json` for binary approval-vs-blocked gating plus blocking reasons
-- `synthesis_context_packet.json` for the exact context that would reach the final LLM when the runtime is approved
+- `synthesis_context_packet.json` for the exact context that would reach the final LLM when the runtime is completed
 - `state_delta.json` for the persisted state transition
 - `thread_ledger.jsonl` for the hash chain across turns
 
 ## Human UAT Focus
 
-The current focus is tightening the existing activation/traversal slice and expanding the remaining deferred surfaces, especially synthetic node promotion and broader coverage heuristics.
-
 Good break attempts:
 
-- confirm the raw user message is unchanged across extraction and synthesis artifacts
+- confirm the raw user message is unchanged across compiler and synthesis artifacts
 - confirm the normal CLI blocks when no real semantic compiler is configured
-- run the stub and disabled diagnostic probes and confirm they stay blocked while still persisting compiler and traversal artifacts
-- inspect `candidate_term_sources` and verify raw lexical terms are not dropped when extraction is sparse
-- confirm `approved_retrieval_packet` appears only when coverage is approved
-- run two turns on the same thread and confirm the contextual compiler request includes prior thread state
+- confirm diagnostic fallback packets cannot produce `completed`
+- inspect traversal notes and verify raw lexical terms are not dropped when compiler extraction is sparse
+- confirm `approved_retrieval_packet` appears only when runtime gating permits synthesis
+- run two turns on the same thread and confirm the compiler request receives prior thread state
 - compare ledger hashes to the persisted artifact contents on disk
 
 ## Notes
 
-- Live final-answer mode still requires `OPENAI_API_KEY`.
-- Semantic compiler stages currently use the configured Ollama backend.
+- Live final-answer mode requires `OPENAI_API_KEY`.
+- Semantic compiler calls use the configured local Ollama backend.
 - Vector activation uses the configured Sentence Transformers backend by default.
 - Missing embeddings block the runtime rather than falling back to a softer completion mode.
-- Completed implementation bundles live under `agent_harness/implementation-projects/archive/`.

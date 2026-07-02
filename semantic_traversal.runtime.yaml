@@ -42,7 +42,6 @@ paths:
       path: "corpus"
     - label: "tests-fixtures"
       path: "tests/fixtures"
-  synthetic_nodes_root: "corpus/SYNTHETIC_NODES"
 
 storage:
   threads_root: "threads"

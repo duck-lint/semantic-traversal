@@ -65,7 +65,6 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
                 "path": str,
             },
         ],
-        "synthetic_nodes_root": str,
     },
     "indexes": {
         "vector_table": str,
@@ -215,10 +214,6 @@ class RuntimeConfig:
                 )
             )
         return tuple(roots)
-
-    @property
-    def synthetic_nodes_root(self) -> Path:
-        return self.resolve_path(self.raw["paths"]["synthetic_nodes_root"])
 
     @property
     def vector_table(self) -> str:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 from urllib import error, request
 
@@ -72,11 +71,11 @@ def collect_compiler_terms(text: str) -> list[str]:
     return terms
 
 
-def _canonical_stub_packet(raw_user_input: str) -> dict[str, Any]:
+def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
     terms = collect_compiler_terms(raw_user_input)
     return {
         "raw_user_input": raw_user_input,
-        "intent": "stub semantic compiler output",
+        "intent": "deterministic semantic compiler packet",
         "query": raw_user_input.strip(),
         "entities": [],
         "relations": [],
@@ -84,7 +83,7 @@ def _canonical_stub_packet(raw_user_input: str) -> dict[str, Any]:
         "retrieval_terms": terms,
         "vector_query": raw_user_input.strip(),
         "graph_seeds": [raw_user_input.strip()] if terms else [],
-        "limitations": ["stub semantic compiler backend used"],
+        "limitations": ["deterministic compiler packet used"],
     }
 
 
@@ -123,7 +122,7 @@ def _is_referential_input(text: str) -> bool:
 
 
 def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None, *, packet: dict[str, Any] | None = None) -> dict[str, Any]:
-    fallback = _canonical_stub_packet(raw_user_input)
+    fallback = _deterministic_compiler_packet(raw_user_input)
     if not isinstance(payload, dict):
         return fallback
     result = dict(fallback)
@@ -182,39 +181,6 @@ def _build_ollama_prompt(*, packet: dict[str, Any]) -> str:
         "Packet:\n"
         f"{json.dumps(packet, ensure_ascii=True, indent=2)}"
     )
-
-
-class DisabledSemanticCompilerBackend:
-    mode_name = "disabled"
-
-    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        raw_user_input = str(packet.get("raw_user_input") or "")
-        return SemanticCompilerResponse(
-            parsed_payload=None,
-            raw_response=None,
-            metadata={"backend_mode": self.mode_name, "reason": "semantic compiler disabled"},
-            diagnostics={},
-            status="disabled",
-        )
-
-
-class StubSemanticCompilerBackend:
-    mode_name = "stub"
-
-    def __init__(self, *, payload: dict[str, Any] | None = None) -> None:
-        self._payload = payload
-
-    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        raw_user_input = str(packet.get("raw_user_input") or "")
-        payload = self._payload or _canonical_stub_packet(raw_user_input)
-        canonical_payload = _canonicalize_response_payload(raw_user_input, payload, packet=packet)
-        return SemanticCompilerResponse(
-            parsed_payload=canonical_payload,
-            raw_response=None,
-            metadata={"backend_mode": self.mode_name, "stub_kind": "deterministic"},
-            diagnostics={},
-            status="stub",
-        )
 
 
 class OllamaSemanticCompilerBackend:
@@ -311,34 +277,15 @@ class UnavailableSemanticCompilerBackend:
 
 def resolve_semantic_compiler_backend(
     *,
-    repo_root: Path,
     config: RuntimeConfig,
-    compiler_mode: str | None = None,
     model_override: str | None = None,
     base_url_override: str | None = None,
-    allow_test_backends: bool = True,
 ) -> SemanticCompilerBackend:
-    configured_mode = compiler_mode.strip().lower() if isinstance(compiler_mode, str) and compiler_mode.strip() else None
     configured_provider = config.semantic_compiler_provider.strip().lower()
     configured_model = model_override or config.semantic_compiler_model
     configured_base_url = base_url_override or config.semantic_compiler_base_url
     timeout_seconds = config.semantic_compiler_request_timeout_seconds
 
-    if configured_mode in {"disabled", "stub"}:
-        if allow_test_backends:
-            return DisabledSemanticCompilerBackend() if configured_mode == "disabled" else StubSemanticCompilerBackend()
-        return UnavailableSemanticCompilerBackend(
-            reason=f"{configured_mode} semantic compiler mode is test-only and not valid for the normal runtime",
-            configured_mode=configured_mode,
-        )
-
-    if configured_mode and configured_mode != configured_provider:
-        return UnavailableSemanticCompilerBackend(reason=f"unsupported semantic compiler mode: {configured_mode}", configured_mode=configured_mode)
-
-    if configured_provider == "disabled":
-        return DisabledSemanticCompilerBackend() if allow_test_backends else UnavailableSemanticCompilerBackend(reason="semantic compiler disabled", configured_mode="disabled")
-    if configured_provider == "stub":
-        return StubSemanticCompilerBackend() if allow_test_backends else UnavailableSemanticCompilerBackend(reason="semantic compiler stub mode disabled", configured_mode="stub")
     if configured_provider == "ollama":
         if not isinstance(configured_base_url, str) or not configured_base_url.strip():
             return UnavailableSemanticCompilerBackend(reason="semantic compiler base_url is not configured", configured_mode="ollama")

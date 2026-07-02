@@ -12,7 +12,7 @@ from typing import Any
 from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json
-from .llm import LLMBackend, LLMResponse
+from .llm import LLMBackend
 from .semantic_compiler import (
     SemanticCompilerBackend,
     SemanticCompilerResponse,
@@ -493,7 +493,7 @@ def _compiler_response_to_packet(
     response: SemanticCompilerResponse,
 ) -> tuple[dict[str, Any], str]:
     payload = response.parsed_payload if isinstance(response.parsed_payload, dict) else None
-    if response.status in {"parsed", "stub"} and payload is not None:
+    if response.status == "parsed" and payload is not None:
         return (
             _canonicalize_compiler_packet(
                 raw_user_input=raw_user_input,
@@ -954,7 +954,7 @@ def _semantic_traversal(
     semantic_compiler_packet: dict[str, Any],
     prior_thread_state: dict[str, Any],
     embedding_backend: EmbeddingBackend,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     query_terms = list(semantic_compiler_packet.get("retrieval_terms") or [])
     vector_query = str(semantic_compiler_packet.get("vector_query") or "")
 
@@ -1010,22 +1010,21 @@ def _semantic_traversal(
         "assembled_from_traversal_manifest": True,
     }
 
-    return traversal_manifest, retrieval_packet, {
-        "lexical_candidates": lexical_candidates,
-        "vector_candidates": vector_candidates,
-        "graph_candidates": graph_candidates,
-    }
+    return traversal_manifest, retrieval_packet
 
 
 def _coverage_report(
     *,
     semantic_compiler_packet: Any,
+    semantic_compiler_status: str,
     traversal_manifest: dict[str, Any],
     retrieval_packet: dict[str, Any],
 ) -> dict[str, Any]:
     compiler_valid = _is_compiler_packet_valid(semantic_compiler_packet)
     selected_count = int(retrieval_packet.get("matched_chunk_count") or 0)
     blocking_reasons: list[str] = []
+    if semantic_compiler_status != "parsed":
+        blocking_reasons.append(f"semantic compiler status is {semantic_compiler_status}; parsed compiler output is required")
     if not compiler_valid:
         blocking_reasons.append("semantic compiler packet is missing or malformed")
     query_terms = list(traversal_manifest.get("query_terms") or [])
@@ -1296,7 +1295,7 @@ def run_thread_turn(
         recent_semantic_turns=recent_semantic_turns,
         active_focus=active_focus,
     )
-    compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(repo_root=resolved_repo_root, config=resolved_config)
+    compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(config=resolved_config)
     try:
         compiler_response = compiler_backend.compile_turn(compiler_request)
     except Exception as exc:  # noqa: BLE001
@@ -1324,7 +1323,7 @@ def run_thread_turn(
         connection = sqlite3.connect(database_path)
         try:
             connection.row_factory = sqlite3.Row
-            semantic_traversal_manifest, retrieval_packet, _ = _semantic_traversal(
+            semantic_traversal_manifest, retrieval_packet = _semantic_traversal(
                 connection=connection,
                 config=resolved_config,
                 semantic_compiler_packet=semantic_compiler_packet,
@@ -1351,12 +1350,16 @@ def run_thread_turn(
 
     coverage_report = _coverage_report(
         semantic_compiler_packet=semantic_compiler_packet,
+        semantic_compiler_status=semantic_compiler_status,
         traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
     )
 
-    runtime_outcome = "completed" if coverage_report["decision"] == "approved" else "blocked"
     blocking_reasons = list(coverage_report.get("blocking_reasons") or [])
+    llm_unavailable_reason = getattr(llm_backend, "unavailable_reason", None)
+    if coverage_report["decision"] == "approved" and llm_unavailable_reason:
+        blocking_reasons.append(f"LLM backend unavailable: {llm_unavailable_reason}")
+    runtime_outcome = "completed" if coverage_report["decision"] == "approved" and not blocking_reasons else "blocked"
     approved_retrieval_packet = retrieval_packet if runtime_outcome == "completed" else None
     visible_transcript_tail = _build_visible_transcript_tail(_ensure_message_list(conversation_thread.get("messages")))
     synthesis_context_packet = _build_synthesis_context_packet(

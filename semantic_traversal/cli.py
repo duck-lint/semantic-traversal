@@ -20,7 +20,7 @@ from .runtime import run_thread_turn
 
 def build_turn_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Local CLI runner for the semantic-traversal first build target.",
+        description="Local CLI runner for semantic-traversal turns.",
         allow_abbrev=False,
     )
     parser.add_argument("--message", required=True, help="The user input for the turn.")
@@ -31,9 +31,9 @@ def build_turn_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--llm-mode",
-        choices=("auto", "live", "stub"),
+        choices=("auto", "live"),
         default="auto",
-        help="Use OpenAI when available, require it, or force a local stub.",
+        help="Use OpenAI when available or require live OpenAI execution.",
     )
     parser.add_argument("--model", help="Override the OpenAI model for live mode.")
     parser.add_argument("--repo-root", default=".", help="Repo root used to resolve .env.local.")
@@ -64,10 +64,7 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     config = load_runtime_config(repo_root=repo_root, config_path=args.config)
     data_root = Path(args.data_root).resolve() if args.data_root else config.data_root
     llm_backend = resolve_llm_backend(repo_root=repo_root, config=config, llm_mode=args.llm_mode, model_override=args.model)
-    semantic_compiler_backend = resolve_semantic_compiler_backend(
-        repo_root=repo_root,
-        config=config,
-    )
+    semantic_compiler_backend = resolve_semantic_compiler_backend(config=config)
     result = run_thread_turn(
         repo_root=repo_root,
         data_root=data_root,

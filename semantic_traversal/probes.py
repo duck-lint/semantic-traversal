@@ -6,14 +6,56 @@ from pathlib import Path
 from typing import Any
 
 from .ingest import IngestSourceRoot, run_ingest
-from .llm import StubLLMBackend
+from .llm import LLMResponse
 from .runtime import run_thread_turn
-from .semantic_compiler import StubSemanticCompilerBackend
+from .semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from .storage import load_json, read_ledger
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "JOURNAL"
+
+
+class ProbeLLMBackend:
+    mode_name = "probe"
+
+    def __init__(self, prefix: str = "Probe assistant response") -> None:
+        self._prefix = prefix
+
+    def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
+        user_input = synthesis_context_packet["raw_user_input"]
+        turn_id = synthesis_context_packet["turn_id"]
+        return LLMResponse(
+            assistant_response=f"{self._prefix} for turn {turn_id}: {user_input}",
+            metadata={"mode": self.mode_name, "provider": "probe", "model": "probe"},
+        )
+
+
+class ProbeSemanticCompilerBackend:
+    mode_name = "probe"
+
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        raw_user_input = str(packet.get("raw_user_input") or "")
+        query = raw_user_input.strip()
+        terms = collect_compiler_terms(raw_user_input)
+        return SemanticCompilerResponse(
+            parsed_payload={
+                "raw_user_input": raw_user_input,
+                "intent": "probe semantic compiler output",
+                "query": query,
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "retrieval_terms": terms,
+                "vector_query": query,
+                "graph_seeds": [query] if terms else [],
+                "limitations": ["probe compiler backend used"],
+            },
+            raw_response=None,
+            metadata={"backend_mode": self.mode_name},
+            diagnostics={},
+            status="parsed",
+        )
 
 
 class FakeEmbeddingBackend:
@@ -33,12 +75,6 @@ def _default_probe_root() -> Path:
     return Path(tempfile.gettempdir()) / "semantic-traversal-probes"
 
 
-def _load_manifest(path: Path) -> dict[str, Any]:
-    payload = load_json(path)
-    assert isinstance(payload, dict), f"expected JSON object manifest at {path}"
-    return payload
-
-
 def _ensure_fixture_ingest(data_root: Path) -> None:
     run_ingest(
         repo_root=REPO_ROOT,
@@ -49,13 +85,13 @@ def _ensure_fixture_ingest(data_root: Path) -> None:
 
 
 def probe_new_thread_minimal_turn(data_root: Path, llm_backend: Any | None = None) -> dict[str, Any]:
-    backend = llm_backend or StubLLMBackend(prefix="Probe stub response")
+    backend = llm_backend or ProbeLLMBackend(prefix="Probe assistant response")
     result = run_thread_turn(
         repo_root=REPO_ROOT,
         data_root=data_root,
         user_input="Start a new thread and answer minimally.",
         llm_backend=backend,
-        semantic_compiler_backend=StubSemanticCompilerBackend(),
+        semantic_compiler_backend=ProbeSemanticCompilerBackend(),
     )
     thread_document = load_json(result.conversation_thread_path)
     thread_state = load_json(result.thread_state_path)
@@ -77,13 +113,13 @@ def probe_new_thread_minimal_turn(data_root: Path, llm_backend: Any | None = Non
 
 
 def probe_same_thread_continuation_turn(data_root: Path, llm_backend: Any | None = None) -> dict[str, Any]:
-    backend = llm_backend or StubLLMBackend(prefix="Probe stub response")
+    backend = llm_backend or ProbeLLMBackend(prefix="Probe assistant response")
     first_turn = run_thread_turn(
         repo_root=REPO_ROOT,
         data_root=data_root,
         user_input="First turn for continuation probe.",
         llm_backend=backend,
-        semantic_compiler_backend=StubSemanticCompilerBackend(),
+        semantic_compiler_backend=ProbeSemanticCompilerBackend(),
     )
     before_records = read_ledger(first_turn.thread_ledger_path)
     second_turn = run_thread_turn(
@@ -92,7 +128,7 @@ def probe_same_thread_continuation_turn(data_root: Path, llm_backend: Any | None
         user_input="Second turn should continue the same thread.",
         llm_backend=backend,
         thread_id=first_turn.thread_id,
-        semantic_compiler_backend=StubSemanticCompilerBackend(),
+        semantic_compiler_backend=ProbeSemanticCompilerBackend(),
     )
     after_records = read_ledger(second_turn.thread_ledger_path)
     assert len(after_records) == len(before_records) + 1, "expected exactly one new ledger record"
@@ -118,8 +154,8 @@ def probe_fixture_lexical_retrieval_hit(data_root: Path) -> dict[str, Any]:
         repo_root=REPO_ROOT,
         data_root=data_root,
         user_input="Please retrieve the candy snack food before bed note.",
-        llm_backend=StubLLMBackend(prefix="Probe stub response"),
-        semantic_compiler_backend=StubSemanticCompilerBackend(),
+        llm_backend=ProbeLLMBackend(prefix="Probe assistant response"),
+        semantic_compiler_backend=ProbeSemanticCompilerBackend(),
         embedding_backend=FakeEmbeddingBackend(),
     )
     assert result.coverage_report["decision"] == "approved"
@@ -137,7 +173,6 @@ def probe_fixture_lexical_retrieval_hit(data_root: Path) -> dict[str, Any]:
 def build_probe_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run tiny semantic-traversal probes.")
     parser.add_argument("--data-root", default=str(_default_probe_root()))
-    parser.add_argument("--repo-root", default=".")
     parser.add_argument("probe", choices=("new-thread", "continue-thread", "fixture-lexical-hit"))
     return parser
 

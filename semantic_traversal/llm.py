@@ -30,35 +30,27 @@ def _build_openai_client(api_key: str) -> Any:
         openai_module = import_module("openai")
     except ModuleNotFoundError as exc:
         raise LiveLLMNotConfigured(
-            "OpenAI SDK is not installed. Run `python -m pip install openai` to use "
-            "`--llm-mode live`, or rerun with `--llm-mode stub`."
+            "OpenAI SDK is not installed. Run `python -m pip install openai` and configure "
+            "OPENAI_API_KEY before using live execution."
         ) from exc
 
     openai_client = getattr(openai_module, "OpenAI", None)
     if openai_client is None:
         raise LiveLLMNotConfigured(
             "OpenAI SDK import succeeded but `openai.OpenAI` is unavailable. "
-            "Reinstall the `openai` package or rerun with `--llm-mode stub`."
+            "Reinstall the `openai` package before using live execution."
         )
     return openai_client(api_key=api_key)
 
 
-class StubLLMBackend:
-    def __init__(self, prefix: str = "Stub assistant response") -> None:
-        self._prefix = prefix
+class UnavailableLLMBackend:
+    mode_name = "unavailable"
+
+    def __init__(self, *, reason: str) -> None:
+        self.unavailable_reason = reason
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
-        user_input = synthesis_context_packet["raw_user_input"]
-        turn_id = synthesis_context_packet["turn_id"]
-        text = f"{self._prefix} for turn {turn_id}: {user_input}"
-        return LLMResponse(
-            assistant_response=text,
-            metadata={
-                "mode": "stub",
-                "provider": "local-stub",
-                "model": "stub-echo",
-            },
-        )
+        raise LiveLLMNotConfigured(self.unavailable_reason)
 
 
 class OpenAIResponsesBackend:
@@ -129,11 +121,7 @@ def resolve_llm_backend(
     config: RuntimeConfig,
     llm_mode: str,
     model_override: str | None = None,
-    stub_prefix: str = "Stub assistant response",
 ) -> LLMBackend:
-    if llm_mode == "stub":
-        return StubLLMBackend(prefix=stub_prefix)
-
     api_key, model, max_output_tokens = resolve_openai_settings(
         repo_root=repo_root,
         config=config,
@@ -141,7 +129,7 @@ def resolve_llm_backend(
     )
     if not api_key:
         if llm_mode == "auto":
-            return StubLLMBackend(prefix=stub_prefix)
+            return UnavailableLLMBackend(reason="OPENAI_API_KEY is not available for live execution.")
         raise LiveLLMNotConfigured("OPENAI_API_KEY is not available for live execution.")
 
     if llm_mode == "auto":

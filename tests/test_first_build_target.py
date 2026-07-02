@@ -6,8 +6,7 @@ from typing import Any
 from pathlib import Path
 from unittest.mock import patch
 
-from semantic_traversal.llm import StubLLMBackend
-from semantic_traversal.probes import probe_new_thread_minimal_turn, probe_same_thread_continuation_turn
+from semantic_traversal.probes import ProbeLLMBackend, probe_new_thread_minimal_turn, probe_same_thread_continuation_turn
 from semantic_traversal.runtime import run_thread_turn
 from semantic_traversal.storage import load_json, read_ledger
 
@@ -50,14 +49,14 @@ class FirstBuildTargetTests(unittest.TestCase):
 
     def test_probe_new_thread_minimal_turn(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            result = probe_new_thread_minimal_turn(Path(temp_dir), llm_backend=StubLLMBackend())
+            result = probe_new_thread_minimal_turn(Path(temp_dir), llm_backend=ProbeLLMBackend())
             self.assertEqual(result["status"], "pass")
             self.assertEqual(result["ledger_count"], 1)
             self.assertEqual(result["runtime_outcome"], "blocked")
 
     def test_probe_same_thread_continuation_turn(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            result = probe_same_thread_continuation_turn(Path(temp_dir), llm_backend=StubLLMBackend())
+            result = probe_same_thread_continuation_turn(Path(temp_dir), llm_backend=ProbeLLMBackend())
             self.assertEqual(result["status"], "pass")
             self.assertEqual(result["ledger_count_before"], 1)
             self.assertEqual(result["ledger_count_after"], 2)
@@ -70,7 +69,7 @@ class FirstBuildTargetTests(unittest.TestCase):
                 repo_root=Path(".").resolve(),
                 data_root=Path(temp_dir),
                 user_input="Hello from the shared runner.",
-                llm_backend=StubLLMBackend(prefix="Shared runner"),
+                llm_backend=ProbeLLMBackend(prefix="Shared runner"),
             )
             thread_document = load_json(turn.conversation_thread_path)
             ledger = read_ledger(turn.thread_ledger_path)
