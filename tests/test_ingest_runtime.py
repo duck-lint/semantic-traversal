@@ -10,7 +10,12 @@ from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.hashing import sha256_json
 from semantic_traversal.ingest import IngestSourceRoot, run_ingest
 from semantic_traversal.llm import LLMResponse
-from semantic_traversal.runtime import run_thread_turn
+from semantic_traversal.runtime import (
+    _apply_retrieval_candidate_hygiene,
+    _merge_candidates,
+    _select_retrieval_chunks,
+    run_thread_turn,
+)
 from semantic_traversal.semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from semantic_traversal.storage import load_json, read_ledger
 
@@ -560,6 +565,96 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(synthesis_packet["prior_thread_state"]["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
         self.assertTrue(synthesis_packet["prior_thread_state"]["recent_semantic_turns"])
         self.assertNotIn("raw_response", synthesis_packet)
+        self.assertIn("coverage-approved retrieval packet", synthesis_packet["output_requirements"][0])
+        self.assertTrue(any("Do not describe retrieved notes" in requirement for requirement in synthesis_packet["output_requirements"]))
+
+    def test_retrieval_selection_deduplicates_matching_chunk_hashes(self) -> None:
+        candidates = [
+            {
+                "chunk_id": "chunk-a",
+                "chunk_hash": "same-content",
+                "selection_reason": "vector similarity 0.9",
+                "sources": ["vector"],
+            },
+            {
+                "chunk_id": "chunk-b",
+                "chunk_hash": "same-content",
+                "selection_reason": "vector similarity 0.8",
+                "sources": ["vector"],
+            },
+            {
+                "chunk_id": "chunk-c",
+                "chunk_hash": "unique-content",
+                "selection_reason": "vector similarity 0.7",
+                "sources": ["vector"],
+            },
+        ]
+        selected = _select_retrieval_chunks(merged_candidates=candidates, max_chunks=3)
+        self.assertEqual([chunk["chunk_id"] for chunk in selected], ["chunk-a", "chunk-c"])
+
+    def test_template_boilerplate_is_demoted_for_non_template_queries(self) -> None:
+        semantic_compiler_packet = {
+            "raw_user_input": "I want journal anecdotes and isomorphic bridges for the 4-Fold Root video.",
+            "intent": "find journal anecdotes",
+            "query": "journal anecdotes and bridges",
+            "retrieval_terms": ["journal", "anecdotes", "bridges"],
+            "graph_seeds": ["journal entries"],
+        }
+        journal_candidate = {
+            "chunk_id": "journal",
+            "chunk_hash": "journal-hash",
+            "relative_path": "JOURNAL/2025/12/17_Wednesday.md",
+            "note_title": "December 17, 2025",
+            "section_label": "Y-Day Review",
+            "paragraph_text": "4-Fold Root as a tool",
+            "selection_reason": "vector similarity 0.4",
+            "selection_source": "vector",
+            "score": 1.4,
+        }
+        template_candidate = {
+            "chunk_id": "template",
+            "chunk_hash": "template-hash",
+            "relative_path": "VAULT DESIGN/(.)MD TEMPLATES/(w.YAML) Inferential Bridge Template.md",
+            "note_title": "Inferential Bridge Template",
+            "section_label": "Preserves / Breaks",
+            "paragraph_text": "- Preserves (`bridge_preservation`):",
+            "selection_reason": "vector similarity 0.9",
+            "selection_source": "vector",
+            "score": 1.9,
+        }
+        adjusted = _apply_retrieval_candidate_hygiene(
+            candidates=[template_candidate, journal_candidate],
+            semantic_compiler_packet=semantic_compiler_packet,
+        )
+        ranked = _merge_candidates([], adjusted, [])
+        selected = _select_retrieval_chunks(merged_candidates=ranked, max_chunks=2)
+        self.assertEqual([chunk["chunk_id"] for chunk in selected], ["journal", "template"])
+        self.assertIn("template boilerplate demoted", selected[1]["selection_reason"])
+
+    def test_template_boilerplate_is_not_demoted_for_template_queries(self) -> None:
+        semantic_compiler_packet = {
+            "raw_user_input": "Review the inferential bridge template YAML schema.",
+            "intent": "review template",
+            "query": "inferential bridge template YAML schema",
+            "retrieval_terms": ["template", "yaml", "schema"],
+            "graph_seeds": ["Inferential Bridge Template"],
+        }
+        template_candidate = {
+            "chunk_id": "template",
+            "chunk_hash": "template-hash",
+            "relative_path": "VAULT DESIGN/(.)MD TEMPLATES/(w.YAML) Inferential Bridge Template.md",
+            "note_title": "Inferential Bridge Template",
+            "section_label": "Preserves / Breaks",
+            "paragraph_text": "- Preserves (`bridge_preservation`):",
+            "selection_reason": "vector similarity 0.9",
+            "selection_source": "vector",
+            "score": 1.9,
+        }
+        adjusted = _apply_retrieval_candidate_hygiene(
+            candidates=[template_candidate],
+            semantic_compiler_packet=semantic_compiler_packet,
+        )
+        self.assertNotIn("template boilerplate demoted", adjusted[0]["selection_reason"])
 
     def test_compiler_packet_preserves_raw_user_input(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -65,7 +65,8 @@ class OpenAIResponsesBackend:
             instructions=(
                 "You are a helpful assistant inside the semantic-traversal runtime. "
                 "Respond directly to the user using the provided synthesis context packet only. "
-                "Treat semantic_compiler_packet and approved_retrieval_packet as authoritative. "
+                "Use semantic_compiler_packet and the approved_retrieval_packet field as runtime-bounded synthesis inputs. "
+                "Do not describe retrieved notes as independently approved, verified, or authoritative. "
                 "Do not invent retrieval results or graph operations. "
                 "Do not decide evidence validity or repair traversal, retrieval, or coverage."
             ),

@@ -896,6 +896,80 @@ def _graph_candidates(
     }
 
 
+def _is_template_or_schema_query(semantic_compiler_packet: dict[str, Any]) -> bool:
+    values: list[str] = []
+    for key in ("raw_user_input", "intent", "query", "vector_query"):
+        value = semantic_compiler_packet.get(key)
+        if isinstance(value, str):
+            values.append(value)
+    for key in ("entities", "relations", "resolved_referents", "retrieval_terms", "graph_seeds"):
+        values.extend(_coerce_string_list(semantic_compiler_packet.get(key)))
+    haystack = _normalize_text(" ".join(values))
+    template_terms = {
+        "applicability",
+        "boilerplate",
+        "frontmatter",
+        "schema",
+        "template",
+        "templates",
+        "vault design",
+        "yaml",
+    }
+    return any(term in haystack for term in template_terms)
+
+
+def _is_template_boilerplate_candidate(candidate: dict[str, Any]) -> bool:
+    relative_path = str(candidate.get("relative_path") or "").lower()
+    note_title = str(candidate.get("note_title") or "").lower()
+    paragraph_text = str(candidate.get("paragraph_text") or "").strip().lower()
+    section_label = str(candidate.get("section_label") or "").lower()
+    template_surface = "template" in relative_path or "template" in note_title or "vault design" in relative_path
+    if not template_surface:
+        return False
+    placeholder_surfaces = (
+        "[[...]]",
+        "bridge_",
+        "[]",
+        "scope:",
+        "speculation_quarantine",
+        "revision_triggers",
+        "stop_rule",
+        "applicability",
+        "preserves",
+        "breaks",
+        "conditions",
+        "method",
+    )
+    if any(surface in paragraph_text for surface in placeholder_surfaces):
+        return True
+    return "template" in section_label
+
+
+def _apply_retrieval_candidate_hygiene(
+    *,
+    candidates: list[dict[str, Any]],
+    semantic_compiler_packet: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if _is_template_or_schema_query(semantic_compiler_packet):
+        return candidates
+    adjusted: list[dict[str, Any]] = []
+    for candidate in candidates:
+        next_candidate = dict(candidate)
+        if _is_template_boilerplate_candidate(next_candidate):
+            next_candidate["score"] = float(next_candidate.get("score") or 0.0) - 10.0
+            next_candidate["_retrieval_demoted"] = True
+            next_candidate["selection_reason"] = "; ".join(
+                part
+                for part in [
+                    str(next_candidate.get("selection_reason") or "").strip(),
+                    "template boilerplate demoted for non-template query",
+                ]
+                if part
+            )
+        adjusted.append(next_candidate)
+    return adjusted
+
+
 def _merge_candidates(
     lexical_candidates: list[dict[str, Any]],
     vector_candidates: list[dict[str, Any]],
@@ -923,6 +997,7 @@ def _merge_candidates(
             merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
         else:
             existing["score"] = max(existing_score, candidate_score)
+            existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
             existing["selection_reason"] = ", ".join(
                 part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
             )
@@ -933,6 +1008,7 @@ def _merge_candidates(
     ranked = sorted(
         merged.values(),
         key=lambda candidate: (
+            bool(candidate.get("_retrieval_demoted")),
             -source_priority.get(str((candidate.get("selection_source") or "lexical")), 0),
             -float(candidate.get("score") or 0.0),
             str(candidate["chunk_id"]),
@@ -951,9 +1027,20 @@ def _select_retrieval_chunks(
     merged_candidates: list[dict[str, Any]],
     max_chunks: int,
 ) -> list[dict[str, Any]]:
-    selected = merged_candidates[: max(0, max_chunks)]
-    for candidate in selected:
-        candidate.pop("sources", None)
+    selected: list[dict[str, Any]] = []
+    seen_content_hashes: set[str] = set()
+    for candidate in merged_candidates:
+        if len(selected) >= max(0, max_chunks):
+            break
+        chunk_hash = str(candidate.get("chunk_hash") or "").strip()
+        if chunk_hash and chunk_hash in seen_content_hashes:
+            continue
+        if chunk_hash:
+            seen_content_hashes.add(chunk_hash)
+        selected_candidate = dict(candidate)
+        selected_candidate.pop("sources", None)
+        selected_candidate.pop("_retrieval_demoted", None)
+        selected.append(selected_candidate)
     return selected
 
 
@@ -983,6 +1070,18 @@ def _semantic_traversal(
         prior_thread_state=prior_thread_state,
     )
 
+    lexical_candidates = _apply_retrieval_candidate_hygiene(
+        candidates=lexical_candidates,
+        semantic_compiler_packet=semantic_compiler_packet,
+    )
+    vector_candidates = _apply_retrieval_candidate_hygiene(
+        candidates=vector_candidates,
+        semantic_compiler_packet=semantic_compiler_packet,
+    )
+    graph_candidates = _apply_retrieval_candidate_hygiene(
+        candidates=graph_candidates,
+        semantic_compiler_packet=semantic_compiler_packet,
+    )
     merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates)
     selected_candidates = _select_retrieval_chunks(merged_candidates=merged_candidates, max_chunks=config.max_retrieval_chunks)
 
@@ -1086,7 +1185,8 @@ def _build_synthesis_context_packet(
         "runtime_outcome": runtime_outcome,
         "blocking_reasons": blocking_reasons,
         "output_requirements": [
-            "Answer directly and use only the approved retrieval packet if coverage is approved.",
+            "Answer directly. Use only the coverage-approved retrieval packet when coverage is approved.",
+            "Do not describe retrieved notes as independently approved, verified, or authoritative.",
         ],
     }
 

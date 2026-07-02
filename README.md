@@ -20,7 +20,7 @@ For each user message, the runtime:
 6. Builds `semantic_traversal_manifest` from activated candidate regions.
 7. Assembles `retrieval_packet` only from traversal-selected chunk IDs.
 8. Evaluates coverage as `approved` or `blocked`.
-9. Builds `synthesis_context_packet` with raw input, prior thread state, compiler packet, traversal manifest, coverage report, and approved retrieval only when runtime gating permits it.
+9. Builds `synthesis_context_packet` with raw input, prior thread state, compiler packet, traversal manifest, coverage report, and coverage-approved retrieval only when runtime gating permits it.
 10. Calls the frontier LLM backend only when the runtime outcome is `completed`.
 11. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
 
