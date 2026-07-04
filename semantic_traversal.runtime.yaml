@@ -43,6 +43,14 @@ paths:
     - label: "tests-fixtures"
       path: "tests/fixtures"
 
+chunking:
+  required_uuid_field: "uuid"
+  max_chunk_chars: 2000
+  semantic_frontmatter_fields:
+    - tags
+    - aliases
+    - journal_entry_date
+
 storage:
   threads_root: "threads"
   turns_root: "turns"

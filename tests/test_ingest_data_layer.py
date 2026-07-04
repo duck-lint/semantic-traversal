@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,11 @@ class FakeEmbeddingBackend:
 def _write_note(root: Path, relative_path: str, content: str) -> Path:
     path = root / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content.strip() + "\n", encoding="utf-8")
+    if content.lstrip().startswith("---"):
+        path.write_text(content.strip() + "\n", encoding="utf-8")
+    else:
+        source_uuid = uuid.uuid5(uuid.NAMESPACE_URL, relative_path)
+        path.write_text(f"---\nuuid: {source_uuid}\n---\n\n{content.strip()}\n", encoding="utf-8")
     return path
 
 

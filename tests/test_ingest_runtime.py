@@ -10,7 +10,7 @@ from typing import Any
 from semantic_traversal.config import load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.hashing import sha256_json
-from semantic_traversal.ingest import IngestSourceRoot, run_ingest
+from semantic_traversal.ingest import IngestFrontmatterError, IngestSourceRoot, run_ingest
 from semantic_traversal.llm import LLMResponse
 from semantic_traversal.runtime import (
     _apply_retrieval_candidate_hygiene,
@@ -173,7 +173,9 @@ def _prepare_graph_fixture_data_root() -> Path:
     _prepare_graph_fixture_data_root._temp_dirs.append(temp_dir)  # type: ignore[attr-defined]
     source_root = data_root / "graph-fixture"
     source_root.mkdir(parents=True, exist_ok=True)
-    (source_root / "A.md").write_text(
+    _write_markdown_note(
+        source_root,
+        "A.md",
         """
         # A
 
@@ -182,29 +184,30 @@ def _prepare_graph_fixture_data_root() -> Path:
         Links to [[C|see alias]].
 
         Links to [[B#Sleep Section|sleep alias]].
-        """.strip()
-        + "\n",
-        encoding="utf-8",
+        """,
+        uuid_value="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     )
-    (source_root / "B.md").write_text(
+    _write_markdown_note(
+        source_root,
+        "B.md",
         """
         # B
 
         ## Sleep Section
 
         B content paragraph.
-        """.strip()
-        + "\n",
-        encoding="utf-8",
+        """,
+        uuid_value="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     )
-    (source_root / "C.md").write_text(
+    _write_markdown_note(
+        source_root,
+        "C.md",
         """
         # C
 
         C content paragraph.
-        """.strip()
-        + "\n",
-        encoding="utf-8",
+        """,
+        uuid_value="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     )
     config = load_runtime_config(repo_root=REPO_ROOT)
     run_ingest(
@@ -224,6 +227,19 @@ def _turn_artifact(path: Path) -> dict[str, Any]:
     return load_json(path) or {}
 
 
+def _write_markdown_note(root: Path, relative_path: str, body: str, *, uuid_value: str | None = None) -> Path:
+    path = root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---"]
+    if uuid_value is not None:
+        lines.append(f"uuid: {uuid_value}")
+    lines.append("---")
+    lines.append("")
+    lines.append(body.strip())
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> dict[str, Any]:
     return {
         "raw_user_input": raw_user_input,
@@ -240,12 +256,39 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
 
 
 class ThesisRuntimeTests(unittest.TestCase):
+    def test_ingest_rejects_missing_or_invalid_uuid_and_writes_failure_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            _write_markdown_note(source_root, "Missing.md", "Missing uuid body.")
+            _write_markdown_note(source_root, "Invalid.md", "Invalid uuid body.", uuid_value="not-a-uuid")
+
+            with self.assertRaises(IngestFrontmatterError) as exc_info:
+                run_ingest(
+                    repo_root=REPO_ROOT,
+                    data_root=data_root,
+                    source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                    embedding_backend=FakeEmbeddingBackend(),
+                )
+
+            self.assertIn("failure manifest", str(exc_info.exception))
+            manifest_path = exc_info.exception.manifest_path
+            self.assertTrue(manifest_path.exists())
+            manifest = _turn_artifact(manifest_path)
+            self.assertEqual(manifest["status"], "failed")
+            self.assertEqual(manifest["summary"]["validation_issue_count"], 2)
+            offending_paths = {issue["relative_path"] for issue in manifest["validation_issues"]}
+            self.assertEqual(offending_paths, {"Missing.md", "Invalid.md"})
+            self.assertFalse((data_root / "ingestion" / "latent_space.sqlite3").exists())
+
     def test_ingest_omits_standalone_classical_reference_lines(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir)
             source_root = data_root / "source"
             source_root.mkdir(parents=True)
-            (source_root / "Theaetetus.md").write_text(
+            _write_markdown_note(
+                source_root,
+                "Theaetetus.md",
                 """
                 # Theaetetus
 
@@ -262,9 +305,8 @@ class ThesisRuntimeTests(unittest.TestCase):
                 12
 
                 This inline 144e reference should remain because it is part of prose.
-                """.strip()
-                + "\n",
-                encoding="utf-8",
+                """,
+                uuid_value="11111111-1111-1111-1111-111111111111",
             )
 
             result = run_ingest(
@@ -285,6 +327,169 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertIn("This inline 144e reference should remain because it is part of prose.", rows)
             for omitted_text in ("142a b", "143a b с", "146а b", "e", "12"):
                 self.assertNotIn(omitted_text, rows)
+
+    def test_code_fence_table_and_list_are_atomic_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            _write_markdown_note(
+                source_root,
+                "Atomic.md",
+                """
+                # Atomic
+
+                ```python
+                line one
+
+                line two
+                ```
+
+                | a | b |
+                |---|---|
+                | 1 | 2 |
+                | 3 | 4 |
+
+                - first
+                - second
+                  continuation
+                - third
+                """,
+                uuid_value="22222222-2222-2222-2222-222222222222",
+            )
+
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+            )
+
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    "SELECT semantic_unit_kind, paragraph_text, chunking_warnings_json FROM chunks ORDER BY chunk_id"
+                ).fetchall()
+
+            self.assertEqual(result.chunk_count, 3)
+            self.assertEqual([row["semantic_unit_kind"] for row in rows], ["code_block", "table", "list"])
+            self.assertIn("line two", rows[0]["paragraph_text"])
+            self.assertIn("| 3 | 4 |", rows[1]["paragraph_text"])
+            self.assertIn("continuation", rows[2]["paragraph_text"])
+
+    def test_oversized_prose_paragraph_splits_on_sentence_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            prefix = "A" * 1980
+            paragraph = f"{prefix}. Second sentence stays after the split boundary and should be separate."
+            _write_markdown_note(
+                source_root,
+                "Split.md",
+                paragraph,
+                uuid_value="33333333-3333-3333-3333-333333333333",
+            )
+
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+            )
+
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    "SELECT paragraph_ordinal, split_ordinal, paragraph_text, chunking_warnings_json FROM chunks ORDER BY chunk_id"
+                ).fetchall()
+
+            self.assertEqual(len(rows), 2)
+            self.assertEqual([row["paragraph_ordinal"] for row in rows], [1, 1])
+            self.assertEqual([row["split_ordinal"] for row in rows], [1, 2])
+            self.assertTrue(rows[0]["paragraph_text"].endswith("."))
+            self.assertIn("Second sentence", rows[1]["paragraph_text"])
+
+    def test_embedding_text_changes_when_section_path_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            note_path = _write_markdown_note(
+                source_root,
+                "Context.md",
+                """
+                # Context
+
+                ## First
+
+                Same text.
+
+                ## Second
+
+                Same text.
+                """,
+                uuid_value="44444444-4444-4444-4444-444444444444",
+            )
+
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+            )
+
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    """
+                    SELECT section_label, paragraph_text, chunk_hash, embedding_text
+                    FROM chunks
+                    WHERE note_path = ?
+                    ORDER BY section_label
+                    """,
+                    (str(note_path),),
+                ).fetchall()
+
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["paragraph_text"], rows[1]["paragraph_text"])
+            self.assertNotEqual(rows[0]["chunk_hash"], rows[1]["chunk_hash"])
+            self.assertNotEqual(rows[0]["embedding_text"], rows[1]["embedding_text"])
+            self.assertIn("First", rows[0]["embedding_text"])
+            self.assertIn("Second", rows[1]["embedding_text"])
+
+    def test_retrieval_display_text_stays_raw_semantic_unit_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            _write_markdown_note(
+                source_root,
+                "Display.md",
+                """
+                # Display
+
+                ## Heading
+
+                Plain retrieval text.
+                """,
+                uuid_value="55555555-5555-5555-5555-555555555555",
+            )
+
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+            )
+
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                row = connection.execute("SELECT paragraph_text, embedding_text FROM chunks LIMIT 1").fetchone()
+
+            self.assertEqual(row["paragraph_text"], "Plain retrieval text.")
+            self.assertIn("Heading", row["embedding_text"])
+            self.assertIn("Plain retrieval text.", row["embedding_text"])
 
     def test_first_turn_creates_thread_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

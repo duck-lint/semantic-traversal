@@ -9,6 +9,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
@@ -18,6 +20,8 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 INLINE_LABEL_RE = re.compile(r"^(?P<label>[A-Za-z0-9][A-Za-z0-9/&()'., \-]{0,80}):(?:\s*(?P<remainder>.*))?$")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
 THEMATIC_BREAK_RE = re.compile(r"^\s*(?:---|\*\*\*|___)\s*$")
+CODE_FENCE_RE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
 APPARATUS_REFERENCE_LINE_RE = re.compile(
     r"^(?:"
     r"\d{1,4}"
@@ -57,31 +61,40 @@ class SectionContext:
 class ChunkRecord:
     chunk_id: str
     note_id: str
+    source_uuid: str
     source_root_label: str
     source_root_path: str
     relative_path: str
     note_path: str
     note_title: str
+    frontmatter_semantics: dict[str, Any]
     section_id: str
     section_label: str
     section_kind: str
     section_path: tuple[str, ...]
     section_occurrence: int
     heading_level: int | None
+    semantic_unit_kind: str
     paragraph_ordinal: int
+    split_ordinal: int
     paragraph_text: str
+    embedding_text: str
+    embedding_text_hash: str
     chunk_hash: str
+    chunking_warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class NoteRecord:
     note_id: str
+    source_uuid: str
     source_root_label: str
     source_root_path: str
     relative_path: str
     note_path: str
     note_title: str
     frontmatter: dict[str, Any]
+    frontmatter_semantics: dict[str, Any]
     note_hash: str
     tag_values: tuple[str, ...]
     wikilink_targets: tuple[dict[str, Any], ...]
@@ -106,11 +119,18 @@ class IngestRunResult:
     deleted_notes: int
 
 
+class IngestFrontmatterError(RuntimeError):
+    def __init__(self, message: str, *, manifest_path: Path) -> None:
+        super().__init__(message)
+        self.manifest_path = manifest_path
+
+
 @dataclass(frozen=True)
 class _Block:
     kind: str
     text: str
     heading_level: int | None = None
+    warnings: tuple[str, ...] = ()
 
 
 def _utc_now() -> str:
@@ -177,7 +197,27 @@ def run_ingest(
     generated_at = _utc_now()
     run_id = f"ingest-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     ingest_paths = create_ingest_paths(resolved_data_root, config=resolved_config)
-    note_records = tuple(_discover_and_parse_notes(resolved_source_roots))
+    note_records, validation_issues = _discover_and_parse_notes(resolved_source_roots, config=resolved_config)
+    if validation_issues:
+        failure_manifest = _build_failure_manifest(
+            run_id=run_id,
+            generated_at=generated_at,
+            repo_root=resolved_repo_root,
+            data_root=resolved_data_root,
+            database_path=ingest_paths.database_path,
+            source_roots=resolved_source_roots,
+            validation_issues=validation_issues,
+        )
+        manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
+        manifest_path.write_text(json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        ingest_paths.latest_manifest_path.write_text(
+            json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        raise IngestFrontmatterError(
+            f"Ingest frontmatter validation failed; see failure manifest at {manifest_path}",
+            manifest_path=manifest_path,
+        )
     resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 
     connection = sqlite3.connect(ingest_paths.database_path)
@@ -231,45 +271,91 @@ def run_ingest(
     )
 
 
-def _discover_and_parse_notes(source_roots: tuple[IngestSourceRoot, ...]) -> list[NoteRecord]:
+def _discover_and_parse_notes(
+    source_roots: tuple[IngestSourceRoot, ...],
+    *,
+    config: RuntimeConfig,
+) -> tuple[list[NoteRecord], list[dict[str, Any]]]:
     note_records: list[NoteRecord] = []
+    validation_issues: list[dict[str, Any]] = []
     for source_root in source_roots:
         for note_path in sorted(source_root.path.rglob("*.md")):
             relative_path = note_path.relative_to(source_root.path).as_posix()
-            note_records.append(_parse_markdown_note(source_root=source_root, note_path=note_path, relative_path=relative_path))
-    return note_records
+            note_record, issues = _parse_markdown_note(
+                source_root=source_root,
+                note_path=note_path,
+                relative_path=relative_path,
+                config=config,
+            )
+            validation_issues.extend(issues)
+            if note_record is not None:
+                note_records.append(note_record)
+    return note_records, validation_issues
 
 
-def _parse_markdown_note(*, source_root: IngestSourceRoot, note_path: Path, relative_path: str) -> NoteRecord:
+def _parse_markdown_note(
+    *,
+    source_root: IngestSourceRoot,
+    note_path: Path,
+    relative_path: str,
+    config: RuntimeConfig,
+) -> tuple[NoteRecord | None, list[dict[str, Any]]]:
     raw_text = note_path.read_text(encoding="utf-8")
     frontmatter_text, body_text = _split_frontmatter(raw_text)
-    frontmatter = _parse_frontmatter(frontmatter_text)
+    frontmatter, frontmatter_issue = _parse_frontmatter(frontmatter_text)
+    if frontmatter_issue is not None:
+        return None, [
+            _validation_issue(
+                source_root=source_root,
+                note_path=note_path,
+                relative_path=relative_path,
+                issue=frontmatter_issue,
+                field_name=config.chunking_required_uuid_field,
+            )
+        ]
+    source_uuid, uuid_issue = _extract_required_uuid(frontmatter, field_name=config.chunking_required_uuid_field)
+    if uuid_issue is not None:
+        return None, [
+            _validation_issue(
+                source_root=source_root,
+                note_path=note_path,
+                relative_path=relative_path,
+                issue=uuid_issue,
+                field_name=config.chunking_required_uuid_field,
+            )
+        ]
     note_title = _derive_note_title(frontmatter=frontmatter, note_path=note_path)
     tag_values = _extract_tag_values(frontmatter)
+    frontmatter_semantics = _extract_semantic_frontmatter(frontmatter, config=config)
     wikilink_targets = _extract_wikilink_targets(body_text)
     blocks = _tokenize_markdown_blocks(body_text)
     chunks = _extract_chunks(
         blocks=blocks,
-        note_id=_build_note_id(source_root.label, relative_path),
+        note_id=_build_note_id(source_root.label, source_uuid),
+        source_uuid=source_uuid,
         source_root=source_root,
         relative_path=relative_path,
         note_path=note_path,
         note_title=note_title,
         frontmatter=frontmatter,
+        frontmatter_semantics=frontmatter_semantics,
+        max_chunk_chars=config.chunking_max_chunk_chars,
     )
     return NoteRecord(
-        note_id=_build_note_id(source_root.label, relative_path),
+        note_id=_build_note_id(source_root.label, source_uuid),
+        source_uuid=source_uuid,
         source_root_label=source_root.label,
         source_root_path=str(source_root.path),
         relative_path=relative_path,
         note_path=str(note_path),
         note_title=note_title,
         frontmatter=frontmatter,
+        frontmatter_semantics=frontmatter_semantics,
         note_hash=sha256_text(raw_text),
         tag_values=tag_values,
         wikilink_targets=wikilink_targets,
         chunks=tuple(chunks),
-    )
+    ), []
 
 
 def _split_frontmatter(raw_text: str) -> tuple[str, str]:
@@ -286,34 +372,91 @@ def _split_frontmatter(raw_text: str) -> tuple[str, str]:
     return "", raw_text
 
 
-def _parse_frontmatter(frontmatter_text: str) -> dict[str, Any]:
-    frontmatter: dict[str, Any] = {}
-    current_key: str | None = None
-    for raw_line in frontmatter_text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("- ") and current_key is not None:
-            existing = frontmatter.setdefault(current_key, [])
-            if isinstance(existing, list):
-                existing.append(_strip_wrapping_quotes(stripped[2:].strip()))
-            continue
-        if ":" not in raw_line:
-            current_key = None
-            continue
-        key, value = raw_line.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            current_key = None
-            continue
-        if value:
-            frontmatter[key] = _strip_wrapping_quotes(value)
-            current_key = key
-        else:
-            frontmatter[key] = []
-            current_key = key
-    return frontmatter
+def _parse_frontmatter(frontmatter_text: str) -> tuple[dict[str, Any], str | None]:
+    if not frontmatter_text.strip():
+        return {}, None
+    try:
+        parsed = yaml.safe_load(frontmatter_text)
+    except yaml.YAMLError as exc:
+        return {}, f"invalid YAML frontmatter: {exc}"
+    if parsed is None:
+        return {}, None
+    if not isinstance(parsed, dict):
+        return {}, "frontmatter must parse as a mapping"
+    return _json_safe_value(dict(parsed)), None
+
+
+def _validation_issue(
+    *,
+    source_root: IngestSourceRoot,
+    note_path: Path,
+    relative_path: str,
+    issue: str,
+    field_name: str,
+) -> dict[str, Any]:
+    return {
+        "source_root_label": source_root.label,
+        "source_root_path": str(source_root.path),
+        "relative_path": relative_path,
+        "note_path": str(note_path),
+        "field_name": field_name,
+        "issue": issue,
+    }
+
+
+def _extract_required_uuid(frontmatter: dict[str, Any], *, field_name: str) -> tuple[str | None, str | None]:
+    raw_value = frontmatter.get(field_name)
+    if raw_value is None:
+        return None, f"required UUID field `{field_name}` is missing"
+    if not isinstance(raw_value, str):
+        return None, f"required UUID field `{field_name}` must be a string"
+    normalized = _normalize_inline_whitespace(raw_value)
+    if not normalized:
+        return None, f"required UUID field `{field_name}` is blank"
+    try:
+        return str(uuid.UUID(normalized)), None
+    except ValueError:
+        return None, f"required UUID field `{field_name}` is not a valid UUID"
+
+
+def _extract_semantic_frontmatter(frontmatter: dict[str, Any], *, config: RuntimeConfig) -> dict[str, Any]:
+    semantics: dict[str, Any] = {}
+    for key in config.chunking_semantic_frontmatter_fields:
+        if key in frontmatter:
+            semantics[key] = _normalize_semantic_frontmatter_value(frontmatter[key])
+    return semantics
+
+
+def _normalize_semantic_frontmatter_value(value: Any) -> Any:
+    if isinstance(value, list):
+        normalized_items: list[Any] = []
+        for item in value:
+            normalized_item = _normalize_semantic_frontmatter_value(item)
+            if normalized_item is None:
+                continue
+            if normalized_item not in normalized_items:
+                normalized_items.append(normalized_item)
+        return normalized_items
+    if isinstance(value, str):
+        normalized = _normalize_inline_whitespace(value)
+        return normalized or None
+    return _json_safe_value(value)
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(subvalue) for key, subvalue in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 def _strip_wrapping_quotes(value: str) -> str:
@@ -417,6 +560,20 @@ def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
             blocks.append(_Block(kind=kind, text=text))
         current_lines = []
 
+    def flush_raw_block(kind: str, lines: list[str], *, warnings: tuple[str, ...] = ()) -> None:
+        if not lines:
+            return
+        text = "\n".join(lines).rstrip("\n")
+        if text:
+            blocks.append(_Block(kind=kind, text=text, warnings=warnings))
+
+    def is_table_start(index: int) -> bool:
+        if index + 1 >= len(lines):
+            return False
+        current_stripped = lines[index].strip()
+        next_stripped = lines[index + 1].strip()
+        return "|" in current_stripped and bool(TABLE_SEPARATOR_RE.match(next_stripped))
+
     lines = body_text.splitlines()
     index = 0
     while index < len(lines):
@@ -445,22 +602,61 @@ def _tokenize_markdown_blocks(body_text: str) -> list[_Block]:
         if _is_apparatus_reference_line(stripped):
             index += 1
             continue
-        if LIST_ITEM_RE.match(stripped):
+        code_fence_match = CODE_FENCE_RE.match(stripped)
+        if code_fence_match:
             flush_paragraph()
-            item_lines = [stripped]
-            lookahead = index + 1
-            while lookahead < len(lines):
-                next_line = lines[lookahead]
-                next_stripped = next_line.strip()
-                if not next_stripped or HEADING_RE.match(next_stripped) or LIST_ITEM_RE.match(next_stripped):
+            fence_token = code_fence_match.group("fence")
+            fence_prefix = fence_token[0]
+            fence_length = len(fence_token)
+            code_lines = [raw_line]
+            index += 1
+            while index < len(lines):
+                next_raw_line = lines[index]
+                code_lines.append(next_raw_line)
+                next_stripped = next_raw_line.strip()
+                if next_stripped.startswith(fence_prefix * fence_length):
+                    index += 1
+                    break
+                index += 1
+            flush_raw_block("code_block", code_lines)
+            continue
+        if is_table_start(index):
+            flush_paragraph()
+            table_lines = [raw_line, lines[index + 1]]
+            index += 2
+            while index < len(lines):
+                next_raw_line = lines[index]
+                next_stripped = next_raw_line.strip()
+                if not next_stripped or HEADING_RE.match(next_stripped) or THEMATIC_BREAK_RE.match(next_stripped):
                     break
                 if _is_apparatus_reference_line(next_stripped):
-                    lookahead += 1
+                    index += 1
                     continue
-                item_lines.append(next_stripped)
-                lookahead += 1
-            blocks.append(_Block(kind="list_item", text=_normalize_inline_whitespace(" ".join(item_lines))))
-            index = lookahead
+                if CODE_FENCE_RE.match(next_stripped) or LIST_ITEM_RE.match(next_stripped):
+                    break
+                if "|" not in next_stripped and not TABLE_SEPARATOR_RE.match(next_stripped):
+                    break
+                table_lines.append(next_raw_line)
+                index += 1
+            flush_raw_block("table", table_lines)
+            continue
+        if LIST_ITEM_RE.match(stripped):
+            flush_paragraph()
+            list_lines = [raw_line]
+            index += 1
+            while index < len(lines):
+                next_raw_line = lines[index]
+                next_stripped = next_raw_line.strip()
+                if not next_stripped or HEADING_RE.match(next_stripped) or THEMATIC_BREAK_RE.match(next_stripped):
+                    break
+                if _is_apparatus_reference_line(next_stripped):
+                    index += 1
+                    continue
+                if CODE_FENCE_RE.match(next_stripped) or is_table_start(index):
+                    break
+                list_lines.append(next_raw_line)
+                index += 1
+            flush_raw_block("list", list_lines)
             continue
         current_lines.append(raw_line)
         index += 1
@@ -473,11 +669,14 @@ def _extract_chunks(
     *,
     blocks: list[_Block],
     note_id: str,
+    source_uuid: str,
     source_root: IngestSourceRoot,
     relative_path: str,
     note_path: Path,
     note_title: str,
     frontmatter: dict[str, Any],
+    frontmatter_semantics: dict[str, Any],
+    max_chunk_chars: int,
 ) -> list[ChunkRecord]:
     chunks: list[ChunkRecord] = []
     current_heading_path: list[tuple[int, str]] = []
@@ -507,9 +706,11 @@ def _extract_chunks(
             )
             continue
 
-        paragraph_text = block.text
-        if block.kind == "paragraph":
-            inline_label_match = INLINE_LABEL_RE.match(paragraph_text)
+        semantic_unit_text = block.text
+        semantic_unit_kind = block.kind
+        chunk_warnings = list(block.warnings)
+        if semantic_unit_kind == "paragraph":
+            inline_label_match = INLINE_LABEL_RE.match(semantic_unit_text)
             if inline_label_match:
                 inline_label = _normalize_section_label(inline_label_match.group("label"))
                 current_section = _create_section_context(
@@ -520,8 +721,8 @@ def _extract_chunks(
                     heading_level=current_heading_path[-1][0] if current_heading_path else None,
                     section_counters=section_counters,
                 )
-                paragraph_text = _normalize_inline_whitespace(inline_label_match.group("remainder") or "")
-                if not paragraph_text:
+                semantic_unit_text = _normalize_inline_whitespace(inline_label_match.group("remainder") or "")
+                if not semantic_unit_text:
                     continue
 
         if current_section is None:
@@ -537,26 +738,49 @@ def _extract_chunks(
 
         paragraph_ordinal = paragraph_ordinals.get(current_section.section_id, 0) + 1
         paragraph_ordinals[current_section.section_id] = paragraph_ordinal
-        chunks.append(
-            ChunkRecord(
-                chunk_id=f"{note_id}::{current_section.section_id}::p{paragraph_ordinal:04d}",
-                note_id=note_id,
-                source_root_label=source_root.label,
-                source_root_path=str(source_root.path),
-                relative_path=relative_path,
-                note_path=str(note_path),
+        if semantic_unit_kind == "paragraph" and len(semantic_unit_text) > max_chunk_chars:
+            chunk_texts = _split_prose_unit_text(semantic_unit_text, max_chunk_chars)
+            chunk_warnings.append("oversized_prose_paragraph_split")
+        else:
+            chunk_texts = [(semantic_unit_text, 1)]
+            if len(semantic_unit_text) > max_chunk_chars and semantic_unit_kind in {"code_block", "table", "list"}:
+                chunk_warnings.append(_chunking_warning(semantic_unit_kind))
+
+        for chunk_text, split_ordinal in chunk_texts:
+            embedding_text = _build_embedding_text_for_chunk(
                 note_title=note_title,
-                section_id=current_section.section_id,
-                section_label=current_section.label,
-                section_kind=current_section.kind,
+                relative_path=relative_path,
                 section_path=current_section.path_labels,
-                section_occurrence=current_section.occurrence,
-                heading_level=current_section.heading_level,
-                paragraph_ordinal=paragraph_ordinal,
-                paragraph_text=paragraph_text,
-                chunk_hash=sha256_text(paragraph_text),
+                semantic_unit_text=chunk_text,
             )
-        )
+            embedding_text_hash = sha256_text(embedding_text)
+            chunks.append(
+                ChunkRecord(
+                    chunk_id=_build_chunk_id(note_id, current_section.section_id, paragraph_ordinal, split_ordinal),
+                    note_id=note_id,
+                    source_uuid=source_uuid,
+                    source_root_label=source_root.label,
+                    source_root_path=str(source_root.path),
+                    relative_path=relative_path,
+                    note_path=str(note_path),
+                    note_title=note_title,
+                    frontmatter_semantics=frontmatter_semantics,
+                    section_id=current_section.section_id,
+                    section_label=current_section.label,
+                    section_kind=current_section.kind,
+                    section_path=current_section.path_labels,
+                    section_occurrence=current_section.occurrence,
+                    heading_level=current_section.heading_level,
+                    semantic_unit_kind=semantic_unit_kind,
+                    paragraph_ordinal=paragraph_ordinal,
+                    split_ordinal=split_ordinal,
+                    paragraph_text=chunk_text,
+                    embedding_text=embedding_text,
+                    embedding_text_hash=embedding_text_hash,
+                    chunk_hash=embedding_text_hash,
+                    chunking_warnings=tuple(dict.fromkeys(chunk_warnings)),
+                )
+            )
 
     return chunks
 
@@ -590,8 +814,61 @@ def _create_section_context(
     )
 
 
-def _build_note_id(source_root_label: str, relative_path: str) -> str:
-    return f"{source_root_label}::{relative_path}"
+def _split_prose_unit_text(text: str, max_chunk_chars: int) -> list[tuple[str, int]]:
+    normalized = _normalize_inline_whitespace(text)
+    if len(normalized) <= max_chunk_chars:
+        return [(normalized, 1)]
+    segments: list[tuple[str, int]] = []
+    remaining = normalized
+    split_ordinal = 1
+    while remaining:
+        if len(remaining) <= max_chunk_chars:
+            segments.append((remaining, split_ordinal))
+            break
+        candidate = remaining[:max_chunk_chars]
+        sentence_match = None
+        for match in re.finditer(r"[.!?](?=\s|$)", candidate):
+            sentence_match = match
+        split_at = sentence_match.end() if sentence_match is not None else -1
+        if split_at <= 0:
+            whitespace_match = None
+            for match in re.finditer(r"\s+", candidate):
+                whitespace_match = match
+            split_at = whitespace_match.start() if whitespace_match is not None else max_chunk_chars
+        split_at = max(1, min(split_at, len(candidate)))
+        segments.append((remaining[:split_at].rstrip(), split_ordinal))
+        remaining = remaining[split_at:].lstrip()
+        split_ordinal += 1
+    return segments
+
+
+def _chunk_suffix(split_ordinal: int) -> str:
+    if split_ordinal <= 1:
+        return ""
+    return f"-s{split_ordinal:02d}"
+
+
+def _build_chunk_id(note_id: str, section_id: str, paragraph_ordinal: int, split_ordinal: int) -> str:
+    return f"{note_id}::{section_id}::p{paragraph_ordinal:04d}{_chunk_suffix(split_ordinal)}"
+
+
+def _build_embedding_text_for_chunk(
+    *,
+    note_title: str,
+    relative_path: str,
+    section_path: tuple[str, ...],
+    semantic_unit_text: str,
+) -> str:
+    heading_path = " > ".join(section_path) if section_path else note_title
+    return "\n".join([note_title, relative_path, heading_path, "", semantic_unit_text])
+
+
+def _chunking_warning(kind: str) -> str:
+    return f"oversized_atomic_{kind}"
+
+
+def _build_note_id(source_root_label: str, source_uuid: str) -> str:
+    return f"{source_root_label}::uuid::{source_uuid}"
 
 
 def _is_note_title_heading(*, label: str, note_title: str, frontmatter: dict[str, Any]) -> bool:
@@ -639,12 +916,14 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
 
         CREATE TABLE IF NOT EXISTS notes (
             note_id TEXT PRIMARY KEY,
+            source_uuid TEXT NOT NULL,
             source_root_label TEXT NOT NULL,
             source_root_path TEXT NOT NULL,
             relative_path TEXT NOT NULL,
             note_path TEXT NOT NULL,
             note_title TEXT NOT NULL,
             frontmatter_json TEXT NOT NULL,
+            frontmatter_semantics_json TEXT NOT NULL,
             note_hash TEXT NOT NULL,
             last_ingested_run_id TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -653,20 +932,27 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         CREATE TABLE IF NOT EXISTS chunks (
             chunk_id TEXT PRIMARY KEY,
             note_id TEXT NOT NULL,
+            source_uuid TEXT NOT NULL,
             source_root_label TEXT NOT NULL,
             source_root_path TEXT NOT NULL,
             relative_path TEXT NOT NULL,
             note_path TEXT NOT NULL,
             note_title TEXT NOT NULL,
+            frontmatter_semantics_json TEXT NOT NULL,
             section_id TEXT NOT NULL,
             section_label TEXT NOT NULL,
             section_kind TEXT NOT NULL,
             section_path_json TEXT NOT NULL,
             section_occurrence INTEGER NOT NULL,
             heading_level INTEGER,
+            semantic_unit_kind TEXT NOT NULL,
             paragraph_ordinal INTEGER NOT NULL,
+            split_ordinal INTEGER NOT NULL,
             paragraph_text TEXT NOT NULL,
             chunk_hash TEXT NOT NULL,
+            embedding_text TEXT NOT NULL,
+            embedding_text_hash TEXT NOT NULL,
+            chunking_warnings_json TEXT NOT NULL,
             last_ingested_run_id TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -812,35 +1098,41 @@ def _upsert_note(
         """
         INSERT INTO notes (
             note_id,
+            source_uuid,
             source_root_label,
             source_root_path,
             relative_path,
             note_path,
             note_title,
             frontmatter_json,
+            frontmatter_semantics_json,
             note_hash,
             last_ingested_run_id,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(note_id) DO UPDATE SET
+            source_uuid=excluded.source_uuid,
             source_root_label=excluded.source_root_label,
             source_root_path=excluded.source_root_path,
             relative_path=excluded.relative_path,
             note_path=excluded.note_path,
             note_title=excluded.note_title,
             frontmatter_json=excluded.frontmatter_json,
+            frontmatter_semantics_json=excluded.frontmatter_semantics_json,
             note_hash=excluded.note_hash,
             last_ingested_run_id=excluded.last_ingested_run_id,
             updated_at=excluded.updated_at
         """,
         (
             note_record.note_id,
+            note_record.source_uuid,
             note_record.source_root_label,
             note_record.source_root_path,
             note_record.relative_path,
             note_record.note_path,
             note_record.note_title,
             json.dumps(note_record.frontmatter, ensure_ascii=True, sort_keys=True),
+            json.dumps(note_record.frontmatter_semantics, ensure_ascii=True, sort_keys=True),
             note_record.note_hash,
             run_id,
             generated_at,
@@ -871,59 +1163,80 @@ def _upsert_chunk(
         INSERT INTO chunks (
             chunk_id,
             note_id,
+            source_uuid,
             source_root_label,
             source_root_path,
             relative_path,
             note_path,
             note_title,
+            frontmatter_semantics_json,
             section_id,
             section_label,
             section_kind,
             section_path_json,
             section_occurrence,
             heading_level,
+            semantic_unit_kind,
             paragraph_ordinal,
+            split_ordinal,
             paragraph_text,
             chunk_hash,
+            embedding_text,
+            embedding_text_hash,
+            chunking_warnings_json,
             last_ingested_run_id,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chunk_id) DO UPDATE SET
             note_id=excluded.note_id,
+            source_uuid=excluded.source_uuid,
             source_root_label=excluded.source_root_label,
             source_root_path=excluded.source_root_path,
             relative_path=excluded.relative_path,
             note_path=excluded.note_path,
             note_title=excluded.note_title,
+            frontmatter_semantics_json=excluded.frontmatter_semantics_json,
             section_id=excluded.section_id,
             section_label=excluded.section_label,
             section_kind=excluded.section_kind,
             section_path_json=excluded.section_path_json,
             section_occurrence=excluded.section_occurrence,
             heading_level=excluded.heading_level,
+            semantic_unit_kind=excluded.semantic_unit_kind,
             paragraph_ordinal=excluded.paragraph_ordinal,
+            split_ordinal=excluded.split_ordinal,
             paragraph_text=excluded.paragraph_text,
             chunk_hash=excluded.chunk_hash,
+            embedding_text=excluded.embedding_text,
+            embedding_text_hash=excluded.embedding_text_hash,
+            chunking_warnings_json=excluded.chunking_warnings_json,
             last_ingested_run_id=excluded.last_ingested_run_id,
             updated_at=excluded.updated_at
         """,
         (
             chunk.chunk_id,
             chunk.note_id,
+            chunk.source_uuid,
             chunk.source_root_label,
             chunk.source_root_path,
             chunk.relative_path,
             chunk.note_path,
             chunk.note_title,
+            json.dumps(chunk.frontmatter_semantics, ensure_ascii=True, sort_keys=True),
             chunk.section_id,
             chunk.section_label,
             chunk.section_kind,
             json.dumps(chunk.section_path, ensure_ascii=True),
             chunk.section_occurrence,
             chunk.heading_level,
+            chunk.semantic_unit_kind,
             chunk.paragraph_ordinal,
+            chunk.split_ordinal,
             chunk.paragraph_text,
             chunk.chunk_hash,
+            chunk.embedding_text,
+            chunk.embedding_text_hash,
+            json.dumps(list(chunk.chunking_warnings), ensure_ascii=True),
             run_id,
             generated_at,
         ),
@@ -1047,8 +1360,10 @@ def _rebuild_graph_layer(
                 note_record.note_id,
                 json.dumps(
                     {
+                        "source_uuid": note_record.source_uuid,
                         "relative_path": note_record.relative_path,
                         "source_root_label": note_record.source_root_label,
+                        "frontmatter_semantics": note_record.frontmatter_semantics,
                         "tags": list(note_record.tag_values),
                     },
                     ensure_ascii=True,
@@ -1069,9 +1384,13 @@ def _rebuild_graph_layer(
                     json.dumps(
                         {
                             "note_id": chunk.note_id,
+                            "source_uuid": chunk.source_uuid,
                             "relative_path": chunk.relative_path,
                             "paragraph_ordinal": chunk.paragraph_ordinal,
+                            "split_ordinal": chunk.split_ordinal,
+                            "semantic_unit_kind": chunk.semantic_unit_kind,
                             "source_root_label": chunk.source_root_label,
+                            "chunking_warnings": list(chunk.chunking_warnings),
                         },
                         ensure_ascii=True,
                         sort_keys=True,
@@ -1253,14 +1572,7 @@ def _refresh_chunk_vectors(
 
 
 def _embedding_text_for_chunk(chunk: ChunkRecord) -> str:
-    return " | ".join(
-        [
-            chunk.note_title,
-            chunk.relative_path,
-            chunk.section_label,
-            chunk.paragraph_text,
-        ]
-    )
+    return chunk.embedding_text
 
 
 def _note_node_id(note_id: str) -> str:
@@ -1315,6 +1627,7 @@ def _build_manifest(
     counts: dict[str, int],
 ) -> dict[str, Any]:
     return {
+        "status": "success",
         "run_id": run_id,
         "generated_at": generated_at,
         "repo_root": str(repo_root),
@@ -1333,6 +1646,7 @@ def _build_manifest(
         "notes": [
             {
                 "note_id": note_record.note_id,
+                "source_uuid": note_record.source_uuid,
                 "source_root_label": note_record.source_root_label,
                 "source_root_path": note_record.source_root_path,
                 "relative_path": note_record.relative_path,
@@ -1340,6 +1654,7 @@ def _build_manifest(
                 "note_title": note_record.note_title,
                 "note_hash": note_record.note_hash,
                 "frontmatter": note_record.frontmatter,
+                "frontmatter_semantics": note_record.frontmatter_semantics,
                 "tag_values": list(note_record.tag_values),
                 "wikilink_targets": [dict(target_record) for target_record in note_record.wikilink_targets],
                 "chunk_ids": [chunk.chunk_id for chunk in note_record.chunks],
@@ -1350,22 +1665,56 @@ def _build_manifest(
             {
                 "chunk_id": chunk.chunk_id,
                 "note_id": chunk.note_id,
+                "source_uuid": chunk.source_uuid,
                 "source_root_label": chunk.source_root_label,
                 "source_root_path": chunk.source_root_path,
                 "relative_path": chunk.relative_path,
                 "note_path": chunk.note_path,
                 "note_title": chunk.note_title,
+                "frontmatter_semantics": chunk.frontmatter_semantics,
                 "section_id": chunk.section_id,
                 "section_label": chunk.section_label,
                 "section_kind": chunk.section_kind,
                 "section_path": list(chunk.section_path),
                 "section_occurrence": chunk.section_occurrence,
                 "heading_level": chunk.heading_level,
+                "semantic_unit_kind": chunk.semantic_unit_kind,
                 "paragraph_ordinal": chunk.paragraph_ordinal,
+                "split_ordinal": chunk.split_ordinal,
                 "paragraph_text": chunk.paragraph_text,
+                "embedding_text": chunk.embedding_text,
+                "embedding_text_hash": chunk.embedding_text_hash,
                 "chunk_hash": chunk.chunk_hash,
+                "chunking_warnings": list(chunk.chunking_warnings),
             }
             for note_record in note_records
             for chunk in note_record.chunks
         ],
+    }
+
+
+def _build_failure_manifest(
+    *,
+    run_id: str,
+    generated_at: str,
+    repo_root: Path,
+    data_root: Path,
+    database_path: Path,
+    source_roots: tuple[IngestSourceRoot, ...],
+    validation_issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "repo_root": str(repo_root),
+        "data_root": str(data_root),
+        "database_path": str(database_path),
+        "source_roots": [{"label": root.label, "path": str(root.path)} for root in source_roots],
+        "summary": {
+            "note_count": 0,
+            "chunk_count": 0,
+            "validation_issue_count": len(validation_issues),
+        },
+        "validation_issues": validation_issues,
     }

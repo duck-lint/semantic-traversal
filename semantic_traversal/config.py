@@ -66,6 +66,11 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             },
         ],
     },
+    "chunking": {
+        "required_uuid_field": str,
+        "max_chunk_chars": int,
+        "semantic_frontmatter_fields": [str],
+    },
     "indexes": {
         "vector_table": str,
         "graph_nodes_table": str,
@@ -214,6 +219,18 @@ class RuntimeConfig:
                 )
             )
         return tuple(roots)
+
+    @property
+    def chunking_required_uuid_field(self) -> str:
+        return str(self.raw["chunking"]["required_uuid_field"])
+
+    @property
+    def chunking_max_chunk_chars(self) -> int:
+        return int(self.raw["chunking"]["max_chunk_chars"])
+
+    @property
+    def chunking_semantic_frontmatter_fields(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["chunking"]["semantic_frontmatter_fields"])
 
     @property
     def vector_table(self) -> str:
