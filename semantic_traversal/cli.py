@@ -107,6 +107,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "ingest":
         return run_ingest_cli(args[1:])
+    if args and args[0] == "normalize":
+        from .normalize import main as normalize_main
+        return normalize_main(args[1:])
     return run_turn_cli(args)
 
 
