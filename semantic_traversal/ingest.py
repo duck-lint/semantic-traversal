@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import sqlite3
@@ -197,7 +198,10 @@ def run_ingest(
     generated_at = _utc_now()
     run_id = f"ingest-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     ingest_paths = create_ingest_paths(resolved_data_root, config=resolved_config)
-    note_records, validation_issues = _discover_and_parse_notes(resolved_source_roots, config=resolved_config)
+    note_records, validation_issues, skipped_sources = _discover_and_parse_notes(
+        resolved_source_roots,
+        config=resolved_config,
+    )
     if validation_issues:
         failure_manifest = _build_failure_manifest(
             run_id=run_id,
@@ -207,6 +211,7 @@ def run_ingest(
             database_path=ingest_paths.database_path,
             source_roots=resolved_source_roots,
             validation_issues=validation_issues,
+            skipped_sources=skipped_sources,
         )
         manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
         manifest_path.write_text(json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
@@ -245,6 +250,7 @@ def run_ingest(
         source_roots=resolved_source_roots,
         note_records=note_records,
         counts=counts,
+        skipped_sources=skipped_sources,
     )
     manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
@@ -275,12 +281,25 @@ def _discover_and_parse_notes(
     source_roots: tuple[IngestSourceRoot, ...],
     *,
     config: RuntimeConfig,
-) -> tuple[list[NoteRecord], list[dict[str, Any]]]:
+) -> tuple[list[NoteRecord], list[dict[str, Any]], list[dict[str, Any]]]:
     note_records: list[NoteRecord] = []
     validation_issues: list[dict[str, Any]] = []
+    skipped_sources: list[dict[str, Any]] = []
+    exclude_globs = config.corpus_exclude_globs
     for source_root in source_roots:
         for note_path in sorted(source_root.path.rglob("*.md")):
             relative_path = note_path.relative_to(source_root.path).as_posix()
+            matched_exclude_glob = _matched_corpus_exclude_glob(relative_path, exclude_globs)
+            if matched_exclude_glob is not None:
+                skipped_sources.append(
+                    _skipped_source(
+                        source_root=source_root,
+                        note_path=note_path,
+                        relative_path=relative_path,
+                        matched_exclude_glob=matched_exclude_glob,
+                    )
+                )
+                continue
             note_record, issues = _parse_markdown_note(
                 source_root=source_root,
                 note_path=note_path,
@@ -290,7 +309,38 @@ def _discover_and_parse_notes(
             validation_issues.extend(issues)
             if note_record is not None:
                 note_records.append(note_record)
-    return note_records, validation_issues
+    return note_records, validation_issues, skipped_sources
+
+
+def _matched_corpus_exclude_glob(relative_path: str, exclude_globs: tuple[str, ...]) -> str | None:
+    normalized_path = relative_path.replace("\\", "/").strip("/")
+    for raw_pattern in exclude_globs:
+        pattern = raw_pattern.replace("\\", "/").strip("/")
+        if not pattern:
+            continue
+        if fnmatch.fnmatchcase(normalized_path, pattern):
+            return raw_pattern
+        if pattern.endswith("/**"):
+            directory_prefix = pattern[:-3].rstrip("/")
+            if normalized_path == directory_prefix or normalized_path.startswith(f"{directory_prefix}/"):
+                return raw_pattern
+    return None
+
+
+def _skipped_source(
+    *,
+    source_root: IngestSourceRoot,
+    note_path: Path,
+    relative_path: str,
+    matched_exclude_glob: str,
+) -> dict[str, Any]:
+    return {
+        "source_root_label": source_root.label,
+        "source_root_path": str(source_root.path),
+        "relative_path": relative_path,
+        "note_path": str(note_path),
+        "matched_exclude_glob": matched_exclude_glob,
+    }
 
 
 def _parse_markdown_note(
@@ -1625,6 +1675,7 @@ def _build_manifest(
     source_roots: tuple[IngestSourceRoot, ...],
     note_records: tuple[NoteRecord, ...],
     counts: dict[str, int],
+    skipped_sources: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "status": "success",
@@ -1642,7 +1693,9 @@ def _build_manifest(
             "unchanged_chunks": counts["unchanged_chunks"],
             "deleted_chunks": counts["deleted_chunks"],
             "deleted_notes": counts["deleted_notes"],
+            "skipped_source_count": len(skipped_sources),
         },
+        "skipped_sources": skipped_sources,
         "notes": [
             {
                 "note_id": note_record.note_id,
@@ -1702,6 +1755,7 @@ def _build_failure_manifest(
     database_path: Path,
     source_roots: tuple[IngestSourceRoot, ...],
     validation_issues: list[dict[str, Any]],
+    skipped_sources: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "status": "failed",
@@ -1715,6 +1769,8 @@ def _build_failure_manifest(
             "note_count": 0,
             "chunk_count": 0,
             "validation_issue_count": len(validation_issues),
+            "skipped_source_count": len(skipped_sources),
         },
+        "skipped_sources": skipped_sources,
         "validation_issues": validation_issues,
     }

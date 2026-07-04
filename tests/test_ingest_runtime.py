@@ -281,6 +281,60 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertEqual(offending_paths, {"Missing.md", "Invalid.md"})
             self.assertFalse((data_root / "ingestion" / "latent_space.sqlite3").exists())
 
+    def test_ingest_skips_configured_excluded_markdown_before_uuid_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            _write_markdown_note(source_root, ".obsidian/Plugin.md", "Plugin support markdown without uuid.")
+            _write_markdown_note(
+                source_root,
+                "Good.md",
+                "# Good\n\nThis note should ingest.",
+                uuid_value="66666666-6666-4666-8666-666666666666",
+            )
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["paths"]["corpus_exclude_globs"] = [".obsidian/**"]
+
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+                config=config,
+            )
+
+            manifest = _turn_artifact(result.manifest_path)
+            self.assertEqual(manifest["summary"]["skipped_source_count"], 1)
+            self.assertEqual(manifest["skipped_sources"][0]["relative_path"], ".obsidian/Plugin.md")
+            self.assertEqual(manifest["skipped_sources"][0]["matched_exclude_glob"], ".obsidian/**")
+            self.assertEqual(result.note_count, 1)
+
+    def test_ingest_still_rejects_non_excluded_missing_uuid_when_exclusions_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            source_root.mkdir(parents=True)
+            _write_markdown_note(source_root, ".obsidian/Plugin.md", "Plugin support markdown without uuid.")
+            _write_markdown_note(source_root, "Missing.md", "This non-excluded file must still fail.")
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["paths"]["corpus_exclude_globs"] = [".obsidian/**"]
+
+            with self.assertRaises(IngestFrontmatterError) as exc_info:
+                run_ingest(
+                    repo_root=REPO_ROOT,
+                    data_root=data_root,
+                    source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                    embedding_backend=FakeEmbeddingBackend(),
+                    config=config,
+                )
+
+            manifest = _turn_artifact(exc_info.exception.manifest_path)
+            self.assertEqual(manifest["summary"]["validation_issue_count"], 1)
+            self.assertEqual(manifest["summary"]["skipped_source_count"], 1)
+            self.assertEqual(manifest["validation_issues"][0]["relative_path"], "Missing.md")
+            self.assertEqual(manifest["skipped_sources"][0]["relative_path"], ".obsidian/Plugin.md")
+
     def test_ingest_omits_standalone_classical_reference_lines(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir)

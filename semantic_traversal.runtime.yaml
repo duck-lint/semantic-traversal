@@ -42,6 +42,26 @@ paths:
       path: "corpus"
     - label: "tests-fixtures"
       path: "tests/fixtures"
+  corpus_exclude_globs:
+    - ".semantic-traversal/**"
+    - ".semantic-traversal-data/**"
+    - ".obsidian/**"
+    - "_attachments/**"
+    - "attachments/**"
+    - "assets/**"
+  vault_source_label: "vault"
+  vault_data_root_name: ".semantic-traversal"
+
+prompts:
+  semantic_compiler:
+    editable_instruction: |
+      Compile a minimal semantic target for traversal.
+      Prefer precise traversal terms over broad abstractions.
+      Use active_focus and recent_semantic_turns when resolving referential follow-ups.
+  frontier_synthesis:
+    editable_instruction: |
+      Answer directly from the runtime-bounded synthesis context.
+      Prefer careful uncertainty over overconfident synthesis.
 
 chunking:
   required_uuid_field: "uuid"

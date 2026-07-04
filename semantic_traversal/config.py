@@ -65,6 +65,17 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
                 "path": str,
             },
         ],
+        "corpus_exclude_globs": [str],
+        "vault_source_label": str,
+        "vault_data_root_name": str,
+    },
+    "prompts": {
+        "semantic_compiler": {
+            "editable_instruction": str,
+        },
+        "frontier_synthesis": {
+            "editable_instruction": str,
+        },
     },
     "chunking": {
         "required_uuid_field": str,
@@ -219,6 +230,26 @@ class RuntimeConfig:
                 )
             )
         return tuple(roots)
+
+    @property
+    def corpus_exclude_globs(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["paths"]["corpus_exclude_globs"])
+
+    @property
+    def vault_source_label(self) -> str:
+        return str(self.raw["paths"]["vault_source_label"])
+
+    @property
+    def vault_data_root_name(self) -> str:
+        return str(self.raw["paths"]["vault_data_root_name"])
+
+    @property
+    def semantic_compiler_editable_instruction(self) -> str:
+        return str(self.raw["prompts"]["semantic_compiler"]["editable_instruction"])
+
+    @property
+    def frontier_synthesis_editable_instruction(self) -> str:
+        return str(self.raw["prompts"]["frontier_synthesis"]["editable_instruction"])
 
     @property
     def chunking_required_uuid_field(self) -> str:
