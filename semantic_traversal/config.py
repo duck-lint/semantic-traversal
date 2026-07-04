@@ -25,9 +25,8 @@ _SECRET_KEY_EXACT = {
 _SECRET_VALUE_PREFIXES = ("sk-", "Bearer ")
 
 _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
-    "runtime": {
-        "data_root": str,
-        "max_retrieval_chunks": int,
+    "retrieval": {
+        "max_chunks": int,
     },
     "graph_traversal": {
         "enabled": bool,
@@ -60,6 +59,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     },
     "paths": {
         "vault_root": str,
+        "data_root": str,
         "vault_source_label": str,
         "vault_exclude_globs": [str],
     },
@@ -114,11 +114,14 @@ class RuntimeConfig:
 
     @property
     def data_root(self) -> Path:
-        return self.resolve_path(self.raw["runtime"]["data_root"])
+        raw_data_root = Path(str(self.raw["paths"]["data_root"]))
+        if raw_data_root.is_absolute():
+            return raw_data_root.resolve()
+        return (self.vault_root / raw_data_root).resolve()
 
     @property
     def max_retrieval_chunks(self) -> int:
-        return int(self.raw["runtime"]["max_retrieval_chunks"])
+        return int(self.raw["retrieval"]["max_chunks"])
 
     @property
     def graph_traversal_enabled(self) -> bool:
@@ -406,6 +409,10 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError("Runtime config field paths.vault_root must not be blank")
     if not str(parsed["paths"]["vault_source_label"]).strip():
         raise ConfigError("Runtime config field paths.vault_source_label must not be blank")
+    if not str(parsed["paths"]["data_root"]).strip():
+        raise ConfigError("Runtime config field paths.data_root must not be blank")
+    if int(parsed["retrieval"]["max_chunks"]) <= 0:
+        raise ConfigError("Runtime config field retrieval.max_chunks must be greater than zero")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",

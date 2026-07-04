@@ -1,6 +1,5 @@
-runtime:
-  data_root: ".semantic-traversal-data"
-  max_retrieval_chunks: 24
+retrieval:
+  max_chunks: 24
 
 graph_traversal:
   enabled: true
@@ -37,7 +36,8 @@ embeddings:
   request_timeout_seconds: 60
 
 paths:
-  vault_root: "corpus"
+  vault_root: C:\Users\madis\Desktop\kháos
+  data_root: ".semantic-traversal"
   vault_source_label: "vault"
   vault_exclude_globs:
     - ".semantic-traversal/**"
@@ -45,6 +45,8 @@ paths:
     - ".obsidian/**"
     - "VAULT DESIGN/(.)MD TEMPLATES/**"
     - "VAULT DESIGN/ATTACHMENTS/**"
+    - ".gitignore"
+    - "vault.base"
 
 prompts:
   semantic_compiler:
