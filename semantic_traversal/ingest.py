@@ -294,7 +294,45 @@ def _discover_and_parse_notes(
             validation_issues.extend(issues)
             if note_record is not None:
                 note_records.append(note_record)
+    validation_issues.extend(
+        _duplicate_source_uuid_validation_issues(
+            note_records=note_records,
+            field_name=config.chunking_required_uuid_field,
+        )
+    )
     return note_records, validation_issues, skipped_sources
+
+
+def _duplicate_source_uuid_validation_issues(
+    *,
+    note_records: list[NoteRecord],
+    field_name: str,
+) -> list[dict[str, Any]]:
+    records_by_uuid: dict[str, list[NoteRecord]] = {}
+    for note_record in note_records:
+        records_by_uuid.setdefault(note_record.source_uuid, []).append(note_record)
+
+    validation_issues: list[dict[str, Any]] = []
+    for source_uuid, duplicate_records in sorted(records_by_uuid.items()):
+        if len(duplicate_records) < 2:
+            continue
+        duplicate_paths = sorted(record.relative_path for record in duplicate_records)
+        duplicate_path_text = ", ".join(duplicate_paths)
+        for note_record in sorted(duplicate_records, key=lambda record: record.relative_path):
+            validation_issues.append(
+                {
+                    "source_root_label": note_record.source_root_label,
+                    "source_root_path": note_record.source_root_path,
+                    "relative_path": note_record.relative_path,
+                    "note_path": note_record.note_path,
+                    "field_name": field_name,
+                    "issue": (
+                        f"duplicate UUID field `{field_name}` value `{source_uuid}`; "
+                        f"also present in: {duplicate_path_text}"
+                    ),
+                }
+            )
+    return validation_issues
 
 
 def _matched_corpus_exclude_glob(relative_path: str, exclude_globs: tuple[str, ...]) -> str | None:

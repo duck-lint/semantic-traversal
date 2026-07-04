@@ -293,6 +293,32 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertEqual(offending_paths, {"Missing.md", "Invalid.md"})
             self.assertFalse((data_root / "ingestion" / "latent_space.sqlite3").exists())
 
+    def test_ingest_rejects_duplicate_source_uuid_and_writes_failure_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            duplicate_uuid = "77777777-7777-4777-8777-777777777777"
+            _write_markdown_note(source_root, "One.md", "# One\n\nFirst copy.", uuid_value=duplicate_uuid)
+            _write_markdown_note(source_root, "Two.md", "# Two\n\nSecond copy.", uuid_value=duplicate_uuid)
+
+            with self.assertRaises(IngestFrontmatterError) as exc_info:
+                run_ingest(
+                    repo_root=REPO_ROOT,
+                    data_root=data_root,
+                    source_roots=(IngestSourceRoot(label="source", path=source_root),),
+                    embedding_backend=FakeEmbeddingBackend(),
+                )
+
+            manifest = _turn_artifact(exc_info.exception.manifest_path)
+            self.assertEqual(manifest["status"], "failed")
+            self.assertEqual(manifest["summary"]["validation_issue_count"], 2)
+            offending_paths = {issue["relative_path"] for issue in manifest["validation_issues"]}
+            self.assertEqual(offending_paths, {"One.md", "Two.md"})
+            self.assertTrue(
+                all("duplicate UUID" in issue["issue"] for issue in manifest["validation_issues"])
+            )
+            self.assertFalse((data_root / "ingestion" / "latent_space.sqlite3").exists())
+
     def test_ingest_skips_configured_excluded_markdown_before_uuid_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir)
