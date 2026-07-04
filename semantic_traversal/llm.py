@@ -54,31 +54,12 @@ class UnavailableLLMBackend:
         raise LiveLLMNotConfigured(self.unavailable_reason)
 
 
-_OPENAI_SYNTHESIS_INVARIANT_INSTRUCTIONS = """
-Non-negotiable semantic-traversal runtime contract:
-- Respond directly to the user using the provided synthesis context packet only.
-- Use semantic_compiler_packet and the approved_retrieval_packet field as runtime-bounded synthesis inputs.
-- Do not describe retrieved notes as independently approved, verified, or authoritative.
-- Do not invent retrieval results or graph operations.
-- Do not decide evidence validity or repair traversal, retrieval, or coverage.
-""".strip()
-
-
-def _build_openai_instructions(*, editable_instruction: str) -> str:
-    parts: list[str] = ["You are a helpful assistant inside the semantic-traversal runtime."]
-    cleaned_editable_instruction = editable_instruction.strip()
-    if cleaned_editable_instruction:
-        parts.append(f"Editable synthesis instruction:\n{cleaned_editable_instruction}")
-    parts.append(_OPENAI_SYNTHESIS_INVARIANT_INSTRUCTIONS)
-    return "\n\n".join(parts)
-
-
 class OpenAIResponsesBackend:
-    def __init__(self, api_key: str, model: str, max_output_tokens: int, editable_instruction: str = "") -> None:
+    def __init__(self, api_key: str, model: str, max_output_tokens: int, instructions: str) -> None:
         self._client = _build_openai_client(api_key=api_key)
         self._model = model
         self._max_output_tokens = max_output_tokens
-        self._instructions = _build_openai_instructions(editable_instruction=editable_instruction)
+        self._instructions = instructions.strip()
         self._instructions_hash = sha256_text(self._instructions)
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
@@ -149,19 +130,19 @@ def resolve_llm_backend(
             return UnavailableLLMBackend(reason="OPENAI_API_KEY is not available for live execution.")
         raise LiveLLMNotConfigured("OPENAI_API_KEY is not available for live execution.")
 
-    editable_instruction = config.frontier_synthesis_editable_instruction
+    instructions = config.frontier_synthesis_instructions
     if llm_mode == "auto":
         return OpenAIResponsesBackend(
             api_key=api_key,
             model=model,
             max_output_tokens=max_output_tokens,
-            editable_instruction=editable_instruction,
+            instructions=instructions,
         )
     if llm_mode == "live":
         return OpenAIResponsesBackend(
             api_key=api_key,
             model=model,
             max_output_tokens=max_output_tokens,
-            editable_instruction=editable_instruction,
+            instructions=instructions,
         )
     raise ValueError(f"Unsupported llm_mode: {llm_mode}")

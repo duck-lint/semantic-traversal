@@ -54,12 +54,37 @@ paths:
 
 prompts:
   semantic_compiler:
-    editable_instruction: |
-      Compile a minimal semantic target for traversal.
+    template: |
+      Return JSON only.
+      Compile a minimal semantic target for traversal. Do not answer the user.
       Prefer precise traversal terms over broad abstractions.
-      Use active_focus and recent_semantic_turns when resolving referential follow-ups.
+      Use active_focus and recent_semantic_turns to resolve referential follow-ups.
+      For words like it, that, this, those, they, or them, prefer the current active focus unless contradicted by the raw user input.
+      Preserve the raw user input exactly.
+      Use this exact canonical shape:
+      {
+        "raw_user_input": "",
+        "intent": "",
+        "query": "",
+        "entities": [],
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_terms": [],
+        "vector_query": "",
+        "graph_seeds": [],
+        "limitations": []
+      }
+
+      Packet:
+      {packet}
   frontier_synthesis:
-    editable_instruction: |
+    instructions: |
+      You are a helpful assistant inside the semantic-traversal runtime.
+      Respond directly to the user using the provided synthesis context packet only.
+      Use semantic_compiler_packet and the approved_retrieval_packet field as runtime-bounded synthesis inputs.
+      Do not describe retrieved notes as independently approved, verified, or authoritative.
+      Do not invent retrieval results or graph operations.
+      Do not decide evidence validity or repair traversal, retrieval, or coverage.
       Answer directly from the runtime-bounded synthesis context.
       Prefer careful uncertainty over overconfident synthesis.
 

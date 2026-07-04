@@ -159,46 +159,19 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     return result
 
 
-_OLLAMA_COMPILER_INVARIANT_INSTRUCTIONS = (
-    "Return JSON only.\n"
-    "Compile a minimal semantic target for traversal. Do not answer the user.\n"
-    "Use active_focus and recent_semantic_turns to resolve referential follow-ups.\n"
-    "For words like it, that, this, those, they, or them, prefer the current active focus unless contradicted by the raw user input.\n"
-    "Preserve the raw user input exactly.\n"
-    "Use this exact canonical shape:\n"
-    "{"
-    '"raw_user_input": "", '
-    '"intent": "", '
-    '"query": "", '
-    '"entities": [], '
-    '"relations": [], '
-    '"resolved_referents": [], '
-    '"retrieval_terms": [], '
-    '"vector_query": "", '
-    '"graph_seeds": [], '
-    '"limitations": []'
-    "}"
-)
-
-
-def _build_ollama_prompt(*, packet: dict[str, Any], editable_instruction: str) -> str:
-    parts: list[str] = []
-    cleaned_editable_instruction = editable_instruction.strip()
-    if cleaned_editable_instruction:
-        parts.append(f"Editable compiler instruction:\n{cleaned_editable_instruction}")
-    parts.append(f"Non-negotiable compiler contract:\n{_OLLAMA_COMPILER_INVARIANT_INSTRUCTIONS}")
-    parts.append(f"Packet:\n{json.dumps(packet, ensure_ascii=True, indent=2)}")
-    return "\n\n".join(parts)
+def _render_ollama_prompt(*, packet: dict[str, Any], template: str) -> str:
+    packet_json = json.dumps(packet, ensure_ascii=True, indent=2)
+    return template.replace("{packet}", packet_json).strip()
 
 
 class OllamaSemanticCompilerBackend:
     mode_name = "ollama"
 
-    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, editable_instruction: str = "") -> None:
+    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, prompt_template: str) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._editable_instruction = editable_instruction
+        self._prompt_template = prompt_template
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
@@ -209,7 +182,7 @@ class OllamaSemanticCompilerBackend:
                 diagnostics={},
                 status="unavailable",
             )
-        prompt = _build_ollama_prompt(packet=packet, editable_instruction=self._editable_instruction)
+        prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template)
         prompt_hash = sha256_text(prompt)
         payload = {"model": self._model, "prompt": prompt, "stream": False}
         raw_response_text: str | None = None
@@ -315,6 +288,6 @@ def resolve_semantic_compiler_backend(
             model=configured_model,
             base_url=configured_base_url.strip(),
             timeout_seconds=timeout_seconds,
-            editable_instruction=config.semantic_compiler_editable_instruction,
+            prompt_template=config.semantic_compiler_prompt_template,
         )
     return UnavailableSemanticCompilerBackend(reason=f"unsupported semantic compiler provider: {configured_provider}", configured_mode=configured_provider)

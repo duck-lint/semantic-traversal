@@ -71,10 +71,10 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     },
     "prompts": {
         "semantic_compiler": {
-            "editable_instruction": str,
+            "template": str,
         },
         "frontier_synthesis": {
-            "editable_instruction": str,
+            "instructions": str,
         },
     },
     "chunking": {
@@ -244,12 +244,12 @@ class RuntimeConfig:
         return str(self.raw["paths"]["vault_data_root_name"])
 
     @property
-    def semantic_compiler_editable_instruction(self) -> str:
-        return str(self.raw["prompts"]["semantic_compiler"]["editable_instruction"])
+    def semantic_compiler_prompt_template(self) -> str:
+        return str(self.raw["prompts"]["semantic_compiler"]["template"])
 
     @property
-    def frontier_synthesis_editable_instruction(self) -> str:
-        return str(self.raw["prompts"]["frontier_synthesis"]["editable_instruction"])
+    def frontier_synthesis_instructions(self) -> str:
+        return str(self.raw["prompts"]["frontier_synthesis"]["instructions"])
 
     @property
     def chunking_required_uuid_field(self) -> str:
@@ -399,6 +399,12 @@ def _describe_type(expected_type: Any) -> str:
     return getattr(expected_type, "__name__", str(expected_type))
 
 
+def _validate_prompt_text(value: str, *, field: str, required_marker: str | None = None) -> None:
+    if not value.strip():
+        raise ConfigError(f"Runtime config prompt field must not be blank: {field}")
+    if required_marker is not None and required_marker not in value:
+        raise ConfigError(f"Runtime config prompt field {field} must include {required_marker}")
+
 def _validate_mapping(payload: dict[str, Any], schema: dict[str, Any], *, path: str) -> None:
     unknown_fields = sorted(set(payload) - set(schema))
     if unknown_fields:
@@ -420,6 +426,15 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError(f"Runtime config must parse to a mapping: {resolved_config_path}")
     _assert_no_secrets(parsed)
     _validate_mapping(parsed, _EXPECTED_CONFIG_SCHEMA, path="root")
+    _validate_prompt_text(
+        str(parsed["prompts"]["semantic_compiler"]["template"]),
+        field="prompts.semantic_compiler.template",
+        required_marker="{packet}",
+    )
+    _validate_prompt_text(
+        str(parsed["prompts"]["frontier_synthesis"]["instructions"]),
+        field="prompts.frontier_synthesis.instructions",
+    )
     validate_sql_identifier(str(parsed["indexes"]["vector_table"]), "indexes.vector_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_nodes_table"]), "indexes.graph_nodes_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_edges_table"]), "indexes.graph_edges_table")
