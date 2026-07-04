@@ -1071,6 +1071,41 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(any(chunk["source_root_label"] == "tests-fixtures" for chunk in result.retrieval_packet["selected_chunks"]))
         self.assertTrue(result.retrieval_packet["selected_chunks"][0]["selection_reason"])
 
+    def test_search_journal_uses_scoped_exact_retrieval_plan(self) -> None:
+        data_root = _prepare_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal for candy",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+
+        retrieval_plan = result.semantic_compiler_packet["retrieval_plan"]
+        self.assertEqual(retrieval_plan["intent_type"], "scoped_exact_search")
+        self.assertEqual([entry["term"] for entry in retrieval_plan["literal_terms"]], ["candy"])
+        self.assertIn("journal", retrieval_plan["scope_filters"]["path_contains"])
+        self.assertIn("exact_chunk_search", result.semantic_traversal_manifest["execution"]["layers_executed"])
+        self.assertGreater(result.semantic_traversal_manifest["coverage"]["total_exact_matches"], 0)
+        self.assertTrue(result.semantic_traversal_manifest["coverage"]["exact_search_performed"])
+        self.assertTrue(any("exact" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
+
+    def test_vector_only_retrieval_forbids_corpus_wide_negative_claims(self) -> None:
+        data_root = _prepare_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="How does candy relate to dreams?",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+
+        self.assertFalse(result.semantic_traversal_manifest["coverage"]["exact_search_performed"])
+        self.assertFalse(result.semantic_traversal_manifest["coverage"]["negative_claims_allowed"])
+        self.assertTrue(any("corpus-wide negative" in requirement for requirement in result.synthesis_context_packet["output_requirements"]))
+
     def test_retrieval_packet_contains_provenance(self) -> None:
         data_root = _prepare_data_root()
         result = run_thread_turn(

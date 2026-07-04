@@ -27,6 +27,21 @@ _SECRET_VALUE_PREFIXES = ("sk-", "Bearer ")
 _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     "retrieval": {
         "max_chunks": int,
+        "exact": {
+            "max_matches": int,
+            "context_chars": int,
+        },
+        "lexical": {
+            "max_candidates": int,
+        },
+        "vector": {
+            "max_candidates": int,
+        },
+        "graph": {
+            "default_depth": int,
+            "max_depth": int,
+            "max_candidates": int,
+        },
     },
     "graph_traversal": {
         "enabled": bool,
@@ -122,6 +137,34 @@ class RuntimeConfig:
     @property
     def max_retrieval_chunks(self) -> int:
         return int(self.raw["retrieval"]["max_chunks"])
+
+    @property
+    def retrieval_exact_max_matches(self) -> int:
+        return int(self.raw["retrieval"]["exact"]["max_matches"])
+
+    @property
+    def retrieval_exact_context_chars(self) -> int:
+        return int(self.raw["retrieval"]["exact"]["context_chars"])
+
+    @property
+    def retrieval_lexical_max_candidates(self) -> int:
+        return int(self.raw["retrieval"]["lexical"]["max_candidates"])
+
+    @property
+    def retrieval_vector_max_candidates(self) -> int:
+        return int(self.raw["retrieval"]["vector"]["max_candidates"])
+
+    @property
+    def retrieval_graph_default_depth(self) -> int:
+        return int(self.raw["retrieval"]["graph"]["default_depth"])
+
+    @property
+    def retrieval_graph_max_depth(self) -> int:
+        return int(self.raw["retrieval"]["graph"]["max_depth"])
+
+    @property
+    def retrieval_graph_max_candidates(self) -> int:
+        return int(self.raw["retrieval"]["graph"]["max_candidates"])
 
     @property
     def graph_traversal_enabled(self) -> bool:
@@ -413,6 +456,20 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError("Runtime config field paths.data_root must not be blank")
     if int(parsed["retrieval"]["max_chunks"]) <= 0:
         raise ConfigError("Runtime config field retrieval.max_chunks must be greater than zero")
+    for field in (
+        "exact.max_matches",
+        "exact.context_chars",
+        "lexical.max_candidates",
+        "vector.max_candidates",
+        "graph.default_depth",
+        "graph.max_depth",
+        "graph.max_candidates",
+    ):
+        current: Any = parsed["retrieval"]
+        for part in field.split("."):
+            current = current[part]
+        if int(current) < 0:
+            raise ConfigError(f"Runtime config field retrieval.{field} must be non-negative")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",

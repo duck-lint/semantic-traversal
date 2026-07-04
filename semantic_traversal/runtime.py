@@ -13,6 +13,11 @@ from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
+from .retrieval_plan import (
+    build_default_retrieval_plan,
+    canonicalize_retrieval_plan,
+    retrieval_plan_layer,
+)
 from .semantic_compiler import (
     SemanticCompilerBackend,
     SemanticCompilerResponse,
@@ -56,6 +61,7 @@ STOP_WORDS = {
 REFERENTIAL_SURFACE_WORDS = {"it", "that", "this", "those", "they", "them"}
 RECENT_SEMANTIC_TURN_LIMIT = 6
 ASSISTANT_SNIPPET_LIMIT = 120
+LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph"}
 
 
 def _default_active_focus() -> dict[str, Any]:
@@ -66,6 +72,8 @@ def _default_active_focus() -> dict[str, Any]:
         "retrieval_terms": [],
         "vector_query": None,
         "graph_seeds": [],
+        "literal_terms": [],
+        "scope_filters": {},
         "selected_chunk_ids": [],
         "selected_note_titles": [],
         "selected_section_labels": [],
@@ -143,7 +151,7 @@ def _coerce_string_list(value: Any) -> list[str]:
     for entry in value:
         candidate: Any = entry
         if isinstance(entry, dict):
-            candidate = entry.get("label") or entry.get("resolved_to") or entry.get("surface_form") or entry.get("value")
+            candidate = entry.get("term") or entry.get("query") or entry.get("label") or entry.get("resolved_to") or entry.get("surface_form") or entry.get("value")
         if candidate is None:
             continue
         cleaned = str(candidate).strip()
@@ -196,6 +204,8 @@ def _ensure_recent_semantic_turns(value: Any) -> list[dict[str, Any]]:
                 "retrieval_terms": _coerce_string_list(entry.get("retrieval_terms")),
                 "vector_query": str(entry.get("vector_query") or "").strip(),
                 "graph_seeds": _coerce_string_list(entry.get("graph_seeds")),
+                "literal_terms": _coerce_string_list(entry.get("literal_terms")),
+                "scope_filters": entry.get("scope_filters") if isinstance(entry.get("scope_filters"), dict) else {},
                 "selected_chunk_ids": _coerce_string_list(entry.get("selected_chunk_ids")),
                 "selected_note_titles": _coerce_string_list(entry.get("selected_note_titles")),
                 "selected_section_labels": _coerce_string_list(entry.get("selected_section_labels")),
@@ -214,6 +224,8 @@ def _normalize_active_focus(value: Any) -> dict[str, Any]:
     focus["retrieval_terms"] = _coerce_string_list(value.get("retrieval_terms"))
     focus["vector_query"] = str(value.get("vector_query") or "").strip() or None
     focus["graph_seeds"] = _coerce_string_list(value.get("graph_seeds"))
+    focus["literal_terms"] = _coerce_string_list(value.get("literal_terms"))
+    focus["scope_filters"] = value.get("scope_filters") if isinstance(value.get("scope_filters"), dict) else {}
     focus["selected_chunk_ids"] = _coerce_string_list(value.get("selected_chunk_ids"))
     focus["selected_note_titles"] = _coerce_string_list(value.get("selected_note_titles"))
     focus["selected_section_labels"] = _coerce_string_list(value.get("selected_section_labels"))
@@ -225,6 +237,7 @@ def _focus_terms(focus: dict[str, Any]) -> list[str]:
     for value in (
         focus.get("retrieval_terms"),
         focus.get("graph_seeds"),
+        focus.get("literal_terms"),
         focus.get("selected_note_titles"),
         focus.get("selected_section_labels"),
         [focus.get("query")],
@@ -258,6 +271,7 @@ def _semantic_turn_focus_terms(turn: dict[str, Any]) -> list[str]:
         turn.get("retrieval_terms"),
         turn.get("vector_query"),
         turn.get("graph_seeds"),
+        turn.get("literal_terms"),
         turn.get("selected_note_titles"),
         turn.get("selected_section_labels"),
         turn.get("entities"),
@@ -301,6 +315,8 @@ def _compact_active_focus(
         "retrieval_terms": _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")),
         "vector_query": str(semantic_compiler_packet.get("vector_query") or "").strip() or None,
         "graph_seeds": _coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
+        "literal_terms": _coerce_string_list((semantic_compiler_packet.get("retrieval_plan") or {}).get("literal_terms") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else []),
+        "scope_filters": (semantic_compiler_packet.get("retrieval_plan") or {}).get("scope_filters", {}) if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {},
         "selected_chunk_ids": selected_chunk_ids,
         "selected_note_titles": selected_note_titles,
         "selected_section_labels": selected_section_labels,
@@ -346,6 +362,8 @@ def _build_recent_semantic_turn(
         "retrieval_terms": _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")),
         "vector_query": str(semantic_compiler_packet.get("vector_query") or "").strip(),
         "graph_seeds": _coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
+        "literal_terms": _coerce_string_list((semantic_compiler_packet.get("retrieval_plan") or {}).get("literal_terms") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else []),
+        "scope_filters": (semantic_compiler_packet.get("retrieval_plan") or {}).get("scope_filters", {}) if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {},
         "selected_chunk_ids": selected_chunk_ids,
         "selected_note_titles": selected_note_titles,
         "selected_section_labels": selected_section_labels,
@@ -400,7 +418,7 @@ def _compiler_request_packet(
         "recent_messages": recent_messages,
         "recent_semantic_turns": recent_semantic_turns,
         "active_focus": active_focus,
-        "instruction": "Compile a minimal semantic target for traversal. Do not answer the user.",
+        "instruction": "Compile a retrieval plan, not an answer. Separate literal terms, semantic queries, scope filters, graph seeds, and claim policy. Do not answer the user.",
     }
 
 
@@ -428,18 +446,28 @@ def _deterministic_semantic_packet(
         graph_seeds.append(query)
         if prior_thread_state.get("latest_user_input"):
             graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
-    return {
+    graph_seeds = list(dict.fromkeys(seed for seed in graph_seeds if seed))
+    packet = {
         "raw_user_input": raw_user_input,
-        "intent": "deterministic lexical fallback",
+        "intent": "deterministic retrieval planning fallback",
         "query": query,
         "entities": [],
         "relations": [],
         "resolved_referents": [],
         "retrieval_terms": retrieval_terms,
         "vector_query": query,
-        "graph_seeds": list(dict.fromkeys(seed for seed in graph_seeds if seed)),
-        "limitations": list(limitations or ["semantic compiler backend unavailable; deterministic lexical fallback used"]),
+        "graph_seeds": graph_seeds,
+        "limitations": list(limitations or ["semantic compiler backend unavailable; deterministic retrieval-planning fallback used"]),
     }
+    packet["retrieval_plan"] = build_default_retrieval_plan(
+        raw_user_input=raw_user_input,
+        query=query,
+        retrieval_terms=retrieval_terms,
+        vector_query=query,
+        graph_seeds=graph_seeds,
+        resolved_referents=[],
+    )
+    return packet
 
 
 def _canonicalize_compiler_packet(
@@ -475,6 +503,15 @@ def _canonicalize_compiler_packet(
         packet["retrieval_terms"] = _extract_terms(packet["query"])
     if not packet["graph_seeds"] and packet["retrieval_terms"]:
         packet["graph_seeds"] = [packet["query"]]
+    fallback_plan = build_default_retrieval_plan(
+        raw_user_input=raw_user_input,
+        query=packet["query"],
+        retrieval_terms=list(packet["retrieval_terms"]),
+        vector_query=packet["vector_query"],
+        graph_seeds=list(packet["graph_seeds"]),
+        resolved_referents=list(packet["resolved_referents"]),
+    )
+    packet["retrieval_plan"] = canonicalize_retrieval_plan(payload.get("retrieval_plan"), fallback=fallback_plan)
     return packet
 
 
@@ -541,6 +578,7 @@ def _is_compiler_packet_valid(packet: Any) -> bool:
         "retrieval_terms",
         "vector_query",
         "graph_seeds",
+        "retrieval_plan",
         "limitations",
     }
     if not required_keys.issubset(packet):
@@ -552,6 +590,8 @@ def _is_compiler_packet_valid(packet: Any) -> bool:
             return False
     if not isinstance(packet.get("vector_query"), str):
         return False
+    if not isinstance(packet.get("retrieval_plan"), dict):
+        return False
     return True
 
 
@@ -562,8 +602,10 @@ def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
             chunk_id,
             note_id,
             source_root_label,
+            source_root_path,
             relative_path,
             note_title,
+            frontmatter_semantics_json,
             section_label,
             paragraph_text,
             chunk_hash
@@ -571,6 +613,131 @@ def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         """
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _layer_limit(layer: dict[str, Any] | None, fallback: int) -> int:
+    if not isinstance(layer, dict) or "limit" not in layer:
+        return fallback
+    try:
+        return max(0, int(layer["limit"]))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _layer_enabled(plan: dict[str, Any], operator: str) -> bool:
+    return retrieval_plan_layer(plan, operator) is not None
+
+
+def _scope_values(scope_filters: dict[str, Any], key: str) -> list[str]:
+    return [str(value).strip().lower() for value in _coerce_string_list(scope_filters.get(key)) if str(value).strip()]
+
+
+def _chunk_matches_scope(row: dict[str, Any], scope_filters: dict[str, Any]) -> bool:
+    if not isinstance(scope_filters, dict):
+        return True
+    source_label = str(scope_filters.get("source_label") or "").strip().lower()
+    if source_label and str(row.get("source_root_label") or "").strip().lower() != source_label:
+        return False
+    path_terms = _scope_values(scope_filters, "path_contains")
+    note_type_terms = _scope_values(scope_filters, "note_type")
+    if not path_terms and not note_type_terms:
+        return True
+    relative_path = str(row.get("relative_path") or "").lower().replace("\\", "/")
+    source_root_path = str(row.get("source_root_path") or "").lower().replace("\\", "/")
+    title = str(row.get("note_title") or "").lower()
+    frontmatter_semantics = ""
+    try:
+        frontmatter_semantics = json.dumps(json.loads(str(row.get("frontmatter_semantics_json") or "{}")), ensure_ascii=True).lower()
+    except json.JSONDecodeError:
+        frontmatter_semantics = str(row.get("frontmatter_semantics_json") or "").lower()
+    scope_haystack = f"{source_root_path} {relative_path} {title} {frontmatter_semantics}"
+    # Journal/daily scopes are often encoded in path/title/frontmatter-derived filenames rather than a chunk column.
+    required_terms = list(dict.fromkeys([*path_terms, *note_type_terms]))
+    return any(term in scope_haystack for term in required_terms)
+
+
+def _scoped_chunk_rows(chunk_rows: list[dict[str, Any]], scope_filters: dict[str, Any]) -> list[dict[str, Any]]:
+    return [row for row in chunk_rows if _chunk_matches_scope(row, scope_filters)]
+
+
+def _candidate_source_layers(candidate: dict[str, Any]) -> list[str]:
+    sources = candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
+    normalized: list[str] = []
+    for source in _coerce_string_list(sources):
+        if source == "graph_expanded":
+            source = "graph"
+        if source and source not in normalized:
+            normalized.append(source)
+    return normalized
+
+
+def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"exact": 0, "lexical": 0, "vector": 0, "graph": 0}
+    for candidate in selected_candidates:
+        for source in _candidate_source_layers(candidate):
+            if source in counts:
+                counts[source] += 1
+    return counts
+
+
+def _exact_candidates(
+    chunk_rows: list[dict[str, Any]],
+    literal_terms: list[dict[str, Any]],
+    *,
+    scope_filters: dict[str, Any],
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    notes: list[str] = []
+    terms = [str(entry.get("term") or "").strip() for entry in literal_terms if isinstance(entry, dict) and str(entry.get("term") or "").strip()]
+    if not terms:
+        return [], ["exact search skipped: no literal terms"], {
+            "operator": "exact_chunk_search",
+            "literal_terms": [],
+            "scope": scope_filters,
+            "total_match_count": 0,
+            "matching_note_count": 0,
+            "returned_count": 0,
+        }
+
+    scoped_rows = _scoped_chunk_rows(chunk_rows, scope_filters)
+    candidates: list[dict[str, Any]] = []
+    matching_note_ids: set[str] = set()
+    total_match_count = 0
+    lowered_terms = [term.lower() for term in terms]
+    for row in scoped_rows:
+        haystack = "\n".join(
+            str(row.get(field) or "")
+            for field in ("note_title", "section_label", "relative_path", "paragraph_text")
+        ).lower()
+        matched_terms = [term for term, lowered_term in zip(terms, lowered_terms, strict=True) if lowered_term in haystack]
+        if not matched_terms:
+            continue
+        total_match_count += 1
+        matching_note_ids.add(str(row.get("note_id") or ""))
+        if len(candidates) >= limit:
+            continue
+        candidates.append(
+            {
+                **row,
+                "selection_reason": f"exact literal match: {', '.join(matched_terms)}",
+                "score": len(matched_terms) + 4.0,
+                "selection_source": "exact",
+                "match_reason": f"literal term {', '.join(matched_terms)}",
+                "scope_match": scope_filters,
+            }
+        )
+    if candidates:
+        notes.append(f"exact search matched {total_match_count} chunk(s); returned {len(candidates)}")
+    else:
+        notes.append("exact search produced no matches")
+    return candidates, notes, {
+        "operator": "exact_chunk_search",
+        "literal_terms": terms,
+        "scope": scope_filters,
+        "total_match_count": total_match_count,
+        "matching_note_count": len([note_id for note_id in matching_note_ids if note_id]),
+        "returned_count": len(candidates),
+    }
 
 
 def _graph_seed_values(
@@ -582,6 +749,9 @@ def _graph_seed_values(
     seeds: list[tuple[str, str]] = []
     active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
     configured_sources = set(config.graph_traversal_seed_sources)
+    retrieval_plan = semantic_compiler_packet.get("retrieval_plan") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {}
+    for value in _coerce_string_list(retrieval_plan.get("graph_seeds") if isinstance(retrieval_plan, dict) else []):
+        seeds.append(("graph_seeds", value))
     if "graph_seeds" in configured_sources:
         for value in _coerce_string_list(semantic_compiler_packet.get("graph_seeds")):
             seeds.append(("graph_seeds", value))
@@ -637,18 +807,28 @@ def _graph_match_note_nodes(
     return exact_matches or overlap_matches
 
 
-def _lexical_candidates(chunk_rows: list[dict[str, Any]], query_terms: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+def _lexical_candidates(
+    chunk_rows: list[dict[str, Any]],
+    query_terms: list[str],
+    *,
+    scope_filters: dict[str, Any] | None = None,
+    limit: int | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     candidates: list[dict[str, Any]] = []
     notes: list[str] = []
     if not query_terms:
         return candidates, notes
-    for row in chunk_rows:
+    scoped_rows = _scoped_chunk_rows(chunk_rows, scope_filters or {})
+    lowered_terms = [str(term).lower() for term in query_terms if str(term).strip()]
+    for row in scoped_rows:
         haystack = " ".join(
             str(row.get(field) or "")
             for field in ("note_title", "section_label", "relative_path", "paragraph_text")
         ).lower()
-        matched_terms = [term for term in query_terms if term in haystack]
+        matched_terms = [term for term in lowered_terms if term in haystack]
         if not matched_terms:
+            continue
+        if limit is not None and len(candidates) >= limit:
             continue
         candidates.append(
             {
@@ -656,6 +836,7 @@ def _lexical_candidates(chunk_rows: list[dict[str, Any]], query_terms: list[str]
                 "selection_reason": f"lexical match: {', '.join(matched_terms)}",
                 "score": len(matched_terms) + 2.0,
                 "selection_source": "lexical",
+                "match_reason": f"lexical term {', '.join(matched_terms)}",
             }
         )
     if candidates:
@@ -682,6 +863,8 @@ def _vector_candidates(
     config: RuntimeConfig,
     embedding_backend: EmbeddingBackend,
     vector_query: str,
+    scope_filters: dict[str, Any] | None = None,
+    limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     notes: list[str] = []
     if not vector_query.strip():
@@ -705,7 +888,7 @@ def _vector_candidates(
     for row in rows:
         chunk_id = str(row["chunk_id"])
         chunk_row = chunk_rows.get(chunk_id)
-        if chunk_row is None:
+        if chunk_row is None or not _chunk_matches_scope(chunk_row, scope_filters or {}):
             continue
         try:
             vector = json.loads(str(row["vector_json"]))
@@ -722,8 +905,12 @@ def _vector_candidates(
                 "selection_reason": f"vector similarity {similarity:.3f}",
                 "score": similarity + 1.0,
                 "selection_source": "vector",
+                "match_reason": f"vector query similarity {similarity:.3f}",
             }
         )
+    candidates = sorted(candidates, key=lambda candidate: -float(candidate.get("score") or 0.0))
+    if limit is not None:
+        candidates = candidates[:limit]
     if candidates:
         notes.append(f"vector search matched {len(candidates)} chunk(s)")
     else:
@@ -737,6 +924,8 @@ def _graph_candidates(
     config: RuntimeConfig,
     semantic_compiler_packet: dict[str, Any],
     prior_thread_state: dict[str, Any],
+    scope_filters: dict[str, Any] | None = None,
+    limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
     if not config.graph_traversal_enabled:
@@ -851,18 +1040,19 @@ def _graph_candidates(
                 queue.append((target_note_id, hop + 1))
                 expanded_note_count += 1
 
+    max_graph_candidates = limit if limit is not None else config.graph_traversal_max_candidates
     selected_chunk_ids: list[str] = []
     for note_id in selected_note_ids:
         for chunk_row in chunk_rows.values():
-            if str(chunk_row["note_id"]) != note_id:
+            if str(chunk_row["note_id"]) != note_id or not _chunk_matches_scope(chunk_row, scope_filters or {}):
                 continue
             chunk_id = str(chunk_row["chunk_id"])
             if chunk_id in selected_chunk_ids:
                 continue
             selected_chunk_ids.append(chunk_id)
-            if len(selected_chunk_ids) >= config.graph_traversal_max_candidates:
+            if len(selected_chunk_ids) >= max_graph_candidates:
                 break
-        if len(selected_chunk_ids) >= config.graph_traversal_max_candidates:
+        if len(selected_chunk_ids) >= max_graph_candidates:
             break
 
     candidates = []
@@ -877,6 +1067,7 @@ def _graph_candidates(
                 "selection_reason": reason,
                 "score": 1.5,
                 "selection_source": "graph",
+                "match_reason": "graph expansion",
             }
         )
     if candidates:
@@ -974,9 +1165,10 @@ def _merge_candidates(
     lexical_candidates: list[dict[str, Any]],
     vector_candidates: list[dict[str, Any]],
     graph_candidates: list[dict[str, Any]],
+    exact_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
-    source_priority = {"lexical": 3, "vector": 2, "graph": 1}
+    source_priority = {"exact": 4, "lexical": 3, "vector": 2, "graph": 1}
 
     def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
@@ -985,8 +1177,10 @@ def _merge_candidates(
         if existing is None:
             merged[chunk_id] = dict(candidate)
             merged[chunk_id]["sources"] = [source]
+            merged[chunk_id]["source_layers"] = [source]
             return
         existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
+        existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
         existing_score = float(existing.get("score") or 0.0)
         candidate_score = float(candidate.get("score") or 0.0)
         if candidate_score > existing_score or (
@@ -995,6 +1189,7 @@ def _merge_candidates(
         ):
             merged[chunk_id] = dict(candidate)
             merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
+            merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
         else:
             existing["score"] = max(existing_score, candidate_score)
             existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
@@ -1002,7 +1197,7 @@ def _merge_candidates(
                 part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
             )
 
-    for candidate in lexical_candidates + vector_candidates + graph_candidates:
+    for candidate in list(exact_candidates or []) + lexical_candidates + vector_candidates + graph_candidates:
         absorb(candidate)
 
     ranked = sorted(
@@ -1026,21 +1221,52 @@ def _select_retrieval_chunks(
     *,
     merged_candidates: list[dict[str, Any]],
     max_chunks: int,
+    selection_policy: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     seen_content_hashes: set[str] = set()
-    for candidate in merged_candidates:
+    seen_chunk_ids: set[str] = set()
+
+    def absorb(candidate: dict[str, Any]) -> bool:
         if len(selected) >= max(0, max_chunks):
-            break
+            return False
+        chunk_id = str(candidate.get("chunk_id") or "")
+        if chunk_id and chunk_id in seen_chunk_ids:
+            return False
         chunk_hash = str(candidate.get("chunk_hash") or "").strip()
         if chunk_hash and chunk_hash in seen_content_hashes:
-            continue
+            return False
         if chunk_hash:
             seen_content_hashes.add(chunk_hash)
+        if chunk_id:
+            seen_chunk_ids.add(chunk_id)
         selected_candidate = dict(candidate)
+        selected_candidate["source_layers"] = _candidate_source_layers(selected_candidate)
         selected_candidate.pop("sources", None)
         selected_candidate.pop("_retrieval_demoted", None)
         selected.append(selected_candidate)
+        return True
+
+    budgets = selection_policy.get("budgets") if isinstance(selection_policy, dict) else None
+    if isinstance(budgets, dict):
+        for source in ("exact", "lexical", "vector", "graph"):
+            try:
+                budget = max(0, int(budgets.get(source, 0)))
+            except (TypeError, ValueError):
+                budget = 0
+            taken = 0
+            for candidate in merged_candidates:
+                if taken >= budget:
+                    break
+                if source not in _candidate_source_layers(candidate):
+                    continue
+                if absorb(candidate):
+                    taken += 1
+
+    for candidate in merged_candidates:
+        if len(selected) >= max(0, max_chunks):
+            break
+        absorb(candidate)
     return selected
 
 
@@ -1054,22 +1280,110 @@ def _semantic_traversal(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     query_terms = list(semantic_compiler_packet.get("retrieval_terms") or [])
     vector_query = str(semantic_compiler_packet.get("vector_query") or "")
+    retrieval_plan = semantic_compiler_packet.get("retrieval_plan") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {}
+    if not retrieval_plan:
+        retrieval_plan = build_default_retrieval_plan(
+            raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
+            query=str(semantic_compiler_packet.get("query") or ""),
+            retrieval_terms=query_terms,
+            vector_query=vector_query,
+            graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
+            resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
+        )
+    scope_filters = retrieval_plan.get("scope_filters") if isinstance(retrieval_plan.get("scope_filters"), dict) else {}
+    literal_terms = [entry for entry in retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
+    semantic_queries = _coerce_string_list(retrieval_plan.get("semantic_queries"))
+    lexical_queries = _coerce_string_list(retrieval_plan.get("lexical_queries")) or query_terms
+    graph_layer = retrieval_plan_layer(retrieval_plan, "graph_expand") or retrieval_plan_layer(retrieval_plan, "graph_lookup")
+    exact_layer = retrieval_plan_layer(retrieval_plan, "exact_chunk_search")
+    lexical_layer = retrieval_plan_layer(retrieval_plan, "lexical_chunk_search")
+    vector_layer = retrieval_plan_layer(retrieval_plan, "vector_search")
 
     chunk_rows = _load_chunk_rows(connection)
-    lexical_candidates, lexical_notes = _lexical_candidates(chunk_rows, query_terms)
-    vector_candidates, vector_notes = _vector_candidates(
-        connection=connection,
-        config=config,
-        embedding_backend=embedding_backend,
-        vector_query=vector_query,
-    )
-    graph_candidates, graph_notes, graph_traversal_info = _graph_candidates(
-        connection=connection,
-        config=config,
-        semantic_compiler_packet=semantic_compiler_packet,
-        prior_thread_state=prior_thread_state,
-    )
+    layer_manifests: dict[str, Any] = {}
+    execution = {"layers_executed": [], "layers_skipped": []}
 
+    exact_candidates: list[dict[str, Any]] = []
+    exact_notes: list[str] = []
+    if exact_layer is not None:
+        execution["layers_executed"].append("exact_chunk_search")
+        exact_candidates, exact_notes, exact_info = _exact_candidates(
+            chunk_rows,
+            literal_terms,
+            scope_filters=scope_filters,
+            limit=_layer_limit(exact_layer, config.retrieval_exact_max_matches),
+        )
+        layer_manifests["exact"] = exact_info
+    else:
+        execution["layers_skipped"].append({"layer": "exact_chunk_search", "reason": "not requested by retrieval plan"})
+        exact_notes = ["exact search skipped: not requested by retrieval plan"]
+        layer_manifests["exact"] = {
+            "operator": "exact_chunk_search",
+            "literal_terms": [],
+            "scope": scope_filters,
+            "total_match_count": 0,
+            "matching_note_count": 0,
+            "returned_count": 0,
+        }
+
+    lexical_candidates: list[dict[str, Any]] = []
+    lexical_notes: list[str] = []
+    if lexical_layer is not None:
+        execution["layers_executed"].append("lexical_chunk_search")
+        lexical_candidates, lexical_notes = _lexical_candidates(
+            chunk_rows,
+            lexical_queries,
+            scope_filters=scope_filters,
+            limit=_layer_limit(lexical_layer, config.retrieval_lexical_max_candidates),
+        )
+    else:
+        execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by retrieval plan"})
+        lexical_notes = ["lexical search skipped: not requested by retrieval plan"]
+
+    vector_candidates: list[dict[str, Any]] = []
+    vector_notes: list[str] = []
+    if vector_layer is not None:
+        execution["layers_executed"].append("vector_search")
+        vector_candidates, vector_notes = _vector_candidates(
+            connection=connection,
+            config=config,
+            embedding_backend=embedding_backend,
+            vector_query=semantic_queries[0] if semantic_queries else vector_query,
+            scope_filters=scope_filters,
+            limit=_layer_limit(vector_layer, config.retrieval_vector_max_candidates),
+        )
+    else:
+        execution["layers_skipped"].append({"layer": "vector_search", "reason": "not requested by retrieval plan"})
+        vector_notes = ["vector search skipped: not requested by retrieval plan"]
+
+    graph_candidates: list[dict[str, Any]] = []
+    graph_notes: list[str] = []
+    graph_traversal_info: dict[str, Any]
+    if graph_layer is not None:
+        execution["layers_executed"].append(str(graph_layer.get("operator") or "graph_expand"))
+        graph_candidates, graph_notes, graph_traversal_info = _graph_candidates(
+            connection=connection,
+            config=config,
+            semantic_compiler_packet=semantic_compiler_packet,
+            prior_thread_state=prior_thread_state,
+            scope_filters=scope_filters,
+            limit=_layer_limit(graph_layer, config.retrieval_graph_max_candidates),
+        )
+    else:
+        execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by retrieval plan"})
+        graph_candidates, graph_notes, graph_traversal_info = [], ["graph search skipped: not requested by retrieval plan"], {
+            "enabled": config.graph_traversal_enabled,
+            "hop_limit": config.graph_traversal_hop_limit,
+            "seed_sources": list(config.graph_traversal_seed_sources),
+            "matched_seed_count": 0,
+            "expanded_note_count": 0,
+            "edge_types_used": [],
+        }
+
+    exact_candidates = _apply_retrieval_candidate_hygiene(
+        candidates=exact_candidates,
+        semantic_compiler_packet=semantic_compiler_packet,
+    )
     lexical_candidates = _apply_retrieval_candidate_hygiene(
         candidates=lexical_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
@@ -1082,24 +1396,58 @@ def _semantic_traversal(
         candidates=graph_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
     )
-    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates)
-    selected_candidates = _select_retrieval_chunks(merged_candidates=merged_candidates, max_chunks=config.max_retrieval_chunks)
+    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, exact_candidates=exact_candidates)
+    selected_candidates = _select_retrieval_chunks(
+        merged_candidates=merged_candidates,
+        max_chunks=config.max_retrieval_chunks,
+        selection_policy=retrieval_plan.get("selection_policy") if isinstance(retrieval_plan.get("selection_policy"), dict) else None,
+    )
+    selected_counts = _count_selected_by_layer(selected_candidates)
+    exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
+    exact_search_performed = exact_layer is not None
+    total_exact_matches = int(exact_info.get("total_match_count") or 0)
+    matching_note_count = int(exact_info.get("matching_note_count") or 0)
+    claim_policy = retrieval_plan.get("claim_policy") if isinstance(retrieval_plan.get("claim_policy"), dict) else {}
+    coverage = {
+        "exact_search_performed": exact_search_performed,
+        "scope": scope_filters,
+        "literal_terms": [str(entry.get("term") or "") for entry in literal_terms if str(entry.get("term") or "")],
+        "total_exact_matches": total_exact_matches,
+        "matching_note_count": matching_note_count,
+        "coverage_claims_allowed": bool(claim_policy.get("coverage_claims_allowed")) and exact_search_performed,
+        "negative_claims_allowed": exact_search_performed and total_exact_matches == 0,
+    }
+    limits: list[str] = [f"Only {config.max_retrieval_chunks} chunk(s) may be selected for frontier synthesis."]
+    if exact_search_performed:
+        limits.append(f"Exact layer found {total_exact_matches} match(es) across {matching_note_count} note(s); synthesis uses a representative subset.")
+    if not exact_search_performed:
+        limits.append("No corpus-wide positive or negative exact-match claim is allowed because exact search did not run.")
 
     traversal_manifest = {
         "query_terms": query_terms,
         "vector_query": vector_query,
         "graph_seeds": list(semantic_compiler_packet.get("graph_seeds") or []),
+        "retrieval_plan": retrieval_plan,
+        "execution": execution,
         "candidate_counts": {
+            "exact": len(exact_candidates),
             "lexical": len(lexical_candidates),
             "vector": len(vector_candidates),
             "graph": len(graph_candidates),
         },
+        "selected_counts": selected_counts,
         "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
+        "layer_manifests": layer_manifests,
+        "coverage": coverage,
+        "limits": limits,
         "graph_traversal": graph_traversal_info,
-        "selection_notes": [*lexical_notes, *vector_notes, *graph_notes],
+        "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes],
     }
 
     retrieval_packet = {
+        "retrieval_plan": retrieval_plan,
+        "coverage": coverage,
+        "limits": limits,
         "selected_chunks": [
             {
                 "chunk_id": str(candidate["chunk_id"]),
@@ -1110,6 +1458,9 @@ def _semantic_traversal(
                 "section_label": str(candidate["section_label"]),
                 "paragraph_text": str(candidate["paragraph_text"]),
                 "chunk_hash": str(candidate["chunk_hash"]),
+                "source_layers": _candidate_source_layers(candidate),
+                "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
+                "scope_match": candidate.get("scope_match"),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
             }
             for candidate in selected_candidates
@@ -1187,6 +1538,7 @@ def _build_synthesis_context_packet(
         "output_requirements": [
             "Answer directly. Use only the coverage-approved retrieval packet when coverage is approved.",
             "Do not describe retrieved notes as independently approved, verified, or authoritative.",
+            "Do not make corpus-wide negative claims unless retrieval coverage says negative_claims_allowed is true.",
         ],
     }
 

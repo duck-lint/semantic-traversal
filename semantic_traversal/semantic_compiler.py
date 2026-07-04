@@ -8,6 +8,7 @@ from urllib import error, request
 
 from .config import RuntimeConfig
 from .hashing import sha256_text
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan
 
 
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -74,18 +75,29 @@ def collect_compiler_terms(text: str) -> list[str]:
 
 def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
     terms = collect_compiler_terms(raw_user_input)
-    return {
+    query = raw_user_input.strip()
+    graph_seeds = [query] if terms else []
+    packet = {
         "raw_user_input": raw_user_input,
         "intent": "deterministic semantic compiler packet",
-        "query": raw_user_input.strip(),
+        "query": query,
         "entities": [],
         "relations": [],
         "resolved_referents": [],
         "retrieval_terms": terms,
-        "vector_query": raw_user_input.strip(),
-        "graph_seeds": [raw_user_input.strip()] if terms else [],
+        "vector_query": query,
+        "graph_seeds": graph_seeds,
         "limitations": ["deterministic compiler packet used"],
     }
+    packet["retrieval_plan"] = build_default_retrieval_plan(
+        raw_user_input=raw_user_input,
+        query=query,
+        retrieval_terms=terms,
+        vector_query=query,
+        graph_seeds=graph_seeds,
+        resolved_referents=[],
+    )
+    return packet
 
 
 def _active_focus_terms(packet: dict[str, Any]) -> list[str]:
@@ -156,6 +168,15 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
             result["vector_query"] = f"{result['vector_query'].strip()} {' '.join(focus_terms[:6])}".strip()
     if not result["graph_seeds"] and result["retrieval_terms"]:
         result["graph_seeds"] = [result["query"]]
+    fallback_plan = build_default_retrieval_plan(
+        raw_user_input=raw_user_input,
+        query=result["query"],
+        retrieval_terms=list(result["retrieval_terms"]),
+        vector_query=result["vector_query"],
+        graph_seeds=list(result["graph_seeds"]),
+        resolved_referents=list(result["resolved_referents"]),
+    )
+    result["retrieval_plan"] = canonicalize_retrieval_plan(payload.get("retrieval_plan"), fallback=fallback_plan)
     return result
 
 

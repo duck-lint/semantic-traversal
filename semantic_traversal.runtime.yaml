@@ -1,5 +1,16 @@
 retrieval:
   max_chunks: 24
+  exact:
+    max_matches: 200
+    context_chars: 240
+  lexical:
+    max_candidates: 100
+  vector:
+    max_candidates: 200
+  graph:
+    default_depth: 1
+    max_depth: 2
+    max_candidates: 24
 
 graph_traversal:
   enabled: true
@@ -52,10 +63,11 @@ prompts:
   semantic_compiler:
     template: |
       Return JSON only.
-      Compile a minimal semantic target for traversal. Do not answer the user.
-      Prefer precise traversal terms over broad abstractions.
-      Use active_focus and recent_semantic_turns to resolve referential follow-ups.
-      For words like it, that, this, those, they, or them, prefer the current active focus unless contradicted by the raw user input.
+      Compile a retrieval plan for deterministic multi-surface retrieval. Do not answer the user.
+      Separate conversational meaning into distinct roles: resolved referents, literal terms, semantic queries, lexical queries, graph seeds, and scope filters.
+      Treat search/find/list/mentions/occurrences requests as exact-search requests when possible.
+      Treat words like journal or daily as scope filters when the user asks to search journal material; do not use scope words as literal corpus terms unless the user explicitly asks for the word itself.
+      Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.
       Preserve the raw user input exactly.
       Use this exact canonical shape:
       {
@@ -68,6 +80,22 @@ prompts:
         "retrieval_terms": [],
         "vector_query": "",
         "graph_seeds": [],
+        "retrieval_plan": {
+          "intent_type": "semantic_traversal",
+          "resolved_referents": [],
+          "scope_filters": {"source_label": null, "note_type": [], "path_contains": []},
+          "literal_terms": [],
+          "semantic_queries": [],
+          "lexical_queries": [],
+          "graph_seeds": [],
+          "retrieval_layers": [
+            {"operator": "lexical_chunk_search", "required": false, "limit": 50},
+            {"operator": "vector_search", "required": false, "limit": 24},
+            {"operator": "graph_expand", "required": false, "depth": 1}
+          ],
+          "selection_policy": {"dedupe_by": "chunk_id", "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}, "preserve_required_layers": true},
+          "claim_policy": {"coverage_claims_allowed": false, "negative_claims_require_exact_layer": true}
+        },
         "limitations": []
       }
 
@@ -77,10 +105,12 @@ prompts:
     instructions: |
       You are a helpful assistant inside the semantic-traversal runtime.
       Respond directly to the user using the provided synthesis context packet only.
-      Use semantic_compiler_packet and the approved_retrieval_packet field as runtime-bounded synthesis inputs.
+      Use semantic_compiler_packet, semantic_traversal_manifest, and approved_retrieval_packet as runtime-bounded synthesis inputs.
       Do not describe retrieved notes as independently approved, verified, or authoritative.
-      Do not invent retrieval results or graph operations.
+      Do not invent retrieval results, exact-match counts, graph operations, or corpus coverage.
       Do not decide evidence validity or repair traversal, retrieval, or coverage.
+      Never make corpus-wide negative claims unless approved_retrieval_packet.coverage.negative_claims_allowed is true.
+      If exact search did not run, phrase absence claims as limited to the selected semantic retrieval packet.
       Answer directly from the runtime-bounded synthesis context.
       Prefer careful uncertainty over overconfident synthesis.
 
@@ -91,6 +121,8 @@ chunking:
     - tags
     - aliases
     - journal_entry_date
+    - title
+    - creator
 
 storage:
   threads_root: "threads"
