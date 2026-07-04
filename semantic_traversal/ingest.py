@@ -158,24 +158,9 @@ def create_ingest_paths(data_root: Path, *, config: RuntimeConfig) -> IngestPath
     )
 
 
-def build_default_source_roots(repo_root: Path, config: RuntimeConfig | None = None) -> tuple[IngestSourceRoot, ...]:
+def build_configured_source_roots(repo_root: Path, config: RuntimeConfig | None = None) -> tuple[IngestSourceRoot, ...]:
     resolved_config = config or load_runtime_config(repo_root=repo_root)
-    return tuple(IngestSourceRoot(label=root.label, path=root.path) for root in resolved_config.corpus_roots)
-
-
-def parse_source_root_argument(raw: str, repo_root: Path) -> IngestSourceRoot:
-    if "=" not in raw:
-        raise ValueError(f"Expected source root in label=path form, got: {raw}")
-    label, raw_path = raw.split("=", 1)
-    label = label.strip()
-    if not label:
-        raise ValueError(f"Source root label is required in: {raw}")
-    resolved_path = Path(raw_path.strip())
-    if not resolved_path.is_absolute():
-        resolved_path = (repo_root / resolved_path).resolve()
-    else:
-        resolved_path = resolved_path.resolve()
-    return IngestSourceRoot(label=label, path=resolved_path)
+    return (IngestSourceRoot(label=resolved_config.vault_source_label, path=resolved_config.vault_root),)
 
 
 def run_ingest(
@@ -190,7 +175,7 @@ def run_ingest(
     resolved_data_root = data_root.resolve()
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     resolved_config = config or load_runtime_config(repo_root=resolved_repo_root)
-    resolved_source_roots = source_roots or build_default_source_roots(resolved_repo_root, config=resolved_config)
+    resolved_source_roots = source_roots or build_configured_source_roots(resolved_repo_root, config=resolved_config)
     for source_root in resolved_source_roots:
         if not source_root.path.exists():
             raise FileNotFoundError(f"Source root does not exist: {source_root.path}")
@@ -285,7 +270,7 @@ def _discover_and_parse_notes(
     note_records: list[NoteRecord] = []
     validation_issues: list[dict[str, Any]] = []
     skipped_sources: list[dict[str, Any]] = []
-    exclude_globs = config.corpus_exclude_globs
+    exclude_globs = config.vault_exclude_globs
     for source_root in source_roots:
         for note_path in sorted(source_root.path.rglob("*.md")):
             relative_path = note_path.relative_to(source_root.path).as_posix()

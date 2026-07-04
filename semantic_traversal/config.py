@@ -59,15 +59,9 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "request_timeout_seconds": int,
     },
     "paths": {
-        "corpus_roots": [
-            {
-                "label": str,
-                "path": str,
-            },
-        ],
-        "corpus_exclude_globs": [str],
+        "vault_root": str,
         "vault_source_label": str,
-        "vault_data_root_name": str,
+        "vault_exclude_globs": [str],
     },
     "prompts": {
         "semantic_compiler": {
@@ -110,12 +104,6 @@ def validate_sql_identifier(value: str, field: str) -> str:
     if not SQL_IDENTIFIER_RE.fullmatch(value):
         raise ConfigError(f"Invalid SQL identifier for {field}: {value}")
     return value
-
-
-@dataclass(frozen=True)
-class ConfiguredSourceRoot:
-    label: str
-    path: Path
 
 
 @dataclass(frozen=True)
@@ -220,28 +208,16 @@ class RuntimeConfig:
         return int(self.raw["embeddings"]["request_timeout_seconds"])
 
     @property
-    def corpus_roots(self) -> tuple[ConfiguredSourceRoot, ...]:
-        roots: list[ConfiguredSourceRoot] = []
-        for entry in self.raw["paths"]["corpus_roots"]:
-            roots.append(
-                ConfiguredSourceRoot(
-                    label=str(entry["label"]),
-                    path=self.resolve_path(str(entry["path"])),
-                )
-            )
-        return tuple(roots)
-
-    @property
-    def corpus_exclude_globs(self) -> tuple[str, ...]:
-        return tuple(str(value) for value in self.raw["paths"]["corpus_exclude_globs"])
+    def vault_root(self) -> Path:
+        return self.resolve_path(str(self.raw["paths"]["vault_root"]))
 
     @property
     def vault_source_label(self) -> str:
         return str(self.raw["paths"]["vault_source_label"])
 
     @property
-    def vault_data_root_name(self) -> str:
-        return str(self.raw["paths"]["vault_data_root_name"])
+    def vault_exclude_globs(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["paths"]["vault_exclude_globs"])
 
     @property
     def semantic_compiler_prompt_template(self) -> str:
@@ -426,6 +402,10 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError(f"Runtime config must parse to a mapping: {resolved_config_path}")
     _assert_no_secrets(parsed)
     _validate_mapping(parsed, _EXPECTED_CONFIG_SCHEMA, path="root")
+    if not str(parsed["paths"]["vault_root"]).strip():
+        raise ConfigError("Runtime config field paths.vault_root must not be blank")
+    if not str(parsed["paths"]["vault_source_label"]).strip():
+        raise ConfigError("Runtime config field paths.vault_source_label must not be blank")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",

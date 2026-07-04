@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from semantic_traversal.cli import build_ingest_parser, build_turn_parser
 from semantic_traversal.config import load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.hashing import sha256_json
@@ -256,6 +257,17 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
 
 
 class ThesisRuntimeTests(unittest.TestCase):
+    def test_cli_runtime_control_is_config_only(self) -> None:
+        ingest_options = {action.dest for action in build_ingest_parser()._actions}
+        turn_options = {action.dest for action in build_turn_parser()._actions}
+        for removed_option in ("source_root", "vault_root", "data_root", "model", "llm_mode"):
+            self.assertNotIn(removed_option, ingest_options)
+            self.assertNotIn(removed_option, turn_options)
+
+    def test_runtime_config_does_not_reference_test_fixtures_as_vault_root(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        self.assertNotIn("tests/fixtures", config.vault_root.as_posix())
+
     def test_ingest_rejects_missing_or_invalid_uuid_and_writes_failure_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir)
@@ -294,7 +306,7 @@ class ThesisRuntimeTests(unittest.TestCase):
                 uuid_value="66666666-6666-4666-8666-666666666666",
             )
             config = load_runtime_config(repo_root=REPO_ROOT)
-            config.raw["paths"]["corpus_exclude_globs"] = [".obsidian/**"]
+            config.raw["paths"]["vault_exclude_globs"] = [".obsidian/**"]
 
             result = run_ingest(
                 repo_root=REPO_ROOT,
@@ -318,7 +330,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             _write_markdown_note(source_root, ".obsidian/Plugin.md", "Plugin support markdown without uuid.")
             _write_markdown_note(source_root, "Missing.md", "This non-excluded file must still fail.")
             config = load_runtime_config(repo_root=REPO_ROOT)
-            config.raw["paths"]["corpus_exclude_globs"] = [".obsidian/**"]
+            config.raw["paths"]["vault_exclude_globs"] = [".obsidian/**"]
 
             with self.assertRaises(IngestFrontmatterError) as exc_info:
                 run_ingest(

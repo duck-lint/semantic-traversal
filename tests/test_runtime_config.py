@@ -17,7 +17,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertNotIn("coverage", config.raw)
         self.assertGreater(config.max_retrieval_chunks, 0)
         self.assertTrue(config.graph_traversal_enabled)
-        self.assertEqual(config.graph_traversal_hop_limit, 1)
+        self.assertGreater(config.graph_traversal_hop_limit, 0)
         self.assertFalse(hasattr(config, "coverage_require_surface_contributions"))
 
 

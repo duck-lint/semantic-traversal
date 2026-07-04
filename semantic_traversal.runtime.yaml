@@ -37,19 +37,14 @@ embeddings:
   request_timeout_seconds: 60
 
 paths:
-  corpus_roots:
-    - label: "corpus"
-      path: "corpus"
-    - label: "tests-fixtures"
-      path: "tests/fixtures"
-  corpus_exclude_globs:
+  vault_root: "corpus"
+  vault_source_label: "vault"
+  vault_exclude_globs:
     - ".semantic-traversal/**"
     - ".semantic-traversal-data/**"
     - ".obsidian/**"
-    - "/VAULT DESIGN/(.)MD TEMPLATES"
-    - "/VAULT DESIGN/ATTACHMENTS"
-  vault_source_label: "vault"
-  vault_data_root_name: ".semantic-traversal"
+    - "VAULT DESIGN/(.)MD TEMPLATES/**"
+    - "VAULT DESIGN/ATTACHMENTS/**"
 
 prompts:
   semantic_compiler:

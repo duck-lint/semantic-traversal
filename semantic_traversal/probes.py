@@ -172,14 +172,13 @@ def probe_fixture_lexical_retrieval_hit(data_root: Path) -> dict[str, Any]:
 
 def build_probe_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run tiny semantic-traversal probes.")
-    parser.add_argument("--data-root", default=str(_default_probe_root()))
     parser.add_argument("probe", choices=("new-thread", "continue-thread", "fixture-lexical-hit"))
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_probe_parser().parse_args(argv)
-    data_root = Path(args.data_root).resolve()
+    data_root = _default_probe_root().resolve()
     if args.probe == "new-thread":
         payload = probe_new_thread_minimal_turn(data_root=data_root)
     elif args.probe == "continue-thread":
