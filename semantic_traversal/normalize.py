@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import difflib
-import fnmatch
 import json
 import re
 import unicodedata
@@ -103,7 +102,10 @@ SMALL_TITLE_WORDS = {
 ROMAN_NUMERAL_RE = re.compile(r"^(?=[ivxlcdm]+$)[ivxlcdm]+$", re.I)
 SPEAKER_RE = re.compile(r"^[A-Z][A-Z'’.-]{1,25}:\s*")
 TIMELINE_ENTRY_RE = re.compile(r"^\s*(1[789]\d{2}|20\d{2})\s*[-–]\s+.+")
-PAGE_NUMBER_RE = re.compile(r"^\s*(?:[ivxlcdm]+|[i1][o0]|\d{1,4})\s*$", re.I)
+# Do not treat standalone Roman numerals as page numbers here. They often
+# carry real book structure (for example PART / I or CHAPTER / IV), and the
+# manual expected-heading matcher needs to see them before cleanup can decide.
+PAGE_NUMBER_RE = re.compile(r"^\s*(?:[i1][o0]|\d{1,4})\s*$", re.I)
 STANDALONE_STEPHANUS_RE = re.compile(r"^\s*(?:\d{3,4}[a-eA-Eа-сА-С]?|[a-eA-Eа-сА-С])\s*$")
 INLINE_STEPHANUS_RE = re.compile(r"\b\d{3,4}\s*[a-eA-Eа-сА-С]\b")
 TRAILING_SINGLE_REF_RE = re.compile(r"([*!?;:])\s+[b-eB-EсС]\s*$")
@@ -348,12 +350,22 @@ def clean_reference_noise(line: str, line_no: int, reference_style: str, edits: 
     return cleaned
 
 
+def _apply_explicit_token_repair(text: str, before: str, after: str) -> str:
+    # Compact OCR/browser glitches such as "ofthe" should only be repaired as
+    # whole tokens. Phrase-level repairs keep exact replacement semantics because
+    # their spaces/punctuation already make accidental mid-token matches unlikely.
+    if re.fullmatch(r"[\w'’]+", before):
+        return re.sub(rf"(?<!\w){re.escape(before)}(?!\w)", after, text)
+    return text.replace(before, after)
+
+
 def apply_token_repairs(text: str, source_line: int | None, edits: list[Edit]) -> str:
     repaired = text
     for before, after in TOKEN_REPAIRS.items():
-        if before in repaired:
+        updated = _apply_explicit_token_repair(repaired, before, after)
+        if updated != repaired:
             old = repaired
-            repaired = repaired.replace(before, after)
+            repaired = updated
             edits.append(Edit(
                 kind="token_spacing_repair",
                 line_number=source_line,
@@ -473,8 +485,6 @@ def match_expected_heading_at(
         candidate = collect_candidate_text(lines, start_index, line_count)
         if candidate is None:
             break
-        if len(candidate) > 180 or looks_like_toc_entry_or_page_header(candidate):
-            continue
         candidate_key = normalize_for_match(candidate)
         if candidate_key == expected.match_key:
             return line_count, candidate, 1.0
@@ -482,6 +492,8 @@ def match_expected_heading_at(
             ratio = difflib.SequenceMatcher(None, candidate_key, expected.match_key).ratio()
             if ratio >= HEADING_FUZZY_RATIO:
                 return line_count, candidate, round(ratio, 3)
+        if len(candidate) > 180 or looks_like_toc_entry_or_page_header(candidate):
+            continue
     return None
 
 
