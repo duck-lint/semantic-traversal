@@ -165,9 +165,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
                 result[key] = cleaned
     focus_terms = _active_focus_terms(packet or {})
     if _is_referential_input(raw_user_input) and focus_terms:
-        result["planner_retrieval_plan"]["resolved_referents"] = list(
-            dict.fromkeys([*result["planner_retrieval_plan"].get("resolved_referents", []), *focus_terms])
-        )
+        result["resolved_referents"] = list(dict.fromkeys([*result["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=result["query"],
@@ -177,6 +175,8 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         resolved_referents=list(result["resolved_referents"]),
     )
     canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan)
+    if _is_referential_input(raw_user_input) and focus_terms:
+        canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *focus_terms]))
     result["planner_retrieval_plan"] = canonical_plan
     result["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(

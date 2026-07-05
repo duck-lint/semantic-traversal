@@ -36,6 +36,22 @@ def _observed_strings(inventory_summary: dict[str, Any], key: str, label_key: st
     return observed
 
 
+def _observed_facet_values(inventory_summary: dict[str, Any], facet_name: str) -> set[str]:
+    facets = inventory_summary.get("frontmatter_facets") if isinstance(inventory_summary, dict) else {}
+    if not isinstance(facets, dict):
+        return set()
+    observed: set[str] = set()
+    for entry in facets.get(facet_name, []):
+        if isinstance(entry, dict):
+            candidate = entry.get("value") or entry.get("label")
+        else:
+            candidate = entry
+        text = str(candidate or "").strip()
+        if text:
+            observed.add(text)
+    return observed
+
+
 def _alias_filters_for_request(request: str, scope_aliases: dict[str, dict[str, Any]]) -> dict[str, list[str] | str | None] | None:
     alias = scope_aliases.get(request)
     if alias is None:
@@ -55,7 +71,7 @@ def bind_retrieval_plan(
     raw_user_input: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     scope_aliases = config.retrieval_scope_aliases
-    observed_note_types = _observed_strings(inventory_summary, "frontmatter_facets")
+    observed_note_types = _observed_facet_values(inventory_summary, "note_type")
     observed_source_labels = _observed_strings(inventory_summary, "observed_source_labels", "label")
     observed_paths = _observed_strings(inventory_summary, "path_topology")
     scope_filters: dict[str, Any] = {"source_label": None, "note_type": [], "path_contains": []}

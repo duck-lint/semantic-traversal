@@ -83,11 +83,12 @@ def build_resource_inventory(
         note_rows = []
         chunk_rows = []
 
+    inventory_rows = note_rows if note_rows else chunk_rows
     source_counter = Counter()
     note_type_counter = Counter()
     top_level_counter = Counter()
     second_level_counter = Counter()
-    for row in [*note_rows, *chunk_rows]:
+    for row in inventory_rows:
         source_label = str(row["source_root_label"] or "").strip()
         if source_label:
             source_counter[source_label] += 1
@@ -108,9 +109,9 @@ def build_resource_inventory(
                 note_type_counter[note_type.strip()] += 1
 
     summary["observed_source_labels"] = [{"label": label, "count": count} for label, count in sorted(source_counter.items())]
-    summary["frontmatter_facets"]["note_type"] = _counts_from_rows(list(note_type_counter.elements()))
-    summary["path_topology"]["top_level"] = _counts_from_rows(list(top_level_counter.elements()))
-    summary["path_topology"]["second_level"] = _counts_from_rows(list(second_level_counter.elements()))
+    summary["frontmatter_facets"]["note_type"] = [{"value": value, "count": count} for value, count in sorted(note_type_counter.items())]
+    summary["path_topology"]["top_level"] = [{"value": value, "count": count} for value, count in sorted(top_level_counter.items())]
+    summary["path_topology"]["second_level"] = [{"value": value, "count": count} for value, count in sorted(second_level_counter.items())]
     summary["graph_capabilities"] = {
         "nodes_table_present": _table_exists(connection, config.graph_nodes_table),
         "edges_table_present": _table_exists(connection, config.graph_edges_table),
@@ -133,4 +134,3 @@ def build_resource_inventory(
             summary["graph_capabilities"]["edge_count"] = 0
     summary["scope_aliases"] = config.retrieval_scope_aliases
     return summary
-

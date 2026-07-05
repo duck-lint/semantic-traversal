@@ -802,16 +802,21 @@ def _graph_seed_values(
     config: RuntimeConfig,
 ) -> list[tuple[str, str]]:
     seeds: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
     configured_sources = set(config.graph_traversal_seed_sources)
-    for value in _coerce_string_list(planner_retrieval_plan.get("graph_seeds")):
-        seeds.append(("graph_seeds", value))
     if "graph_seeds" in configured_sources:
-        for value in _coerce_string_list(planner_retrieval_plan.get("semantic_queries")):
-            seeds.append(("graph_seeds", value))
+        for value in _coerce_string_list(planner_retrieval_plan.get("graph_seeds")):
+            seed = ("graph_seeds", value)
+            if seed not in seen:
+                seen.add(seed)
+                seeds.append(seed)
     if "semantic_queries" in configured_sources:
         for value in _coerce_string_list(planner_retrieval_plan.get("semantic_queries")):
-            seeds.append(("semantic_queries", value))
+            seed = ("semantic_queries", value)
+            if seed not in seen:
+                seen.add(seed)
+                seeds.append(seed)
     if "active_focus" in configured_sources:
         for value in (
             active_focus.get("query"),
@@ -825,7 +830,10 @@ def _graph_seed_values(
             active_focus.get("selected_section_labels"),
         ):
             for item in _coerce_string_list(value):
-                seeds.append(("active_focus", item))
+                seed = ("active_focus", item)
+                if seed not in seen:
+                    seen.add(seed)
+                    seeds.append(seed)
     return [(source, seed) for source, seed in seeds if seed]
 
 
@@ -1863,6 +1871,22 @@ def run_thread_turn(
         response=compiler_response,
         semantic_compiler_status=semantic_compiler_status,
     )
+    planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    if not planner_retrieval_plan:
+        planner_retrieval_plan = build_default_retrieval_plan(
+            raw_user_input=user_input,
+            query=str(semantic_compiler_packet.get("query") or ""),
+            concepts=_coerce_string_list(semantic_compiler_packet.get("concepts")),
+            scope_requests=_coerce_string_list(semantic_compiler_packet.get("scope_requests")),
+            graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
+            resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
+        )
+    bound_retrieval_plan, resolver_adjustments, resource_inventory_summary = bind_retrieval_plan(
+        planner_retrieval_plan=planner_retrieval_plan,
+        inventory_summary=resource_inventory_summary,
+        config=resolved_config,
+        raw_user_input=user_input,
+    )
 
     if database_path.exists():
         if embedding_backend is None:
@@ -1880,11 +1904,10 @@ def run_thread_turn(
         finally:
             connection.close()
     else:
-        planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
         semantic_traversal_manifest = {
             "planner_retrieval_plan": planner_retrieval_plan,
-            "bound_retrieval_plan": planner_retrieval_plan,
-            "resolver_adjustments": [],
+            "bound_retrieval_plan": bound_retrieval_plan,
+            "resolver_adjustments": resolver_adjustments,
             "resource_inventory_summary": resource_inventory_summary,
             "execution": {"layers_executed": [], "layers_skipped": []},
             "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
@@ -1903,7 +1926,7 @@ def run_thread_turn(
             "limits": ["No ingestion database available."],
         }
         retrieval_packet = {
-            "bound_retrieval_plan": planner_retrieval_plan,
+            "bound_retrieval_plan": bound_retrieval_plan,
             "coverage": semantic_traversal_manifest["coverage"],
             "limits": semantic_traversal_manifest["limits"],
             "selected_chunks": [],

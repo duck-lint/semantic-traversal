@@ -235,12 +235,22 @@ def _turn_artifact(path: Path) -> dict[str, Any]:
     return load_json(path) or {}
 
 
-def _write_markdown_note(root: Path, relative_path: str, body: str, *, uuid_value: str | None = None) -> Path:
+def _write_markdown_note(
+    root: Path,
+    relative_path: str,
+    body: str,
+    *,
+    uuid_value: str | None = None,
+    frontmatter: dict[str, Any] | None = None,
+) -> Path:
     path = root / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     if uuid_value is not None:
         lines.append(f"uuid: {uuid_value}")
+    if frontmatter:
+        for key, value in frontmatter.items():
+            lines.append(f"{key}: {value}")
     lines.append("---")
     lines.append("")
     lines.append(body.strip())
@@ -275,6 +285,40 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
         },
         "limitations": [],
     }
+
+
+def _prepare_multi_chunk_inventory_data_root() -> Path:
+    temp_dir = tempfile.TemporaryDirectory()
+    data_root = Path(temp_dir.name)
+    _prepare_multi_chunk_inventory_data_root._temp_dirs.append(temp_dir)  # type: ignore[attr-defined]
+    source_root = data_root / "multi-chunk-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    _write_markdown_note(
+        source_root,
+        "Journal.md",
+        """
+        # Journal
+
+        First paragraph about candy.
+
+        Second paragraph about sleep.
+
+        Third paragraph about bed.
+        """,
+        uuid_value="dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        frontmatter={"note_type": "journal_entry"},
+    )
+    config = load_runtime_config(repo_root=REPO_ROOT)
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="tests-fixtures", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+    )
+    return data_root
+
+
+_prepare_multi_chunk_inventory_data_root._temp_dirs = []  # type: ignore[attr-defined]
 
 
 class ThesisRuntimeTests(unittest.TestCase):
@@ -810,6 +854,50 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(result.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
         self.assertTrue(any(note.startswith("graph traversal enabled=") or note == "graph traversal disabled" for note in result.semantic_traversal_manifest["selection_notes"]))
 
+    def test_graph_seed_sources_keep_literal_labels(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "A and B",
+                "intent": "fixture response",
+                "query": "A and B",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": [],
+                    "concepts": ["A", "B"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["B"],
+                    "lexical_queries": ["A", "B"],
+                    "graph_seeds": ["A"],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A and B",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        reasons_by_title = {chunk["note_title"]: chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]}
+        self.assertIn("graph_seeds graph seed matched note", reasons_by_title.get("A", ""))
+        self.assertIn("semantic_queries graph seed matched note", reasons_by_title.get("B", ""))
+        self.assertNotIn("graph_seeds graph seed matched note", reasons_by_title.get("B", ""))
+
     def test_referential_second_turn_augments_semantic_compiler_request_with_active_focus(self) -> None:
         data_root = _prepare_data_root()
         first_turn_payload = {
@@ -916,6 +1004,60 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(any("candy snack food before bed" in query for query in planner_plan["semantic_queries"]))
         for junk_term in ("raw_user_input", "assistant_response_snippet", "selected_chunk_ids", "selected_note_titles", "{"):
             self.assertNotIn(junk_term, planner_plan["concepts"])
+
+    def test_referential_second_turn_preserves_resolved_referents_after_canonicalization(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "How does it make me feel?",
+                "intent": "fixture response",
+                "query": "how does it make me feel",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": [],
+                    "concepts": ["feelings"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["how does it make me feel"],
+                    "lexical_queries": ["feelings"],
+                    "graph_seeds": ["how does it make me feel"],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="How does it make me feel?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        resolved_referents = second_turn.semantic_compiler_packet["planner_retrieval_plan"]["resolved_referents"]
+        self.assertIn("candy", resolved_referents)
+        self.assertIn("bed", resolved_referents)
+        self.assertIn("candy", second_turn.next_thread_state["active_focus"]["resolved_referents"])
+        self.assertIn("bed", second_turn.next_thread_state["active_focus"]["resolved_referents"])
 
     def test_recent_semantic_turns_are_capped_to_small_tail(self) -> None:
         data_root = _prepare_data_root()
@@ -1266,6 +1408,96 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertNotIn("philosophy", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
         self.assertIn("scope_filters", result.semantic_compiler_packet["planner_diagnostics"]["ignored_planner_fields"])
 
+    def test_no_database_path_still_resolves_scope_aliases(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        data_root = Path(temp_dir.name)
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "search journal",
+                "intent": "fixture response",
+                "query": "search journal",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": ["journal"],
+                    "scope_filters": {"note_type": ["philosophy"]},
+                    "concepts": ["journal"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["search journal"],
+                    "lexical_queries": ["journal"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal",
+            llm_backend=RecordingLLMBackend(),
+            config=config,
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertNotIn("scope_filters", result.semantic_compiler_packet["planner_retrieval_plan"])
+        self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_alias")
+
+    def test_resolver_binds_observed_note_type_without_alias(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "search journal_entry",
+                "intent": "fixture response",
+                "query": "search journal_entry",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": ["journal_entry"],
+                    "concepts": ["journal_entry"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["search journal_entry"],
+                    "lexical_queries": ["journal_entry"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal_entry",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_observed_note_type")
+
     def test_resource_inventory_observes_frontmatter_note_type(self) -> None:
         data_root = _prepare_data_root()
         result = run_thread_turn(
@@ -1278,6 +1510,21 @@ class ThesisRuntimeTests(unittest.TestCase):
         )
         facets = result.semantic_traversal_manifest["resource_inventory_summary"]["frontmatter_facets"]["note_type"]
         self.assertTrue(any(entry["value"] == "journal_entry" and entry["count"] > 0 for entry in facets))
+
+    def test_resource_inventory_counts_notes_not_chunks(self) -> None:
+        data_root = _prepare_multi_chunk_inventory_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal for candy",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        facets = result.semantic_traversal_manifest["resource_inventory_summary"]["frontmatter_facets"]["note_type"]
+        self.assertTrue(any(entry["value"] == "journal_entry" and entry["count"] == 1 for entry in facets))
+        source_labels = result.semantic_traversal_manifest["resource_inventory_summary"]["observed_source_labels"]
+        self.assertTrue(any(entry["count"] == 1 for entry in source_labels))
 
     def test_compiler_request_packet_includes_compact_resource_inventory(self) -> None:
         data_root = _prepare_data_root()
