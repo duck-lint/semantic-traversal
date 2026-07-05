@@ -14,12 +14,14 @@ class RuntimeConfigTests(unittest.TestCase):
         config = load_runtime_config(repo_root=REPO_ROOT)
         self.assertIn("graph_traversal", config.raw)
         self.assertIn("retrieval", config.raw)
+        self.assertIn("scope_aliases", config.raw["retrieval"])
         self.assertNotIn("runtime", config.raw)
         self.assertNotIn("coverage", config.raw)
         self.assertGreater(config.max_retrieval_chunks, 0)
         self.assertTrue(config.graph_traversal_enabled)
         self.assertGreater(config.graph_traversal_hop_limit, 0)
         self.assertFalse(hasattr(config, "coverage_require_surface_contributions"))
+        self.assertIn("journal", config.retrieval_scope_aliases)
 
     def test_relative_data_root_resolves_under_vault_root(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)

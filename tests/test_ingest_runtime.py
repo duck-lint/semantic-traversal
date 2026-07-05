@@ -19,6 +19,7 @@ from semantic_traversal.runtime import (
     _select_retrieval_chunks,
     run_thread_turn,
 )
+from semantic_traversal.retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
 from semantic_traversal.semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from semantic_traversal.storage import load_json, read_ledger
 
@@ -49,6 +50,14 @@ class TestSemanticCompilerBackend:
         raw_user_input = str(packet.get("raw_user_input") or "")
         query = raw_user_input.strip()
         terms = collect_compiler_terms(raw_user_input)
+        planner_retrieval_plan = build_default_retrieval_plan(
+            raw_user_input=raw_user_input,
+            query=query,
+            concepts=terms,
+            scope_requests=scope_requests_from_text(raw_user_input),
+            graph_seeds=[query] if query else [],
+            resolved_referents=[],
+        )
         return SemanticCompilerResponse(
             parsed_payload={
                 "raw_user_input": raw_user_input,
@@ -57,9 +66,7 @@ class TestSemanticCompilerBackend:
                 "entities": [],
                 "relations": [],
                 "resolved_referents": [],
-                "retrieval_terms": terms,
-                "vector_query": query,
-                "graph_seeds": [query] if terms else [],
+                "planner_retrieval_plan": planner_retrieval_plan,
                 "limitations": ["test compiler backend used"],
             },
             raw_response=None,
@@ -249,9 +256,23 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
         "entities": [],
         "relations": [],
         "resolved_referents": [],
-        "retrieval_terms": [],
-        "vector_query": "",
-        "graph_seeds": graph_seeds,
+        "planner_retrieval_plan": {
+            "intent_type": "semantic_traversal",
+            "scope_requests": [],
+            "concepts": [],
+            "resolved_referents": [],
+            "literal_terms": [],
+            "semantic_queries": [raw_user_input] if raw_user_input else [],
+            "lexical_queries": [],
+            "graph_seeds": graph_seeds,
+            "retrieval_layers": [
+                {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                {"operator": "vector_search", "required": False, "limit": 24},
+                {"operator": "graph_expand", "required": False, "depth": 1},
+            ],
+            "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+            "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+        },
         "limitations": [],
     }
 
@@ -641,7 +662,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.runtime_outcome, "completed")
         self.assertEqual(result.next_thread_state["latest_turn_id"], 1)
         self.assertEqual(result.next_thread_state["active_focus"]["query"], "Please retrieve the candy snack food before bed note.")
-        self.assertTrue(result.next_thread_state["active_focus"]["retrieval_terms"])
+        self.assertTrue(result.next_thread_state["active_focus"]["concepts"])
         self.assertTrue(result.next_thread_state["active_focus"]["selected_chunk_ids"])
 
     def test_second_turn_loads_prior_active_focus(self) -> None:
@@ -715,10 +736,10 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
+        self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["expanded_note_count"], 0)
         selected_titles = [chunk["note_title"] for chunk in result.retrieval_packet["selected_chunks"]]
         self.assertIn("A", selected_titles)
-        self.assertNotIn("B", selected_titles)
-        self.assertNotIn("C", selected_titles)
+        self.assertFalse(any("wikilink hop 1" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
 
     def test_alias_wikilink_still_resolves_canonical_target_note(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
@@ -748,7 +769,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             config=config,
         )
         self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["edge_types_used"], [])
-        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["graph"], len([chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["selection_reason"].startswith("graph")]))
+        self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["expanded_note_count"], 0)
         self.assertFalse(any("wikilink hop" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
 
     def test_active_focus_can_supply_graph_seeds_on_referential_second_turn(self) -> None:
@@ -798,9 +819,23 @@ class ThesisRuntimeTests(unittest.TestCase):
             "entities": [],
             "relations": [],
             "resolved_referents": [],
-            "retrieval_terms": ["candy", "snack", "food", "bed"],
-            "vector_query": "candy snack food before bed",
-            "graph_seeds": ["candy snack food before bed"],
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal",
+                "scope_requests": [],
+                "concepts": ["candy", "snack", "food", "bed"],
+                "resolved_referents": [],
+                "literal_terms": ["candy", "snack", "food", "bed"],
+                "semantic_queries": ["candy snack food before bed"],
+                "lexical_queries": ["candy", "snack", "food", "bed"],
+                "graph_seeds": ["candy snack food before bed"],
+                "retrieval_layers": [
+                    {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                    {"operator": "vector_search", "required": False, "limit": 24},
+                    {"operator": "graph_expand", "required": False, "depth": 1},
+                ],
+                "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+            },
             "limitations": [],
         }
         first_turn = run_thread_turn(
@@ -818,9 +853,23 @@ class ThesisRuntimeTests(unittest.TestCase):
             "entities": [],
             "relations": [],
             "resolved_referents": [],
-            "retrieval_terms": ["feel"],
-            "vector_query": "how does it make me feel",
-            "graph_seeds": [],
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal",
+                "scope_requests": [],
+                "concepts": ["feel"],
+                "resolved_referents": [],
+                "literal_terms": [],
+                "semantic_queries": ["how does it make me feel"],
+                "lexical_queries": ["feel"],
+                "graph_seeds": [],
+                "retrieval_layers": [
+                    {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                    {"operator": "vector_search", "required": False, "limit": 24},
+                    {"operator": "graph_expand", "required": False, "depth": 1},
+                ],
+                "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+            },
             "limitations": [],
         }
         compiler_backend = RecordingCompilerBackend(second_turn_payload)
@@ -836,7 +885,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(len(compiler_backend.calls), 1)
         request_packet = compiler_backend.calls[0]
         self.assertIn("active_focus", request_packet)
-        self.assertTrue(request_packet["active_focus"]["retrieval_terms"])
+        self.assertTrue(request_packet["active_focus"]["concepts"])
         self.assertTrue(request_packet["recent_semantic_turns"])
         self.assertEqual(request_packet["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
         self.assertEqual(second_turn.prior_thread_state["active_focus"]["query"], first_turn.next_thread_state["active_focus"]["query"])
@@ -861,12 +910,12 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(second_turn.semantic_compiler_status, "fallback")
-        retrieval_terms = second_turn.semantic_compiler_packet["retrieval_terms"]
-        self.assertIn("candy", retrieval_terms)
-        self.assertIn("bed", retrieval_terms)
-        self.assertIn("candy snack food before bed", second_turn.semantic_compiler_packet["vector_query"])
+        planner_plan = second_turn.semantic_compiler_packet["planner_retrieval_plan"]
+        self.assertIn("candy", planner_plan["concepts"])
+        self.assertIn("bed", planner_plan["concepts"])
+        self.assertTrue(any("candy snack food before bed" in query for query in planner_plan["semantic_queries"]))
         for junk_term in ("raw_user_input", "assistant_response_snippet", "selected_chunk_ids", "selected_note_titles", "{"):
-            self.assertNotIn(junk_term, retrieval_terms)
+            self.assertNotIn(junk_term, planner_plan["concepts"])
 
     def test_recent_semantic_turns_are_capped_to_small_tail(self) -> None:
         data_root = _prepare_data_root()
@@ -942,8 +991,23 @@ class ThesisRuntimeTests(unittest.TestCase):
             "raw_user_input": "I want journal anecdotes and isomorphic bridges for the 4-Fold Root video.",
             "intent": "find journal anecdotes",
             "query": "journal anecdotes and bridges",
-            "retrieval_terms": ["journal", "anecdotes", "bridges"],
-            "graph_seeds": ["journal entries"],
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal",
+                "scope_requests": ["journal"],
+                "concepts": ["anecdotes", "bridges"],
+                "resolved_referents": [],
+                "literal_terms": [],
+                "semantic_queries": ["journal anecdotes and bridges"],
+                "lexical_queries": ["journal", "anecdotes", "bridges"],
+                "graph_seeds": ["journal entries"],
+                "retrieval_layers": [
+                    {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                    {"operator": "vector_search", "required": False, "limit": 24},
+                    {"operator": "graph_expand", "required": False, "depth": 1},
+                ],
+                "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+            },
         }
         journal_candidate = {
             "chunk_id": "journal",
@@ -981,8 +1045,23 @@ class ThesisRuntimeTests(unittest.TestCase):
             "raw_user_input": "Review the inferential bridge template YAML schema.",
             "intent": "review template",
             "query": "inferential bridge template YAML schema",
-            "retrieval_terms": ["template", "yaml", "schema"],
-            "graph_seeds": ["Inferential Bridge Template"],
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal",
+                "scope_requests": [],
+                "concepts": ["template", "yaml", "schema"],
+                "resolved_referents": [],
+                "literal_terms": [],
+                "semantic_queries": ["inferential bridge template YAML schema"],
+                "lexical_queries": ["template", "yaml", "schema"],
+                "graph_seeds": ["Inferential Bridge Template"],
+                "retrieval_layers": [
+                    {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                    {"operator": "vector_search", "required": False, "limit": 24},
+                    {"operator": "graph_expand", "required": False, "depth": 1},
+                ],
+                "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+            },
         }
         template_candidate = {
             "chunk_id": "template",
@@ -1052,7 +1131,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
         self.assertEqual(second_turn.semantic_compiler_status, "fallback")
-        joined_graph_seeds = "\n".join(second_turn.semantic_compiler_packet["graph_seeds"])
+        joined_graph_seeds = "\n".join(second_turn.semantic_compiler_packet["planner_retrieval_plan"]["graph_seeds"])
         self.assertNotIn("Recorded assistant response", joined_graph_seeds)
         self.assertNotIn("assistant response", joined_graph_seeds.lower())
 
@@ -1082,14 +1161,167 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
 
-        retrieval_plan = result.semantic_compiler_packet["retrieval_plan"]
+        retrieval_plan = result.semantic_compiler_packet["planner_retrieval_plan"]
         self.assertEqual(retrieval_plan["intent_type"], "scoped_exact_search")
         self.assertEqual([entry["term"] for entry in retrieval_plan["literal_terms"]], ["candy"])
-        self.assertIn("journal", retrieval_plan["scope_filters"]["path_contains"])
+        self.assertIn("journal", retrieval_plan["scope_requests"])
+        self.assertNotIn("scope_filters", retrieval_plan)
         self.assertIn("exact_chunk_search", result.semantic_traversal_manifest["execution"]["layers_executed"])
+        self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertTrue(result.semantic_traversal_manifest["resource_inventory_summary"]["frontmatter_facets"]["note_type"])
+        self.assertIn("planner_retrieval_plan", result.semantic_traversal_manifest)
+        self.assertIn("bound_retrieval_plan", result.semantic_traversal_manifest)
+        self.assertIn("resolver_adjustments", result.semantic_traversal_manifest)
+        self.assertIn("resource_inventory_summary", result.semantic_traversal_manifest)
         self.assertGreater(result.semantic_traversal_manifest["coverage"]["total_exact_matches"], 0)
         self.assertTrue(result.semantic_traversal_manifest["coverage"]["exact_search_performed"])
         self.assertTrue(any("exact" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
+
+    def test_unknown_scope_request_demotes_in_resolver(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "What about philosophy and influence?",
+                "intent": "fixture response",
+                "query": "what about philosophy and influence",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": ["philosophy"],
+                    "concepts": ["influence", "Schopenhauer"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["what about philosophy and influence"],
+                    "lexical_queries": ["influence", "Schopenhauer"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="What about philosophy and influence?",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertNotIn("philosophy", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertTrue(result.semantic_traversal_manifest["resolver_adjustments"])
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "demoted_to_concept")
+        self.assertIn("philosophy", result.semantic_traversal_manifest["planner_retrieval_plan"]["scope_requests"])
+        self.assertIn("influence", result.semantic_traversal_manifest["planner_retrieval_plan"]["concepts"])
+
+    def test_planner_cannot_emit_hard_scope_filters(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "search philosophy",
+                "intent": "fixture response",
+                "query": "search philosophy",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": ["philosophy"],
+                    "scope_filters": {"note_type": ["philosophy"]},
+                    "concepts": ["philosophy"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["search philosophy"],
+                    "lexical_queries": ["philosophy"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search philosophy",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertNotIn("scope_filters", result.semantic_compiler_packet["planner_retrieval_plan"])
+        self.assertNotIn("philosophy", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertIn("scope_filters", result.semantic_compiler_packet["planner_diagnostics"]["ignored_planner_fields"])
+
+    def test_resource_inventory_observes_frontmatter_note_type(self) -> None:
+        data_root = _prepare_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal for candy",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        facets = result.semantic_traversal_manifest["resource_inventory_summary"]["frontmatter_facets"]["note_type"]
+        self.assertTrue(any(entry["value"] == "journal_entry" and entry["count"] > 0 for entry in facets))
+
+    def test_compiler_request_packet_includes_compact_resource_inventory(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = RecordingCompilerBackend(
+            {
+                "raw_user_input": "Please retrieve the candy snack food before bed note.",
+                "intent": "fixture response",
+                "query": "candy snack food before bed",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": [],
+                    "concepts": ["candy", "snack", "food", "bed"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["candy snack food before bed"],
+                    "lexical_queries": ["candy", "snack", "food", "bed"],
+                    "graph_seeds": ["candy snack food before bed"],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            }
+        )
+        run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        request_packet = compiler_backend.calls[0]
+        self.assertIn("resource_inventory_summary", request_packet)
+        self.assertIn("scope_aliases", request_packet)
+        self.assertIn("frontmatter_facets", request_packet["resource_inventory_summary"])
+        self.assertNotIn("paragraph_text", request_packet["resource_inventory_summary"])
 
     def test_vector_only_retrieval_forbids_corpus_wide_negative_claims(self) -> None:
         data_root = _prepare_data_root()
@@ -1173,9 +1405,23 @@ class ThesisRuntimeTests(unittest.TestCase):
                 "entities": [],
                 "relations": [],
                 "resolved_referents": [],
-                "retrieval_terms": ["candy", "snack", "food", "bed"],
-                "vector_query": "candy snack food before bed",
-                "graph_seeds": ["candy snack food before bed"],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": [],
+                    "concepts": ["candy", "snack", "food", "bed"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["candy snack food before bed"],
+                    "lexical_queries": ["candy", "snack", "food", "bed"],
+                    "graph_seeds": ["candy snack food before bed"],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
                 "limitations": [],
             },
             raw_response="secret raw compiler response",

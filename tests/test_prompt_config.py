@@ -34,6 +34,11 @@ class PromptConfigTests(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_runtime_config(repo_root=REPO_ROOT, config_path=str(config_path))
 
+    def test_semantic_compiler_prompt_template_uses_planner_retrieval_plan(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        self.assertIn("planner_retrieval_plan", config.semantic_compiler_prompt_template)
+        self.assertNotIn("scope_filters", config.semantic_compiler_prompt_template)
+
 
 if __name__ == "__main__":
     unittest.main()

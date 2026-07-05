@@ -1,5 +1,12 @@
 retrieval:
   max_chunks: 24
+  scope_aliases:
+    journal:
+      note_type:
+        - journal_entry
+    personal_reflection:
+      note_type:
+        - journal_entry
   exact:
     max_matches: 200
     context_chars: 240
@@ -19,7 +26,7 @@ graph_traversal:
   seed_sources:
     - graph_seeds
     - active_focus
-    - retrieval_terms
+    - semantic_queries
   edge_type_allowlist:
     - note_links_note
   node_type_allowlist:
@@ -63,10 +70,10 @@ prompts:
   semantic_compiler:
     template: |
       Return JSON only.
-      Compile a retrieval plan for deterministic multi-surface retrieval. Do not answer the user.
-      Separate conversational meaning into distinct roles: resolved referents, literal terms, semantic queries, lexical queries, graph seeds, and scope filters.
+      Compile a soft retrieval plan for deterministic resolution and retrieval execution. Do not answer the user.
+      Separate conversational meaning into distinct roles: scope requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
       Treat search/find/list/mentions/occurrences requests as exact-search requests when possible.
-      Treat words like journal or daily as scope filters when the user asks to search journal material; do not use scope words as literal corpus terms unless the user explicitly asks for the word itself.
+      Treat words like journal or daily as soft scope requests when the user asks for journal material; do not emit note_type, path, or source filters.
       Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.
       Preserve the raw user input exactly.
       Use this exact canonical shape:
@@ -77,13 +84,11 @@ prompts:
         "entities": [],
         "relations": [],
         "resolved_referents": [],
-        "retrieval_terms": [],
-        "vector_query": "",
-        "graph_seeds": [],
-        "retrieval_plan": {
+        "planner_retrieval_plan": {
           "intent_type": "semantic_traversal",
+          "scope_requests": [],
+          "concepts": [],
           "resolved_referents": [],
-          "scope_filters": {"source_label": null, "note_type": [], "path_contains": []},
           "literal_terms": [],
           "semantic_queries": [],
           "lexical_queries": [],
@@ -93,7 +98,7 @@ prompts:
             {"operator": "vector_search", "required": false, "limit": 24},
             {"operator": "graph_expand", "required": false, "depth": 1}
           ],
-          "selection_policy": {"dedupe_by": "chunk_id", "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}, "preserve_required_layers": true},
+          "selection_policy": {"max_chunks": 24, "preserve_required_layers": true, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
           "claim_policy": {"coverage_claims_allowed": false, "negative_claims_require_exact_layer": true}
         },
         "limitations": []
@@ -118,6 +123,7 @@ chunking:
   required_uuid_field: "uuid"
   max_chunk_chars: 2000
   semantic_frontmatter_fields:
+    - note_type
     - tags
     - aliases
     - journal_entry_date

@@ -8,7 +8,11 @@ from urllib import error, request
 
 from .config import RuntimeConfig
 from .hashing import sha256_text
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan
+from .retrieval_plan import (
+    build_default_retrieval_plan,
+    canonicalize_retrieval_plan,
+    scope_requests_from_text,
+)
 
 
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -74,9 +78,10 @@ def collect_compiler_terms(text: str) -> list[str]:
 
 
 def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
-    terms = collect_compiler_terms(raw_user_input)
     query = raw_user_input.strip()
-    graph_seeds = [query] if terms else []
+    concepts = collect_compiler_terms(raw_user_input)
+    scope_requests = scope_requests_from_text(raw_user_input)
+    graph_seeds = [query] if query else []
     packet = {
         "raw_user_input": raw_user_input,
         "intent": "deterministic semantic compiler packet",
@@ -84,19 +89,17 @@ def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
         "entities": [],
         "relations": [],
         "resolved_referents": [],
-        "retrieval_terms": terms,
-        "vector_query": query,
-        "graph_seeds": graph_seeds,
         "limitations": ["deterministic compiler packet used"],
     }
-    packet["retrieval_plan"] = build_default_retrieval_plan(
+    packet["planner_retrieval_plan"] = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=query,
-        retrieval_terms=terms,
-        vector_query=query,
+        concepts=concepts,
+        scope_requests=scope_requests,
         graph_seeds=graph_seeds,
         resolved_referents=[],
     )
+    packet["planner_diagnostics"] = {"ignored_planner_fields": []}
     return packet
 
 
@@ -106,8 +109,12 @@ def _active_focus_terms(packet: dict[str, Any]) -> list[str]:
     if isinstance(active_focus, dict):
         for value in (
             active_focus.get("query"),
-            active_focus.get("vector_query"),
-            active_focus.get("retrieval_terms"),
+            active_focus.get("concepts"),
+            active_focus.get("scope_requests"),
+            active_focus.get("resolved_referents"),
+            active_focus.get("literal_terms"),
+            active_focus.get("semantic_queries"),
+            active_focus.get("lexical_queries"),
             active_focus.get("graph_seeds"),
             active_focus.get("selected_note_titles"),
             active_focus.get("selected_section_labels"),
@@ -142,7 +149,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     result["raw_user_input"] = raw_user_input
     result["intent"] = str(payload.get("intent") or result["intent"]).strip() or result["intent"]
     result["query"] = str(payload.get("query") or result["query"]).strip() or result["query"]
-    for key in ("entities", "relations", "resolved_referents", "retrieval_terms", "graph_seeds", "limitations"):
+    for key in ("entities", "relations", "resolved_referents", "limitations"):
         value = payload.get(key)
         if isinstance(value, list):
             cleaned = []
@@ -156,27 +163,41 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
                     cleaned.append(text)
             if cleaned:
                 result[key] = cleaned
-    vector_query = str(payload.get("vector_query") or result["query"]).strip()
-    result["vector_query"] = vector_query or result["query"]
-    if not result["retrieval_terms"]:
-        result["retrieval_terms"] = collect_compiler_terms(result["query"])
     focus_terms = _active_focus_terms(packet or {})
     if _is_referential_input(raw_user_input) and focus_terms:
-        merged_terms = list(dict.fromkeys([*result["retrieval_terms"], *focus_terms]))
-        result["retrieval_terms"] = merged_terms
-        if result["vector_query"].strip():
-            result["vector_query"] = f"{result['vector_query'].strip()} {' '.join(focus_terms[:6])}".strip()
-    if not result["graph_seeds"] and result["retrieval_terms"]:
-        result["graph_seeds"] = [result["query"]]
+        result["planner_retrieval_plan"]["resolved_referents"] = list(
+            dict.fromkeys([*result["planner_retrieval_plan"].get("resolved_referents", []), *focus_terms])
+        )
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=result["query"],
-        retrieval_terms=list(result["retrieval_terms"]),
-        vector_query=result["vector_query"],
-        graph_seeds=list(result["graph_seeds"]),
+        concepts=collect_compiler_terms(result["query"]),
+        scope_requests=scope_requests_from_text(result["query"]),
+        graph_seeds=[result["query"]] if result["query"].strip() else [],
         resolved_referents=list(result["resolved_referents"]),
     )
-    result["retrieval_plan"] = canonicalize_retrieval_plan(payload.get("retrieval_plan"), fallback=fallback_plan)
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan)
+    result["planner_retrieval_plan"] = canonical_plan
+    result["planner_diagnostics"] = {
+        "ignored_planner_fields": sorted(
+            set(planner_diagnostics.get("ignored_planner_fields") or [])
+            | {
+                key
+                for key in payload
+                if key
+                not in {
+                    "raw_user_input",
+                    "intent",
+                    "query",
+                    "entities",
+                    "relations",
+                    "resolved_referents",
+                    "planner_retrieval_plan",
+                    "limitations",
+                }
+            }
+        )
+    }
     return result
 
 

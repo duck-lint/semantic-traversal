@@ -13,11 +13,9 @@ from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
-from .retrieval_plan import (
-    build_default_retrieval_plan,
-    canonicalize_retrieval_plan,
-    retrieval_plan_layer,
-)
+from .resource_inventory import build_resource_inventory
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, retrieval_plan_layer, scope_requests_from_text
+from .retrieval_resolver import bind_retrieval_plan
 from .semantic_compiler import (
     SemanticCompilerBackend,
     SemanticCompilerResponse,
@@ -37,6 +35,7 @@ STOP_WORDS = {
     "be",
     "but",
     "by",
+    "about",
     "do",
     "for",
     "from",
@@ -52,7 +51,21 @@ STOP_WORDS = {
     "on",
     "or",
     "our",
+    "retrieve",
+    "retrieved",
+    "retrieves",
+    "retrieving",
+    "note",
+    "notes",
+    "regarding",
+    "search",
     "the",
+    "find",
+    "found",
+    "locate",
+    "mention",
+    "mentions",
+    "show",
     "to",
     "with",
     "you",
@@ -69,11 +82,16 @@ def _default_active_focus() -> dict[str, Any]:
         "query": None,
         "entities": [],
         "relations": [],
-        "retrieval_terms": [],
-        "vector_query": None,
-        "graph_seeds": [],
+        "concepts": [],
+        "scope_requests": [],
+        "resolved_referents": [],
         "literal_terms": [],
-        "scope_filters": {},
+        "semantic_queries": [],
+        "lexical_queries": [],
+        "graph_seeds": [],
+        "retrieval_layers": [],
+        "selection_policy": {},
+        "claim_policy": {},
         "selected_chunk_ids": [],
         "selected_note_titles": [],
         "selected_section_labels": [],
@@ -201,11 +219,16 @@ def _ensure_recent_semantic_turns(value: Any) -> list[dict[str, Any]]:
                 "query": query,
                 "entities": _coerce_string_list(entry.get("entities")),
                 "relations": _coerce_string_list(entry.get("relations")),
-                "retrieval_terms": _coerce_string_list(entry.get("retrieval_terms")),
-                "vector_query": str(entry.get("vector_query") or "").strip(),
-                "graph_seeds": _coerce_string_list(entry.get("graph_seeds")),
+                "concepts": _coerce_string_list(entry.get("concepts")),
+                "scope_requests": _coerce_string_list(entry.get("scope_requests")),
+                "resolved_referents": _coerce_string_list(entry.get("resolved_referents")),
                 "literal_terms": _coerce_string_list(entry.get("literal_terms")),
-                "scope_filters": entry.get("scope_filters") if isinstance(entry.get("scope_filters"), dict) else {},
+                "semantic_queries": _coerce_string_list(entry.get("semantic_queries")),
+                "lexical_queries": _coerce_string_list(entry.get("lexical_queries")),
+                "graph_seeds": _coerce_string_list(entry.get("graph_seeds")),
+                "retrieval_layers": entry.get("retrieval_layers") if isinstance(entry.get("retrieval_layers"), list) else [],
+                "selection_policy": entry.get("selection_policy") if isinstance(entry.get("selection_policy"), dict) else {},
+                "claim_policy": entry.get("claim_policy") if isinstance(entry.get("claim_policy"), dict) else {},
                 "selected_chunk_ids": _coerce_string_list(entry.get("selected_chunk_ids")),
                 "selected_note_titles": _coerce_string_list(entry.get("selected_note_titles")),
                 "selected_section_labels": _coerce_string_list(entry.get("selected_section_labels")),
@@ -221,11 +244,16 @@ def _normalize_active_focus(value: Any) -> dict[str, Any]:
     focus["query"] = str(value.get("query") or "").strip() or None
     focus["entities"] = _coerce_string_list(value.get("entities"))
     focus["relations"] = _coerce_string_list(value.get("relations"))
-    focus["retrieval_terms"] = _coerce_string_list(value.get("retrieval_terms"))
-    focus["vector_query"] = str(value.get("vector_query") or "").strip() or None
+    focus["concepts"] = _coerce_string_list(value.get("concepts"))
+    focus["scope_requests"] = _coerce_string_list(value.get("scope_requests"))
+    focus["resolved_referents"] = _coerce_string_list(value.get("resolved_referents"))
     focus["graph_seeds"] = _coerce_string_list(value.get("graph_seeds"))
     focus["literal_terms"] = _coerce_string_list(value.get("literal_terms"))
-    focus["scope_filters"] = value.get("scope_filters") if isinstance(value.get("scope_filters"), dict) else {}
+    focus["semantic_queries"] = _coerce_string_list(value.get("semantic_queries"))
+    focus["lexical_queries"] = _coerce_string_list(value.get("lexical_queries"))
+    focus["retrieval_layers"] = value.get("retrieval_layers") if isinstance(value.get("retrieval_layers"), list) else []
+    focus["selection_policy"] = value.get("selection_policy") if isinstance(value.get("selection_policy"), dict) else {}
+    focus["claim_policy"] = value.get("claim_policy") if isinstance(value.get("claim_policy"), dict) else {}
     focus["selected_chunk_ids"] = _coerce_string_list(value.get("selected_chunk_ids"))
     focus["selected_note_titles"] = _coerce_string_list(value.get("selected_note_titles"))
     focus["selected_section_labels"] = _coerce_string_list(value.get("selected_section_labels"))
@@ -235,13 +263,16 @@ def _normalize_active_focus(value: Any) -> dict[str, Any]:
 def _focus_terms(focus: dict[str, Any]) -> list[str]:
     terms: list[str] = []
     for value in (
-        focus.get("retrieval_terms"),
-        focus.get("graph_seeds"),
+        focus.get("concepts"),
+        focus.get("scope_requests"),
+        focus.get("resolved_referents"),
         focus.get("literal_terms"),
+        focus.get("semantic_queries"),
+        focus.get("lexical_queries"),
+        focus.get("graph_seeds"),
         focus.get("selected_note_titles"),
         focus.get("selected_section_labels"),
         [focus.get("query")],
-        [focus.get("vector_query")],
     ):
         for item in _coerce_string_list(value):
             for term in _extract_terms(item):
@@ -268,10 +299,13 @@ def _semantic_turn_focus_terms(turn: dict[str, Any]) -> list[str]:
     terms: list[str] = []
     for value in (
         turn.get("query"),
-        turn.get("retrieval_terms"),
-        turn.get("vector_query"),
-        turn.get("graph_seeds"),
+        turn.get("concepts"),
+        turn.get("scope_requests"),
+        turn.get("resolved_referents"),
         turn.get("literal_terms"),
+        turn.get("semantic_queries"),
+        turn.get("lexical_queries"),
+        turn.get("graph_seeds"),
         turn.get("selected_note_titles"),
         turn.get("selected_section_labels"),
         turn.get("entities"),
@@ -288,7 +322,7 @@ def _semantic_turn_focus_terms(turn: dict[str, Any]) -> list[str]:
 
 def _compact_active_focus(
     *,
-    semantic_compiler_packet: dict[str, Any],
+    planner_retrieval_plan: dict[str, Any],
     retrieval_packet: dict[str, Any],
 ) -> dict[str, Any]:
     selected_chunks = retrieval_packet.get("selected_chunks")
@@ -308,15 +342,21 @@ def _compact_active_focus(
                 selected_note_titles.append(note_title)
             if section_label and section_label not in selected_section_labels:
                 selected_section_labels.append(section_label)
+    semantic_queries = _coerce_string_list(planner_retrieval_plan.get("semantic_queries"))
     return {
-        "query": str(semantic_compiler_packet.get("query") or "").strip() or None,
-        "entities": _coerce_string_list(semantic_compiler_packet.get("entities")),
-        "relations": _coerce_string_list(semantic_compiler_packet.get("relations")),
-        "retrieval_terms": _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")),
-        "vector_query": str(semantic_compiler_packet.get("vector_query") or "").strip() or None,
-        "graph_seeds": _coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
-        "literal_terms": _coerce_string_list((semantic_compiler_packet.get("retrieval_plan") or {}).get("literal_terms") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else []),
-        "scope_filters": (semantic_compiler_packet.get("retrieval_plan") or {}).get("scope_filters", {}) if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {},
+        "query": semantic_queries[0] if semantic_queries else None,
+        "entities": [],
+        "relations": [],
+        "concepts": _coerce_string_list(planner_retrieval_plan.get("concepts")),
+        "scope_requests": _coerce_string_list(planner_retrieval_plan.get("scope_requests")),
+        "resolved_referents": _coerce_string_list(planner_retrieval_plan.get("resolved_referents")),
+        "literal_terms": _coerce_string_list(planner_retrieval_plan.get("literal_terms")),
+        "semantic_queries": semantic_queries,
+        "lexical_queries": _coerce_string_list(planner_retrieval_plan.get("lexical_queries")),
+        "graph_seeds": _coerce_string_list(planner_retrieval_plan.get("graph_seeds")),
+        "retrieval_layers": planner_retrieval_plan.get("retrieval_layers") if isinstance(planner_retrieval_plan.get("retrieval_layers"), list) else [],
+        "selection_policy": planner_retrieval_plan.get("selection_policy") if isinstance(planner_retrieval_plan.get("selection_policy"), dict) else {},
+        "claim_policy": planner_retrieval_plan.get("claim_policy") if isinstance(planner_retrieval_plan.get("claim_policy"), dict) else {},
         "selected_chunk_ids": selected_chunk_ids,
         "selected_note_titles": selected_note_titles,
         "selected_section_labels": selected_section_labels,
@@ -332,7 +372,7 @@ def _build_recent_semantic_turn(
     turn_id: int,
     raw_user_input: str,
     assistant_response: str | None,
-    semantic_compiler_packet: dict[str, Any],
+    planner_retrieval_plan: dict[str, Any],
     retrieval_packet: dict[str, Any],
 ) -> dict[str, Any]:
     selected_chunks = retrieval_packet.get("selected_chunks")
@@ -352,18 +392,24 @@ def _build_recent_semantic_turn(
                 selected_note_titles.append(note_title)
             if section_label and section_label not in selected_section_labels:
                 selected_section_labels.append(section_label)
+    semantic_queries = _coerce_string_list(planner_retrieval_plan.get("semantic_queries"))
     return {
         "turn_id": turn_id,
         "raw_user_input": raw_user_input,
         "assistant_response_snippet": _snippet(assistant_response or ""),
-        "query": str(semantic_compiler_packet.get("query") or "").strip(),
-        "entities": _coerce_string_list(semantic_compiler_packet.get("entities")),
-        "relations": _coerce_string_list(semantic_compiler_packet.get("relations")),
-        "retrieval_terms": _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")),
-        "vector_query": str(semantic_compiler_packet.get("vector_query") or "").strip(),
-        "graph_seeds": _coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
-        "literal_terms": _coerce_string_list((semantic_compiler_packet.get("retrieval_plan") or {}).get("literal_terms") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else []),
-        "scope_filters": (semantic_compiler_packet.get("retrieval_plan") or {}).get("scope_filters", {}) if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {},
+        "query": semantic_queries[0] if semantic_queries else "",
+        "entities": [],
+        "relations": [],
+        "concepts": _coerce_string_list(planner_retrieval_plan.get("concepts")),
+        "scope_requests": _coerce_string_list(planner_retrieval_plan.get("scope_requests")),
+        "resolved_referents": _coerce_string_list(planner_retrieval_plan.get("resolved_referents")),
+        "literal_terms": _coerce_string_list(planner_retrieval_plan.get("literal_terms")),
+        "semantic_queries": semantic_queries,
+        "lexical_queries": _coerce_string_list(planner_retrieval_plan.get("lexical_queries")),
+        "graph_seeds": _coerce_string_list(planner_retrieval_plan.get("graph_seeds")),
+        "retrieval_layers": planner_retrieval_plan.get("retrieval_layers") if isinstance(planner_retrieval_plan.get("retrieval_layers"), list) else [],
+        "selection_policy": planner_retrieval_plan.get("selection_policy") if isinstance(planner_retrieval_plan.get("selection_policy"), dict) else {},
+        "claim_policy": planner_retrieval_plan.get("claim_policy") if isinstance(planner_retrieval_plan.get("claim_policy"), dict) else {},
         "selected_chunk_ids": selected_chunk_ids,
         "selected_note_titles": selected_note_titles,
         "selected_section_labels": selected_section_labels,
@@ -411,6 +457,7 @@ def _compiler_request_packet(
     recent_messages: list[dict[str, Any]],
     recent_semantic_turns: list[dict[str, Any]],
     active_focus: dict[str, Any],
+    resource_inventory_summary: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "raw_user_input": raw_user_input,
@@ -418,7 +465,9 @@ def _compiler_request_packet(
         "recent_messages": recent_messages,
         "recent_semantic_turns": recent_semantic_turns,
         "active_focus": active_focus,
-        "instruction": "Compile a retrieval plan, not an answer. Separate literal terms, semantic queries, scope filters, graph seeds, and claim policy. Do not answer the user.",
+        "resource_inventory_summary": resource_inventory_summary,
+        "scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
+        "instruction": "Compile a soft retrieval plan, not an answer. Emit scope requests and concepts only; do not emit note_type, path_contains, source_label, or any other executable filters.",
     }
 
 
@@ -430,22 +479,21 @@ def _deterministic_semantic_packet(
     recent_semantic_turns: list[dict[str, Any]],
     limitations: list[str] | None = None,
 ) -> dict[str, Any]:
-    retrieval_terms = _extract_terms(raw_user_input)
-    query = raw_user_input.strip()
-    focus_terms: list[str] = []
-    if _is_referential_user_input(raw_user_input) and len(retrieval_terms) < 4:
+    concepts = _extract_terms(raw_user_input)
+    query = " ".join(concepts[:8]).strip() or raw_user_input.strip()
+    scope_requests = ["journal"] if any(term in concepts for term in ("journal", "journaled", "daily", "dailies", "entries", "entry")) else []
+    resolved_referents: list[str] = []
+    if _is_referential_user_input(raw_user_input):
         focus_terms = _focus_terms(active_focus)
         for turn in recent_semantic_turns[-2:]:
             focus_terms.extend(_semantic_turn_focus_terms(turn))
-        focus_terms = list(dict.fromkeys(term for term in focus_terms if term))
-        retrieval_terms = list(dict.fromkeys([*retrieval_terms, *focus_terms]))
-        if focus_terms:
-            query = f"{query} {' '.join(focus_terms[:8])}".strip()
-    graph_seeds: list[str] = []
-    if retrieval_terms:
-        graph_seeds.append(query)
-        if prior_thread_state.get("latest_user_input"):
-            graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
+        resolved_referents = list(dict.fromkeys(term for term in focus_terms if term))
+        if resolved_referents:
+            concepts = list(dict.fromkeys([*concepts, *resolved_referents]))
+            query = " ".join(resolved_referents[:8]).strip() or query
+    graph_seeds: list[str] = [query] if query else []
+    if prior_thread_state.get("latest_user_input"):
+        graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
     graph_seeds = list(dict.fromkeys(seed for seed in graph_seeds if seed))
     packet = {
         "raw_user_input": raw_user_input,
@@ -453,20 +501,18 @@ def _deterministic_semantic_packet(
         "query": query,
         "entities": [],
         "relations": [],
-        "resolved_referents": [],
-        "retrieval_terms": retrieval_terms,
-        "vector_query": query,
-        "graph_seeds": graph_seeds,
+        "resolved_referents": resolved_referents,
         "limitations": list(limitations or ["semantic compiler backend unavailable; deterministic retrieval-planning fallback used"]),
     }
-    packet["retrieval_plan"] = build_default_retrieval_plan(
+    packet["planner_retrieval_plan"] = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=query,
-        retrieval_terms=retrieval_terms,
-        vector_query=query,
+        concepts=concepts,
+        scope_requests=scope_requests,
         graph_seeds=graph_seeds,
-        resolved_referents=[],
+        resolved_referents=resolved_referents,
     )
+    packet["planner_diagnostics"] = {"ignored_planner_fields": []}
     return packet
 
 
@@ -495,23 +541,37 @@ def _canonicalize_compiler_packet(
     packet["entities"] = _coerce_string_list(payload.get("entities")) or packet["entities"]
     packet["relations"] = _coerce_string_list(payload.get("relations")) or packet["relations"]
     packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
-    packet["retrieval_terms"] = _coerce_string_list(payload.get("retrieval_terms")) or packet["retrieval_terms"]
-    packet["vector_query"] = str(payload.get("vector_query") or packet["query"]).strip() or packet["query"]
-    packet["graph_seeds"] = _coerce_string_list(payload.get("graph_seeds")) or packet["graph_seeds"]
     packet["limitations"] = _coerce_string_list(payload.get("limitations")) or packet["limitations"]
-    if not packet["retrieval_terms"]:
-        packet["retrieval_terms"] = _extract_terms(packet["query"])
-    if not packet["graph_seeds"] and packet["retrieval_terms"]:
-        packet["graph_seeds"] = [packet["query"]]
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=packet["query"],
-        retrieval_terms=list(packet["retrieval_terms"]),
-        vector_query=packet["vector_query"],
-        graph_seeds=list(packet["graph_seeds"]),
+        concepts=_extract_terms(packet["query"]),
+        scope_requests=scope_requests_from_text(packet["query"]),
+        graph_seeds=[packet["query"]] if packet["query"].strip() else [],
         resolved_referents=list(packet["resolved_referents"]),
     )
-    packet["retrieval_plan"] = canonicalize_retrieval_plan(payload.get("retrieval_plan"), fallback=fallback_plan)
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan)
+    packet["planner_retrieval_plan"] = canonical_plan
+    packet["planner_diagnostics"] = {
+        "ignored_planner_fields": sorted(
+            set(planner_diagnostics.get("ignored_planner_fields") or [])
+            | {
+                key
+                for key in payload
+                if key
+                not in {
+                    "raw_user_input",
+                    "intent",
+                    "query",
+                    "entities",
+                    "relations",
+                    "resolved_referents",
+                    "planner_retrieval_plan",
+                    "limitations",
+                }
+            }
+        )
+    }
     return packet
 
 
@@ -575,22 +635,17 @@ def _is_compiler_packet_valid(packet: Any) -> bool:
         "entities",
         "relations",
         "resolved_referents",
-        "retrieval_terms",
-        "vector_query",
-        "graph_seeds",
-        "retrieval_plan",
+        "planner_retrieval_plan",
         "limitations",
     }
     if not required_keys.issubset(packet):
         return False
     if not isinstance(packet["raw_user_input"], str) or not isinstance(packet["query"], str):
         return False
-    for key in ("entities", "relations", "resolved_referents", "retrieval_terms", "graph_seeds", "limitations"):
+    for key in ("entities", "relations", "resolved_referents", "limitations"):
         if not isinstance(packet.get(key), list):
             return False
-    if not isinstance(packet.get("vector_query"), str):
-        return False
-    if not isinstance(packet.get("retrieval_plan"), dict):
+    if not isinstance(packet.get("planner_retrieval_plan"), dict):
         return False
     return True
 
@@ -742,27 +797,29 @@ def _exact_candidates(
 
 def _graph_seed_values(
     *,
-    semantic_compiler_packet: dict[str, Any],
+    planner_retrieval_plan: dict[str, Any],
     prior_thread_state: dict[str, Any],
     config: RuntimeConfig,
 ) -> list[tuple[str, str]]:
     seeds: list[tuple[str, str]] = []
     active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
     configured_sources = set(config.graph_traversal_seed_sources)
-    retrieval_plan = semantic_compiler_packet.get("retrieval_plan") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {}
-    for value in _coerce_string_list(retrieval_plan.get("graph_seeds") if isinstance(retrieval_plan, dict) else []):
+    for value in _coerce_string_list(planner_retrieval_plan.get("graph_seeds")):
         seeds.append(("graph_seeds", value))
     if "graph_seeds" in configured_sources:
-        for value in _coerce_string_list(semantic_compiler_packet.get("graph_seeds")):
+        for value in _coerce_string_list(planner_retrieval_plan.get("semantic_queries")):
             seeds.append(("graph_seeds", value))
-    if "retrieval_terms" in configured_sources:
-        for value in _coerce_string_list(semantic_compiler_packet.get("retrieval_terms")):
-            seeds.append(("retrieval_terms", value))
+    if "semantic_queries" in configured_sources:
+        for value in _coerce_string_list(planner_retrieval_plan.get("semantic_queries")):
+            seeds.append(("semantic_queries", value))
     if "active_focus" in configured_sources:
         for value in (
             active_focus.get("query"),
-            active_focus.get("vector_query"),
-            active_focus.get("retrieval_terms"),
+            active_focus.get("concepts"),
+            active_focus.get("scope_requests"),
+            active_focus.get("resolved_referents"),
+            active_focus.get("semantic_queries"),
+            active_focus.get("lexical_queries"),
             active_focus.get("graph_seeds"),
             active_focus.get("selected_note_titles"),
             active_focus.get("selected_section_labels"),
@@ -922,7 +979,7 @@ def _graph_candidates(
     *,
     connection: sqlite3.Connection,
     config: RuntimeConfig,
-    semantic_compiler_packet: dict[str, Any],
+    planner_retrieval_plan: dict[str, Any],
     prior_thread_state: dict[str, Any],
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
@@ -961,7 +1018,7 @@ def _graph_candidates(
     edge_type_allowlist = set(config.graph_traversal_edge_type_allowlist)
     node_type_allowlist = set(config.graph_traversal_node_type_allowlist)
     seed_values = _graph_seed_values(
-        semantic_compiler_packet=semantic_compiler_packet,
+        planner_retrieval_plan=planner_retrieval_plan,
         prior_thread_state=prior_thread_state,
         config=config,
     )
@@ -1089,11 +1146,11 @@ def _graph_candidates(
 
 def _is_template_or_schema_query(semantic_compiler_packet: dict[str, Any]) -> bool:
     values: list[str] = []
-    for key in ("raw_user_input", "intent", "query", "vector_query"):
+    for key in ("raw_user_input", "intent", "query"):
         value = semantic_compiler_packet.get(key)
         if isinstance(value, str):
             values.append(value)
-    for key in ("entities", "relations", "resolved_referents", "retrieval_terms", "graph_seeds"):
+    for key in ("entities", "relations", "resolved_referents", "graph_seeds", "concepts", "scope_requests", "literal_terms", "semantic_queries", "lexical_queries"):
         values.extend(_coerce_string_list(semantic_compiler_packet.get(key)))
     haystack = _normalize_text(" ".join(values))
     template_terms = {
@@ -1278,26 +1335,33 @@ def _semantic_traversal(
     prior_thread_state: dict[str, Any],
     embedding_backend: EmbeddingBackend,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    query_terms = list(semantic_compiler_packet.get("retrieval_terms") or [])
-    vector_query = str(semantic_compiler_packet.get("vector_query") or "")
-    retrieval_plan = semantic_compiler_packet.get("retrieval_plan") if isinstance(semantic_compiler_packet.get("retrieval_plan"), dict) else {}
-    if not retrieval_plan:
-        retrieval_plan = build_default_retrieval_plan(
+    planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    if not planner_retrieval_plan:
+        planner_retrieval_plan = build_default_retrieval_plan(
             raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
             query=str(semantic_compiler_packet.get("query") or ""),
-            retrieval_terms=query_terms,
-            vector_query=vector_query,
+            concepts=_coerce_string_list(semantic_compiler_packet.get("concepts")),
+            scope_requests=_coerce_string_list(semantic_compiler_packet.get("scope_requests")),
             graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
         )
-    scope_filters = retrieval_plan.get("scope_filters") if isinstance(retrieval_plan.get("scope_filters"), dict) else {}
-    literal_terms = [entry for entry in retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
-    semantic_queries = _coerce_string_list(retrieval_plan.get("semantic_queries"))
-    lexical_queries = _coerce_string_list(retrieval_plan.get("lexical_queries")) or query_terms
-    graph_layer = retrieval_plan_layer(retrieval_plan, "graph_expand") or retrieval_plan_layer(retrieval_plan, "graph_lookup")
-    exact_layer = retrieval_plan_layer(retrieval_plan, "exact_chunk_search")
-    lexical_layer = retrieval_plan_layer(retrieval_plan, "lexical_chunk_search")
-    vector_layer = retrieval_plan_layer(retrieval_plan, "vector_search")
+
+    resource_inventory_summary = build_resource_inventory(connection=connection, config=config)
+    bound_retrieval_plan, resolver_adjustments, resource_inventory_summary = bind_retrieval_plan(
+        planner_retrieval_plan=planner_retrieval_plan,
+        inventory_summary=resource_inventory_summary,
+        config=config,
+        raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
+    )
+
+    scope_filters = bound_retrieval_plan.get("scope_filters") if isinstance(bound_retrieval_plan.get("scope_filters"), dict) else {}
+    literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
+    semantic_queries = _coerce_string_list(bound_retrieval_plan.get("semantic_queries"))
+    lexical_queries = _coerce_string_list(bound_retrieval_plan.get("lexical_queries")) or semantic_queries
+    graph_layer = retrieval_plan_layer(bound_retrieval_plan, "graph_expand")
+    exact_layer = retrieval_plan_layer(bound_retrieval_plan, "exact_chunk_search")
+    lexical_layer = retrieval_plan_layer(bound_retrieval_plan, "lexical_chunk_search")
+    vector_layer = retrieval_plan_layer(bound_retrieval_plan, "vector_search")
 
     chunk_rows = _load_chunk_rows(connection)
     layer_manifests: dict[str, Any] = {}
@@ -1305,6 +1369,14 @@ def _semantic_traversal(
 
     exact_candidates: list[dict[str, Any]] = []
     exact_notes: list[str] = []
+    exact_info = {
+        "operator": "exact_chunk_search",
+        "literal_terms": [],
+        "scope": scope_filters,
+        "total_match_count": 0,
+        "matching_note_count": 0,
+        "returned_count": 0,
+    }
     if exact_layer is not None:
         execution["layers_executed"].append("exact_chunk_search")
         exact_candidates, exact_notes, exact_info = _exact_candidates(
@@ -1313,18 +1385,10 @@ def _semantic_traversal(
             scope_filters=scope_filters,
             limit=_layer_limit(exact_layer, config.retrieval_exact_max_matches),
         )
-        layer_manifests["exact"] = exact_info
     else:
-        execution["layers_skipped"].append({"layer": "exact_chunk_search", "reason": "not requested by retrieval plan"})
-        exact_notes = ["exact search skipped: not requested by retrieval plan"]
-        layer_manifests["exact"] = {
-            "operator": "exact_chunk_search",
-            "literal_terms": [],
-            "scope": scope_filters,
-            "total_match_count": 0,
-            "matching_note_count": 0,
-            "returned_count": 0,
-        }
+        execution["layers_skipped"].append({"layer": "exact_chunk_search", "reason": "not requested by bound retrieval plan"})
+        exact_notes = ["exact search skipped: not requested by bound retrieval plan"]
+    layer_manifests["exact"] = exact_info
 
     lexical_candidates: list[dict[str, Any]] = []
     lexical_notes: list[str] = []
@@ -1337,8 +1401,8 @@ def _semantic_traversal(
             limit=_layer_limit(lexical_layer, config.retrieval_lexical_max_candidates),
         )
     else:
-        execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by retrieval plan"})
-        lexical_notes = ["lexical search skipped: not requested by retrieval plan"]
+        execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by bound retrieval plan"})
+        lexical_notes = ["lexical search skipped: not requested by bound retrieval plan"]
 
     vector_candidates: list[dict[str, Any]] = []
     vector_notes: list[str] = []
@@ -1348,13 +1412,13 @@ def _semantic_traversal(
             connection=connection,
             config=config,
             embedding_backend=embedding_backend,
-            vector_query=semantic_queries[0] if semantic_queries else vector_query,
+            vector_query=semantic_queries[0] if semantic_queries else (lexical_queries[0] if lexical_queries else str(bound_retrieval_plan.get("intent_type") or "")),
             scope_filters=scope_filters,
             limit=_layer_limit(vector_layer, config.retrieval_vector_max_candidates),
         )
     else:
-        execution["layers_skipped"].append({"layer": "vector_search", "reason": "not requested by retrieval plan"})
-        vector_notes = ["vector search skipped: not requested by retrieval plan"]
+        execution["layers_skipped"].append({"layer": "vector_search", "reason": "not requested by bound retrieval plan"})
+        vector_notes = ["vector search skipped: not requested by bound retrieval plan"]
 
     graph_candidates: list[dict[str, Any]] = []
     graph_notes: list[str] = []
@@ -1364,14 +1428,14 @@ def _semantic_traversal(
         graph_candidates, graph_notes, graph_traversal_info = _graph_candidates(
             connection=connection,
             config=config,
-            semantic_compiler_packet=semantic_compiler_packet,
+            planner_retrieval_plan=bound_retrieval_plan,
             prior_thread_state=prior_thread_state,
             scope_filters=scope_filters,
             limit=_layer_limit(graph_layer, config.retrieval_graph_max_candidates),
         )
     else:
-        execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by retrieval plan"})
-        graph_candidates, graph_notes, graph_traversal_info = [], ["graph search skipped: not requested by retrieval plan"], {
+        execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by bound retrieval plan"})
+        graph_candidates, graph_notes, graph_traversal_info = [], ["graph search skipped: not requested by bound retrieval plan"], {
             "enabled": config.graph_traversal_enabled,
             "hop_limit": config.graph_traversal_hop_limit,
             "seed_sources": list(config.graph_traversal_seed_sources),
@@ -1396,18 +1460,19 @@ def _semantic_traversal(
         candidates=graph_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
     )
+
     merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, exact_candidates=exact_candidates)
     selected_candidates = _select_retrieval_chunks(
         merged_candidates=merged_candidates,
-        max_chunks=config.max_retrieval_chunks,
-        selection_policy=retrieval_plan.get("selection_policy") if isinstance(retrieval_plan.get("selection_policy"), dict) else None,
+        max_chunks=int(bound_retrieval_plan.get("selection_policy", {}).get("max_chunks") or config.max_retrieval_chunks),
+        selection_policy=bound_retrieval_plan.get("selection_policy") if isinstance(bound_retrieval_plan.get("selection_policy"), dict) else None,
     )
     selected_counts = _count_selected_by_layer(selected_candidates)
     exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
     exact_search_performed = exact_layer is not None
     total_exact_matches = int(exact_info.get("total_match_count") or 0)
     matching_note_count = int(exact_info.get("matching_note_count") or 0)
-    claim_policy = retrieval_plan.get("claim_policy") if isinstance(retrieval_plan.get("claim_policy"), dict) else {}
+    claim_policy = bound_retrieval_plan.get("claim_policy") if isinstance(bound_retrieval_plan.get("claim_policy"), dict) else {}
     coverage = {
         "exact_search_performed": exact_search_performed,
         "scope": scope_filters,
@@ -1424,10 +1489,10 @@ def _semantic_traversal(
         limits.append("No corpus-wide positive or negative exact-match claim is allowed because exact search did not run.")
 
     traversal_manifest = {
-        "query_terms": query_terms,
-        "vector_query": vector_query,
-        "graph_seeds": list(semantic_compiler_packet.get("graph_seeds") or []),
-        "retrieval_plan": retrieval_plan,
+        "planner_retrieval_plan": planner_retrieval_plan,
+        "bound_retrieval_plan": bound_retrieval_plan,
+        "resolver_adjustments": resolver_adjustments,
+        "resource_inventory_summary": resource_inventory_summary,
         "execution": execution,
         "candidate_counts": {
             "exact": len(exact_candidates),
@@ -1445,7 +1510,7 @@ def _semantic_traversal(
     }
 
     retrieval_packet = {
-        "retrieval_plan": retrieval_plan,
+        "bound_retrieval_plan": bound_retrieval_plan,
         "coverage": coverage,
         "limits": limits,
         "selected_chunks": [
@@ -1488,12 +1553,13 @@ def _coverage_report(
         blocking_reasons.append(f"semantic compiler status is {semantic_compiler_status}; parsed compiler output is required")
     if not compiler_valid:
         blocking_reasons.append("semantic compiler packet is missing or malformed")
-    query_terms = list(traversal_manifest.get("query_terms") or [])
-    graph_seeds = list(traversal_manifest.get("graph_seeds") or [])
-    if selected_count == 0 and (query_terms or graph_seeds):
+    bound_plan = traversal_manifest.get("bound_retrieval_plan") if isinstance(traversal_manifest.get("bound_retrieval_plan"), dict) else {}
+    graph_seeds = list(bound_plan.get("graph_seeds") or [])
+    semantic_queries = list(bound_plan.get("semantic_queries") or [])
+    if selected_count == 0 and (semantic_queries or graph_seeds):
         blocking_reasons.append("retrieval required but no chunks were selected")
     return {
-        "decision": "approved" if not blocking_reasons and (selected_count > 0 or not (query_terms or graph_seeds)) else "blocked",
+        "decision": "approved" if not blocking_reasons and (selected_count > 0 or not (semantic_queries or graph_seeds)) else "blocked",
         "blocking_reasons": blocking_reasons,
         "semantic_compiler_status": semantic_compiler_status,
         "semantic_compiler_response_status": semantic_compiler_diagnostic.get("semantic_compiler_response_status"),
@@ -1638,6 +1704,7 @@ def _update_thread_state(
     retrieval_packet: dict[str, Any],
     created_at: str,
 ) -> dict[str, Any]:
+    planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
     _append_turn_message(messages=recent_messages, role="user", content=raw_user_input, turn_id=turn_id)
     if assistant_response is not None:
@@ -1649,13 +1716,13 @@ def _update_thread_state(
             turn_id=turn_id,
             raw_user_input=raw_user_input,
             assistant_response=assistant_response,
-            semantic_compiler_packet=semantic_compiler_packet,
+            planner_retrieval_plan=planner_retrieval_plan,
             retrieval_packet=retrieval_packet,
         )
     )
     recent_semantic_turns = recent_semantic_turns[-RECENT_SEMANTIC_TURN_LIMIT:]
     active_focus = _compact_active_focus(
-        semantic_compiler_packet=semantic_compiler_packet,
+        planner_retrieval_plan=planner_retrieval_plan,
         retrieval_packet=retrieval_packet,
     )
     thread_state = {
@@ -1756,12 +1823,22 @@ def run_thread_turn(
     turn_root = turn_paths.turn_root(turn_id)
     turn_root.mkdir(parents=True, exist_ok=True)
 
+    database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
+    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "scope_aliases": resolved_config.retrieval_scope_aliases}
+    if database_path.exists():
+        try:
+            with sqlite3.connect(database_path) as inventory_connection:
+                resource_inventory_summary = build_resource_inventory(connection=inventory_connection, config=resolved_config)
+        except sqlite3.Error:
+            resource_inventory_summary = build_resource_inventory(connection=None, config=resolved_config)
+
     compiler_request = _compiler_request_packet(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
         recent_messages=recent_messages,
         recent_semantic_turns=recent_semantic_turns,
         active_focus=active_focus,
+        resource_inventory_summary=resource_inventory_summary,
     )
     compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(config=resolved_config)
     try:
@@ -1787,7 +1864,6 @@ def run_thread_turn(
         semantic_compiler_status=semantic_compiler_status,
     )
 
-    database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
     if database_path.exists():
         if embedding_backend is None:
             embedding_backend = resolve_embedding_backend(resolved_config)
@@ -1804,15 +1880,32 @@ def run_thread_turn(
         finally:
             connection.close()
     else:
+        planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
         semantic_traversal_manifest = {
-            "query_terms": list(semantic_compiler_packet.get("retrieval_terms") or []),
-            "vector_query": str(semantic_compiler_packet.get("vector_query") or ""),
-            "graph_seeds": list(semantic_compiler_packet.get("graph_seeds") or []),
-            "candidate_counts": {"lexical": 0, "vector": 0, "graph": 0},
+            "planner_retrieval_plan": planner_retrieval_plan,
+            "bound_retrieval_plan": planner_retrieval_plan,
+            "resolver_adjustments": [],
+            "resource_inventory_summary": resource_inventory_summary,
+            "execution": {"layers_executed": [], "layers_skipped": []},
+            "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
+            "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
             "selected_chunk_ids": [],
             "selection_notes": ["ingestion database unavailable"],
+            "coverage": {
+                "exact_search_performed": False,
+                "scope": {},
+                "literal_terms": [],
+                "total_exact_matches": 0,
+                "matching_note_count": 0,
+                "coverage_claims_allowed": False,
+                "negative_claims_allowed": False,
+            },
+            "limits": ["No ingestion database available."],
         }
         retrieval_packet = {
+            "bound_retrieval_plan": planner_retrieval_plan,
+            "coverage": semantic_traversal_manifest["coverage"],
+            "limits": semantic_traversal_manifest["limits"],
             "selected_chunks": [],
             "matched_chunk_count": 0,
             "retrieval_observation": "no_matches",

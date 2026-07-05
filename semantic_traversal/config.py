@@ -42,6 +42,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "max_depth": int,
             "max_candidates": int,
         },
+        "scope_aliases": dict,
     },
     "graph_traversal": {
         "enabled": bool,
@@ -165,6 +166,26 @@ class RuntimeConfig:
     @property
     def retrieval_graph_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["graph"]["max_candidates"])
+
+    @property
+    def retrieval_scope_aliases(self) -> dict[str, dict[str, tuple[str, ...] | str | None]]:
+        aliases: dict[str, dict[str, tuple[str, ...] | str | None]] = {}
+        raw_aliases = self.raw["retrieval"].get("scope_aliases", {})
+        if not isinstance(raw_aliases, dict):
+            return aliases
+        for alias, payload in raw_aliases.items():
+            if not isinstance(payload, dict):
+                continue
+            aliases[str(alias)] = {
+                "source_label": str(payload.get("source_label") or "").strip() or None,
+                "note_type": tuple(str(value) for value in payload.get("note_type", []) if str(value).strip())
+                if isinstance(payload.get("note_type"), list)
+                else (),
+                "path_contains": tuple(str(value) for value in payload.get("path_contains", []) if str(value).strip())
+                if isinstance(payload.get("path_contains"), list)
+                else (),
+            }
+        return aliases
 
     @property
     def graph_traversal_enabled(self) -> bool:
@@ -456,6 +477,17 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError("Runtime config field paths.data_root must not be blank")
     if int(parsed["retrieval"]["max_chunks"]) <= 0:
         raise ConfigError("Runtime config field retrieval.max_chunks must be greater than zero")
+    raw_scope_aliases = parsed["retrieval"].get("scope_aliases", {})
+    if not isinstance(raw_scope_aliases, dict):
+        raise ConfigError("Runtime config field retrieval.scope_aliases must be a mapping")
+    for alias, alias_payload in raw_scope_aliases.items():
+        if not isinstance(alias_payload, dict):
+            raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias} must be a mapping")
+        for field in ("note_type", "path_contains"):
+            if field in alias_payload and not isinstance(alias_payload[field], list):
+                raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.{field} must be a list")
+        if "source_label" in alias_payload and not isinstance(alias_payload["source_label"], (str, type(None))):
+            raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.source_label must be a string or null")
     for field in (
         "exact.max_matches",
         "exact.context_chars",
