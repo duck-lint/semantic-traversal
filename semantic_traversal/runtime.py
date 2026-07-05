@@ -542,6 +542,14 @@ def _canonicalize_compiler_packet(
     packet["relations"] = _coerce_string_list(payload.get("relations")) or packet["relations"]
     packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
     packet["limitations"] = _coerce_string_list(payload.get("limitations")) or packet["limitations"]
+    focus_terms: list[str] = []
+    if _is_referential_user_input(raw_user_input):
+        focus_terms = _focus_terms(active_focus)
+        for turn in recent_semantic_turns[-2:]:
+            focus_terms.extend(_semantic_turn_focus_terms(turn))
+        focus_terms = list(dict.fromkeys(term for term in focus_terms if term))
+    if _is_referential_user_input(raw_user_input) and focus_terms:
+        packet["resolved_referents"] = list(dict.fromkeys([*packet["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=packet["query"],
@@ -551,6 +559,8 @@ def _canonicalize_compiler_packet(
         resolved_referents=list(packet["resolved_referents"]),
     )
     canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan)
+    if _is_referential_user_input(raw_user_input):
+        canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *packet["resolved_referents"]]))
     packet["planner_retrieval_plan"] = canonical_plan
     packet["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(

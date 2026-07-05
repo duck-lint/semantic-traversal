@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import gc
+import shutil
 import sqlite3
 import tempfile
+import time
+import warnings
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -26,6 +30,34 @@ from semantic_traversal.storage import load_json, read_ledger
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "JOURNAL"
+TEMP_DATA_ROOTS: list[Path] = []
+
+
+def _register_temp_data_root() -> Path:
+    temp_root = Path(tempfile.mkdtemp())
+    TEMP_DATA_ROOTS.append(temp_root)
+    return temp_root
+
+
+def _cleanup_temp_dir(path: Path) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        gc.collect()
+    for attempt in range(12):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError:
+            if attempt == 11:
+                raise
+            time.sleep(0.1)
+
+
+def tearDownModule() -> None:  # noqa: N802
+    while TEMP_DATA_ROOTS:
+        path = TEMP_DATA_ROOTS.pop()
+        if path.exists():
+            _cleanup_temp_dir(path)
 
 
 class TestLLMBackend:
@@ -160,9 +192,7 @@ class RecordingCompilerBackend:
 
 
 def _prepare_data_root() -> Path:
-    temp_dir = tempfile.TemporaryDirectory()
-    data_root = Path(temp_dir.name)
-    _prepare_data_root._temp_dirs.append(temp_dir)  # type: ignore[attr-defined]
+    data_root = _register_temp_data_root()
     run_ingest(
         repo_root=REPO_ROOT,
         data_root=data_root,
@@ -172,13 +202,8 @@ def _prepare_data_root() -> Path:
     return data_root
 
 
-_prepare_data_root._temp_dirs = []  # type: ignore[attr-defined]
-
-
 def _prepare_graph_fixture_data_root() -> Path:
-    temp_dir = tempfile.TemporaryDirectory()
-    data_root = Path(temp_dir.name)
-    _prepare_graph_fixture_data_root._temp_dirs.append(temp_dir)  # type: ignore[attr-defined]
+    data_root = _register_temp_data_root()
     source_root = data_root / "graph-fixture"
     source_root.mkdir(parents=True, exist_ok=True)
     _write_markdown_note(
@@ -226,9 +251,6 @@ def _prepare_graph_fixture_data_root() -> Path:
         config=config,
     )
     return data_root
-
-
-_prepare_graph_fixture_data_root._temp_dirs = []  # type: ignore[attr-defined]
 
 
 def _turn_artifact(path: Path) -> dict[str, Any]:
@@ -288,9 +310,7 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
 
 
 def _prepare_multi_chunk_inventory_data_root() -> Path:
-    temp_dir = tempfile.TemporaryDirectory()
-    data_root = Path(temp_dir.name)
-    _prepare_multi_chunk_inventory_data_root._temp_dirs.append(temp_dir)  # type: ignore[attr-defined]
+    data_root = _register_temp_data_root()
     source_root = data_root / "multi-chunk-fixture"
     source_root.mkdir(parents=True, exist_ok=True)
     _write_markdown_note(
@@ -316,9 +336,6 @@ def _prepare_multi_chunk_inventory_data_root() -> Path:
         embedding_backend=FakeEmbeddingBackend(),
     )
     return data_root
-
-
-_prepare_multi_chunk_inventory_data_root._temp_dirs = []  # type: ignore[attr-defined]
 
 
 class ThesisRuntimeTests(unittest.TestCase):
