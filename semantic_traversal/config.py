@@ -91,6 +91,15 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "required_uuid_field": str,
         "max_chunk_chars": int,
         "semantic_frontmatter_fields": [str],
+        "low_signal_apparatus": {
+            "enabled": bool,
+            "skip_during_ingest": bool,
+            "skip_during_graph_representatives": bool,
+            "exact_lines": [str],
+            "prefixes": [str],
+            "contains": [str],
+            "short_all_caps_max_chars": int,
+        },
     },
     "indexes": {
         "vector_table": str,
@@ -307,6 +316,34 @@ class RuntimeConfig:
         return tuple(str(value) for value in self.raw["chunking"]["semantic_frontmatter_fields"])
 
     @property
+    def chunking_low_signal_apparatus_enabled(self) -> bool:
+        return bool(self.raw["chunking"]["low_signal_apparatus"]["enabled"])
+
+    @property
+    def chunking_low_signal_apparatus_skip_during_ingest(self) -> bool:
+        return bool(self.raw["chunking"]["low_signal_apparatus"]["skip_during_ingest"])
+
+    @property
+    def chunking_low_signal_apparatus_skip_during_graph_representatives(self) -> bool:
+        return bool(self.raw["chunking"]["low_signal_apparatus"]["skip_during_graph_representatives"])
+
+    @property
+    def chunking_low_signal_apparatus_exact_lines(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["chunking"]["low_signal_apparatus"]["exact_lines"])
+
+    @property
+    def chunking_low_signal_apparatus_prefixes(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["chunking"]["low_signal_apparatus"]["prefixes"])
+
+    @property
+    def chunking_low_signal_apparatus_contains(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["chunking"]["low_signal_apparatus"]["contains"])
+
+    @property
+    def chunking_low_signal_apparatus_short_all_caps_max_chars(self) -> int:
+        return int(self.raw["chunking"]["low_signal_apparatus"]["short_all_caps_max_chars"])
+
+    @property
     def vector_table(self) -> str:
         return str(self.raw["indexes"]["vector_table"])
 
@@ -511,6 +548,17 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         str(parsed["prompts"]["frontier_synthesis"]["instructions"]),
         field="prompts.frontier_synthesis.instructions",
     )
+    low_signal_apparatus = parsed["chunking"].get("low_signal_apparatus", {})
+    if not isinstance(low_signal_apparatus, dict):
+        raise ConfigError("Runtime config field chunking.low_signal_apparatus must be a mapping")
+    for field in ("exact_lines", "prefixes", "contains"):
+        if field in low_signal_apparatus and not isinstance(low_signal_apparatus[field], list):
+            raise ConfigError(f"Runtime config field chunking.low_signal_apparatus.{field} must be a list")
+    for field in ("enabled", "skip_during_ingest", "skip_during_graph_representatives"):
+        if field in low_signal_apparatus and not isinstance(low_signal_apparatus[field], bool):
+            raise ConfigError(f"Runtime config field chunking.low_signal_apparatus.{field} must be a boolean")
+    if "short_all_caps_max_chars" in low_signal_apparatus and int(low_signal_apparatus["short_all_caps_max_chars"]) < 0:
+        raise ConfigError("Runtime config field chunking.low_signal_apparatus.short_all_caps_max_chars must be non-negative")
     validate_sql_identifier(str(parsed["indexes"]["vector_table"]), "indexes.vector_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_nodes_table"]), "indexes.graph_nodes_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_edges_table"]), "indexes.graph_edges_table")

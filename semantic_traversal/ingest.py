@@ -15,6 +15,7 @@ import yaml
 from .config import RuntimeConfig, load_runtime_config
 from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
+from .text_filters import is_low_signal_apparatus_text
 
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -412,6 +413,7 @@ def _parse_markdown_note(
         note_title=note_title,
         frontmatter=frontmatter,
         frontmatter_semantics=frontmatter_semantics,
+        config=config,
         max_chunk_chars=config.chunking_max_chunk_chars,
     )
     return NoteRecord(
@@ -749,6 +751,7 @@ def _extract_chunks(
     note_title: str,
     frontmatter: dict[str, Any],
     frontmatter_semantics: dict[str, Any],
+    config: RuntimeConfig,
     max_chunk_chars: int,
 ) -> list[ChunkRecord]:
     chunks: list[ChunkRecord] = []
@@ -820,6 +823,14 @@ def _extract_chunks(
                 chunk_warnings.append(_chunking_warning(semantic_unit_kind))
 
         for chunk_text, split_ordinal in chunk_texts:
+            if config.chunking_low_signal_apparatus_skip_during_ingest and is_low_signal_apparatus_text(
+                chunk_text,
+                config=config,
+                section_label=current_section.label,
+                note_title=note_title,
+                relative_path=relative_path,
+            ):
+                continue
             embedding_text = _build_embedding_text_for_chunk(
                 note_title=note_title,
                 relative_path=relative_path,

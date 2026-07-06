@@ -339,6 +339,54 @@ def _prepare_multi_chunk_inventory_data_root() -> Path:
     return data_root
 
 
+def _prepare_apparatus_graph_fixture_data_root() -> Path:
+    data_root = _register_temp_data_root()
+    source_root = data_root / "apparatus-graph-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    _write_markdown_note(
+        source_root,
+        "A.md",
+        """
+        # A
+
+        Links to [[The_Parmenidean_Ascent]].
+        """,
+        uuid_value="eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    )
+    _write_markdown_note(
+        source_root,
+        "The_Parmenidean_Ascent.md",
+        """
+        # The Parmenidean Ascent
+
+        The Parmenidean Ascent
+
+        MICHAEL DELLA ROCCA
+
+        OXFORD
+
+        Oxford University Press.
+
+        The Parmenidean Ascent. Michael Della Rocca, Oxford University Press (2020).
+
+        First, take explanatory demands seriously and let them be your guide.
+
+        In this longer discussion, Oxford University Press is mentioned as the publisher, but the argument itself concerns explanatory demands and metaphysical interpretation.
+        """,
+        uuid_value="ffffffff-ffff-4fff-8fff-ffffffffffff",
+        frontmatter={"note_type": "reading_notes"},
+    )
+    config = load_runtime_config(repo_root=REPO_ROOT)
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="apparatus-graph-fixture", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+        config=config,
+    )
+    return data_root
+
+
 class ThesisRuntimeTests(unittest.TestCase):
     def test_cli_runtime_control_is_config_only(self) -> None:
         ingest_options = {action.dest for action in build_ingest_parser()._actions}
@@ -1584,6 +1632,53 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertNotIn("philosophy", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
         self.assertIn("scope_filters", result.semantic_compiler_packet["planner_diagnostics"]["ignored_planner_fields"])
 
+    def test_planner_diagnostics_echo_is_not_counted_as_ignored_planner_field(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "search journal for candy",
+                "intent": "fixture response",
+                "query": "search journal for candy",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_diagnostics": {"source": "model echo", "ignored_planner_fields": ["made_up"]},
+                "unexpected_surface": "still ignored",
+                "planner_retrieval_plan": {
+                    "intent_type": "scoped_exact_search",
+                    "scope_requests": ["journal"],
+                    "concepts": ["candy"],
+                    "resolved_referents": [],
+                    "literal_terms": ["candy"],
+                    "semantic_queries": ["search journal for candy"],
+                    "lexical_queries": ["candy"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "exact_chunk_search", "required": True, "limit": 200, "return_total_count": True},
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": True, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal for candy",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        ignored_fields = result.semantic_compiler_packet["planner_diagnostics"]["ignored_planner_fields"]
+        self.assertNotIn("planner_diagnostics", ignored_fields)
+        self.assertIn("unexpected_surface", ignored_fields)
+        self.assertNotIn("source", result.semantic_compiler_packet["planner_diagnostics"])
+
     def test_no_database_path_still_resolves_scope_aliases(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -1790,6 +1885,28 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_compiler_packet["limitations"], [])
         self.assertNotIn("deterministic compiler packet used", result.semantic_compiler_packet["limitations"])
 
+    def test_ingest_skips_apparatus_only_chunks_but_keeps_meaningful_prose(self) -> None:
+        data_root = _prepare_apparatus_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        database_path = data_root / config.storage_ingestion_root / config.storage_ingestion_database_filename
+        with closing(sqlite3.connect(database_path)) as connection:
+            rows = connection.execute(
+                "SELECT paragraph_text FROM chunks WHERE note_title = ? ORDER BY rowid",
+                ("The Parmenidean Ascent",),
+            ).fetchall()
+        chunk_texts = [str(row[0]) for row in rows]
+        joined_chunks = "\n".join(chunk_texts)
+        self.assertIn("First, take explanatory demands seriously and let them be your guide.", joined_chunks)
+        self.assertIn("Oxford University Press is mentioned as the publisher", joined_chunks)
+        for forbidden in (
+            "The Parmenidean Ascent",
+            "MICHAEL DELLA ROCCA",
+            "OXFORD",
+            "Oxford University Press.",
+            "The Parmenidean Ascent. Michael Della Rocca, Oxford University Press (2020).",
+        ):
+            self.assertNotIn(forbidden, joined_chunks)
+
     def test_compiler_request_packet_includes_compact_resource_inventory(self) -> None:
         data_root = _prepare_data_root()
         compiler_backend = RecordingCompilerBackend(
@@ -1833,6 +1950,21 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertIn("scope_aliases", request_packet)
         self.assertIn("frontmatter_facets", request_packet["resource_inventory_summary"])
         self.assertNotIn("paragraph_text", request_packet["resource_inventory_summary"])
+
+    def test_graph_representative_chunks_skip_apparatus_before_meaningful_body(self) -> None:
+        data_root = _prepare_apparatus_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        selected_for_book = [chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["note_title"] == "The Parmenidean Ascent"]
+        self.assertTrue(selected_for_book)
+        self.assertTrue(any("First, take explanatory demands seriously" in chunk["paragraph_text"] for chunk in selected_for_book))
+        self.assertFalse(any(chunk["paragraph_text"].strip() in {"OXFORD", "MICHAEL DELLA ROCCA", "The Parmenidean Ascent"} for chunk in selected_for_book))
 
     def test_vector_only_retrieval_forbids_corpus_wide_negative_claims(self) -> None:
         data_root = _prepare_data_root()

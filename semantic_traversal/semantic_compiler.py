@@ -11,6 +11,9 @@ from .hashing import sha256_text
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, is_comparison_intent, _focus_carry_terms, scope_requests_from_text
 
 
+INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics"}
+
+
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 COMPILER_STOP_WORDS = {
     "a",
@@ -175,6 +178,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
                     "planner_retrieval_plan",
                     "limitations",
                 }
+                and key not in INTERNAL_COMPILER_ECHO_FIELDS
             }
         )
     }

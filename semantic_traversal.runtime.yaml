@@ -71,6 +71,7 @@ prompts:
     template: |
       Return JSON only.
       Compile a soft retrieval plan for deterministic resolution and retrieval execution. Do not answer the user.
+      Do not emit planner_diagnostics; runtime adds diagnostics.
       Separate conversational meaning into distinct roles: scope requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
       Treat search/find/list/mentions/occurrences requests as exact-search requests when possible.
       Treat words like journal or daily as soft scope requests when the user asks for journal material; do not emit note_type, path, or source filters.
@@ -129,6 +130,24 @@ chunking:
     - journal_entry_date
     - title
     - creator
+  low_signal_apparatus:
+    enabled: true
+    skip_during_ingest: true
+    skip_during_graph_representatives: true
+    exact_lines:
+      - "OXFORD"
+      - "UNIVERSITY PRESS"
+      - "OXFORD UNIVERSITY PRESS"
+      - "Oxford University Press."
+    prefixes:
+      - "DOI"
+      - "ISBN"
+      - "Copyright"
+      - "Published by"
+      - "Printed in"
+    contains:
+      - "all rights reserved"
+    short_all_caps_max_chars: 80
 
 storage:
   threads_root: "threads"

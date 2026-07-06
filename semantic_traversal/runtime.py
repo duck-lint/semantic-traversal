@@ -16,7 +16,9 @@ from .llm import LLMBackend
 from .resource_inventory import build_resource_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan
+from .text_filters import is_low_signal_apparatus_text
 from .semantic_compiler import (
+    INTERNAL_COMPILER_ECHO_FIELDS,
     SemanticCompilerBackend,
     SemanticCompilerResponse,
     resolve_semantic_compiler_backend,
@@ -419,7 +421,7 @@ def _compiler_request_packet(
         "active_focus": active_focus,
         "resource_inventory_summary": resource_inventory_summary,
         "scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
-        "instruction": "Compile a soft retrieval plan, not an answer. Emit scope requests and concepts only; do not emit note_type, path_contains, source_label, or any other executable filters.",
+        "instruction": "Compile a soft retrieval plan, not an answer. Emit scope requests and concepts only; do not emit note_type, path_contains, source_label, planner_diagnostics, or any other executable filters.",
     }
 
 
@@ -531,6 +533,7 @@ def _canonicalize_compiler_packet(
                     "planner_retrieval_plan",
                     "limitations",
                 }
+                and key not in INTERNAL_COMPILER_ECHO_FIELDS
             }
         )
     }
@@ -1070,9 +1073,25 @@ def _graph_candidates(
     max_graph_candidates = limit if limit is not None else config.graph_traversal_max_candidates
     selected_chunk_ids: list[str] = []
     for note_id in selected_note_ids:
-        for chunk_row in chunk_rows.values():
-            if str(chunk_row["note_id"]) != note_id or not _chunk_matches_scope(chunk_row, scope_filters or {}):
-                continue
+        note_chunk_rows = [chunk_row for chunk_row in chunk_rows.values() if str(chunk_row["note_id"]) == note_id and _chunk_matches_scope(chunk_row, scope_filters or {})]
+        if not note_chunk_rows:
+            continue
+        preferred_rows = [
+            row
+            for row in note_chunk_rows
+            if not (
+                config.chunking_low_signal_apparatus_skip_during_graph_representatives
+                and is_low_signal_apparatus_text(
+                    str(row.get("paragraph_text") or ""),
+                    config=config,
+                    section_label=str(row.get("section_label") or ""),
+                    note_title=str(row.get("note_title") or ""),
+                    relative_path=str(row.get("relative_path") or ""),
+                )
+            )
+        ]
+        candidate_rows = preferred_rows or note_chunk_rows
+        for chunk_row in candidate_rows:
             chunk_id = str(chunk_row["chunk_id"])
             if chunk_id in selected_chunk_ids:
                 continue

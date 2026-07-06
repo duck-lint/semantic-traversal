@@ -22,6 +22,13 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertGreater(config.graph_traversal_hop_limit, 0)
         self.assertFalse(hasattr(config, "coverage_require_surface_contributions"))
         self.assertIn("journal", config.retrieval_scope_aliases)
+        self.assertTrue(config.chunking_low_signal_apparatus_enabled)
+        self.assertTrue(config.chunking_low_signal_apparatus_skip_during_ingest)
+        self.assertTrue(config.chunking_low_signal_apparatus_skip_during_graph_representatives)
+        self.assertIn("OXFORD", config.chunking_low_signal_apparatus_exact_lines)
+        self.assertIn("DOI", config.chunking_low_signal_apparatus_prefixes)
+        self.assertIn("all rights reserved", config.chunking_low_signal_apparatus_contains)
+        self.assertEqual(config.chunking_low_signal_apparatus_short_all_caps_max_chars, 80)
 
     def test_relative_data_root_resolves_under_vault_root(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
