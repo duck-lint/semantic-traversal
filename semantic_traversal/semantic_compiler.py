@@ -8,12 +8,7 @@ from urllib import error, request
 
 from .config import RuntimeConfig
 from .hashing import sha256_text
-from .retrieval_plan import (
-    build_default_retrieval_plan,
-    canonicalize_retrieval_plan,
-    is_comparison_intent,
-    scope_requests_from_text,
-)
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, is_comparison_intent, _focus_carry_terms, scope_requests_from_text
 
 
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -104,39 +99,6 @@ def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
     return packet
 
 
-def _active_focus_terms(packet: dict[str, Any]) -> list[str]:
-    active_focus = packet.get("active_focus")
-    terms: list[str] = []
-    if isinstance(active_focus, dict):
-        for value in (
-            active_focus.get("query"),
-            active_focus.get("concepts"),
-            active_focus.get("scope_requests"),
-            active_focus.get("resolved_referents"),
-            active_focus.get("literal_terms"),
-            active_focus.get("semantic_queries"),
-            active_focus.get("lexical_queries"),
-            active_focus.get("graph_seeds"),
-            active_focus.get("selected_note_titles"),
-            active_focus.get("selected_section_labels"),
-        ):
-            if isinstance(value, list):
-                candidates = value
-            else:
-                candidates = [value]
-            for candidate in candidates:
-                if candidate is None:
-                    continue
-                for term in collect_compiler_terms(str(candidate)) if isinstance(candidate, str) else []:
-                    if term not in terms:
-                        terms.append(term)
-                if isinstance(candidate, str):
-                    cleaned = candidate.strip()
-                    if cleaned and cleaned not in terms:
-                        terms.append(cleaned)
-    return terms
-
-
 def _is_referential_input(text: str) -> bool:
     lowered = text.lower()
     return any(f" {surface} " in f" {lowered} " for surface in ("it", "that", "this", "those", "they", "them"))
@@ -174,7 +136,10 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         result["limitations"] = cleaned_limitations
     else:
         result["limitations"] = []
-    focus_terms = _active_focus_terms(packet or {})
+    focus_terms = _focus_carry_terms(
+        active_focus=packet.get("active_focus") if isinstance(packet, dict) and isinstance(packet.get("active_focus"), dict) else None,
+        recent_semantic_turns=packet.get("recent_semantic_turns") if isinstance(packet, dict) and isinstance(packet.get("recent_semantic_turns"), list) else None,
+    )
     carry_focus_terms = _is_referential_input(raw_user_input) or is_comparison_intent(raw_user_input)
     if carry_focus_terms and focus_terms:
         result["resolved_referents"] = list(dict.fromkeys([*result["resolved_referents"], *focus_terms]))

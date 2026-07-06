@@ -14,7 +14,7 @@ from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .resource_inventory import build_resource_inventory
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan
 from .semantic_compiler import (
     SemanticCompilerBackend,
@@ -260,29 +260,6 @@ def _normalize_active_focus(value: Any) -> dict[str, Any]:
     return focus
 
 
-def _focus_terms(focus: dict[str, Any]) -> list[str]:
-    terms: list[str] = []
-    for value in (
-        focus.get("concepts"),
-        focus.get("scope_requests"),
-        focus.get("resolved_referents"),
-        focus.get("literal_terms"),
-        focus.get("semantic_queries"),
-        focus.get("lexical_queries"),
-        focus.get("graph_seeds"),
-        focus.get("selected_note_titles"),
-        focus.get("selected_section_labels"),
-        [focus.get("query")],
-    ):
-        for item in _coerce_string_list(value):
-            for term in _extract_terms(item):
-                if term not in terms:
-                    terms.append(term)
-            if item not in terms:
-                terms.append(item)
-    return terms
-
-
 def _is_referential_user_input(text: str) -> bool:
     lowered = f" {text.lower()} "
     return any(f" {surface} " in lowered for surface in REFERENTIAL_SURFACE_WORDS)
@@ -293,31 +270,6 @@ def _snippet(text: str, limit: int = ASSISTANT_SNIPPET_LIMIT) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[: limit - 1].rstrip() + "…"
-
-
-def _semantic_turn_focus_terms(turn: dict[str, Any]) -> list[str]:
-    terms: list[str] = []
-    for value in (
-        turn.get("query"),
-        turn.get("concepts"),
-        turn.get("scope_requests"),
-        turn.get("resolved_referents"),
-        turn.get("literal_terms"),
-        turn.get("semantic_queries"),
-        turn.get("lexical_queries"),
-        turn.get("graph_seeds"),
-        turn.get("selected_note_titles"),
-        turn.get("selected_section_labels"),
-        turn.get("entities"),
-        turn.get("relations"),
-    ):
-        for item in _coerce_string_list(value):
-            for term in _extract_terms(item):
-                if term not in terms:
-                    terms.append(term)
-            if item not in terms:
-                terms.append(item)
-    return terms
 
 
 def _compact_active_focus(
@@ -485,9 +437,7 @@ def _deterministic_semantic_packet(
     resolved_referents: list[str] = []
     carry_focus_terms = _is_referential_user_input(raw_user_input) or is_comparison_intent(raw_user_input)
     if carry_focus_terms:
-        focus_terms = _focus_terms(active_focus)
-        for turn in recent_semantic_turns[-2:]:
-            focus_terms.extend(_semantic_turn_focus_terms(turn))
+        focus_terms = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
         resolved_referents = list(dict.fromkeys(term for term in focus_terms if term))
         if resolved_referents:
             concepts = list(dict.fromkeys([*concepts, *resolved_referents]))
@@ -546,10 +496,7 @@ def _canonicalize_compiler_packet(
     focus_terms: list[str] = []
     carry_focus_terms = _is_referential_user_input(raw_user_input) or is_comparison_intent(raw_user_input)
     if carry_focus_terms:
-        focus_terms = _focus_terms(active_focus)
-        for turn in recent_semantic_turns[-2:]:
-            focus_terms.extend(_semantic_turn_focus_terms(turn))
-        focus_terms = list(dict.fromkeys(term for term in focus_terms if term))
+        focus_terms = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
     if carry_focus_terms and focus_terms:
         packet["resolved_referents"] = list(dict.fromkeys([*packet["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(

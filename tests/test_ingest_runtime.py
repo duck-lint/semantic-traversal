@@ -24,6 +24,7 @@ from semantic_traversal.runtime import (
     run_thread_turn,
 )
 from semantic_traversal.retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
+from semantic_traversal.retrieval_plan import _focus_carry_terms
 from semantic_traversal.semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from semantic_traversal.storage import load_json, read_ledger
 
@@ -1129,10 +1130,66 @@ class ThesisRuntimeTests(unittest.TestCase):
         joined_semantic_queries = " ".join(planner_plan["semantic_queries"]).lower()
         self.assertIn("schopenhauer", joined_referents)
         self.assertIn("schopenhauer", joined_semantic_queries)
+        self.assertLessEqual(len(planner_plan["resolved_referents"]), 12)
         self.assertNotIn("relate", [entry["term"] for entry in planner_plan["literal_terms"]])
         self.assertNotIn("contrast", [entry["term"] for entry in planner_plan["literal_terms"]])
         self.assertNotIn("relate", [query.lower() for query in planner_plan["lexical_queries"]])
         self.assertNotIn("contrast", [query.lower() for query in planner_plan["lexical_queries"]])
+
+    def test_compact_focus_carry_terms_filters_noise_and_caps_terms(self) -> None:
+        active_focus = {
+            "query": "schopenhauer vision color vanity of existence",
+            "entities": [],
+            "relations": [],
+            "concepts": ["schopenhauer", "vision", "color"],
+            "scope_requests": [],
+            "resolved_referents": ["schopenhauer", "vanity of existence"],
+            "literal_terms": ["schopenhauer", "vision", "color", "vanity of existence"],
+            "semantic_queries": ["schopenhauer vision color vanity of existence"],
+            "lexical_queries": ["schopenhauer", "vision", "color", "vanity of existence"],
+            "graph_seeds": ["schopenhauer vision color vanity of existence"],
+            "retrieval_layers": [],
+            "selection_policy": {},
+            "claim_policy": {},
+            "selected_chunk_ids": ["chunk-1", "chunk-2"],
+            "selected_note_titles": ["2024-05-01", "assistant_response_snippet", "A Very Long Note Title That Should Not Be Carried Into Referential Context Because It Is Just Noise"],
+            "selected_section_labels": ["page 12", "this", "that", "thinking", "2024-05-01"],
+        }
+        recent_semantic_turns = [
+            {
+                "turn_id": 1,
+                "raw_user_input": "ignored raw input",
+                "assistant_response_snippet": "ignored assistant snippet",
+                "query": "schopenhauer vision color vanity of existence",
+                "entities": [],
+                "relations": [],
+                "concepts": ["schopenhauer", "vision", "color"],
+                "scope_requests": [],
+                "resolved_referents": ["schopenhauer", "vanity of existence"],
+                "literal_terms": ["schopenhauer", "vision", "color", "vanity of existence"],
+                "semantic_queries": ["schopenhauer vision color vanity of existence"],
+                "lexical_queries": ["schopenhauer", "vision", "color", "vanity of existence"],
+                "graph_seeds": ["schopenhauer vision color vanity of existence"],
+                "retrieval_layers": [],
+                "selection_policy": {},
+                "claim_policy": {},
+                "selected_chunk_ids": ["chunk-9"],
+                "selected_note_titles": ["selected_chunk_ids"],
+                "selected_section_labels": ["2024-06-01", "page 9"],
+            }
+        ]
+        carried = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
+        self.assertLessEqual(len(carried), 8)
+        self.assertIn("schopenhauer", carried)
+        self.assertIn("vision", carried)
+        self.assertIn("color", carried)
+        self.assertIn("vanity of existence", carried)
+        self.assertNotIn("selected_chunk_ids", carried)
+        self.assertNotIn("assistant_response_snippet", carried)
+        self.assertNotIn("this", carried)
+        self.assertNotIn("that", carried)
+        self.assertNotIn("thinking", carried)
+        self.assertFalse(any(term.startswith("2024-") for term in carried))
 
     def test_quoted_discourse_operator_terms_remain_searchable(self) -> None:
         data_root = _prepare_data_root()

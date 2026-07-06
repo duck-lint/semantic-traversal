@@ -70,6 +70,39 @@ DISCOURSE_OPERATOR_WORDS = {
 SCOPE_JOURNAL_WORDS = {"daily", "dailies", "journal", "journals", "journaled", "entry", "entries"}
 SEARCH_NOISE_WORDS = SEARCH_INTENT_WORDS | SCOPE_JOURNAL_WORDS | {"exact", "exactly", "literal", "literally", "term", "terms", "text"}
 DEFAULT_SELECTION_BUDGETS = {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}
+MAX_CARRIED_FOCUS_TERMS = 8
+_CARRY_NOISE_TERMS = {
+    "assistant_response_snippet",
+    "chunk_id",
+    "feels",
+    "feel",
+    "has",
+    "have",
+    "match_reason",
+    "note",
+    "notes",
+    "note_id",
+    "paragraph_text",
+    "raw_user_input",
+    "retrieval_observation",
+    "scope_match",
+    "selected_chunk_ids",
+    "selected_note_titles",
+    "selected_section_labels",
+    "source_layers",
+    "text",
+    "that",
+    "them",
+    "thems",
+    "thing",
+    "things",
+    "this",
+    "they",
+    "thinking",
+    "what",
+    "how",
+    "why",
+}
 KNOWN_PLANNER_FIELDS = {
     "intent_type",
     "scope_requests",
@@ -128,6 +161,99 @@ def _clean_discourse_operator_terms(text: str, terms: list[str]) -> tuple[list[s
 
 def is_comparison_intent(text: str) -> bool:
     return bool(set(collect_plan_terms(text)).intersection(DISCOURSE_OPERATOR_WORDS))
+
+
+def _looks_like_date_or_page_label(term: str) -> bool:
+    lowered = term.lower().strip()
+    return bool(
+        re.fullmatch(r"\d{4}-\d{2}-\d{2}", lowered)
+        or re.fullmatch(r"\d{4}/\d{2}/\d{2}", lowered)
+        or re.fullmatch(r"(?:page\s+\d+|p\.?\s*\d+)", lowered)
+        or re.fullmatch(r"\d{1,3}", lowered)
+    )
+
+
+def _is_compact_focus_term(term: str) -> bool:
+    cleaned = str(term or "").strip()
+    if not cleaned:
+        return False
+    lowered = cleaned.lower()
+    if lowered in _CARRY_NOISE_TERMS:
+        return False
+    if len(cleaned) > 120:
+        return False
+    if "{" in cleaned or "}" in cleaned or "[" in cleaned or "]" in cleaned:
+        return False
+    if _looks_like_date_or_page_label(cleaned):
+        return False
+    if cleaned.startswith("selected_") or cleaned in {"raw_user_input", "assistant_response_snippet"}:
+        return False
+    if len(cleaned.split()) == 1 and len(cleaned) < 3:
+        return False
+    return True
+
+
+def _append_compact_term(terms: list[str], candidate: str, *, max_terms: int) -> None:
+    cleaned = str(candidate or "").strip()
+    if not _is_compact_focus_term(cleaned):
+        return
+    if cleaned not in terms:
+        terms.append(cleaned)
+
+
+def _append_query_terms(terms: list[str], candidate: str, *, max_terms: int) -> None:
+    for token in collect_plan_terms(candidate):
+        if token in SEARCH_NOISE_WORDS or token in DISCOURSE_OPERATOR_WORDS:
+            continue
+        _append_compact_term(terms, token, max_terms=max_terms)
+        if len(terms) >= max_terms:
+            return
+
+
+def _focus_carry_terms(
+    *,
+    active_focus: dict[str, Any] | None,
+    recent_semantic_turns: list[dict[str, Any]] | None,
+    max_terms: int = MAX_CARRIED_FOCUS_TERMS,
+) -> list[str]:
+    carried: list[str] = []
+
+    def consume_source(source: dict[str, Any]) -> None:
+        for field in ("resolved_referents", "concepts", "literal_terms", "graph_seeds", "lexical_queries"):
+            for item in coerce_string_list(source.get(field)):
+                _append_compact_term(carried, item, max_terms=max_terms)
+                if len(carried) >= max_terms:
+                    return
+        query = str(source.get("query") or "").strip()
+        if query:
+            _append_query_terms(carried, query, max_terms=max_terms)
+            if len(carried) >= max_terms:
+                return
+        for field in ("semantic_queries",):
+            for item in coerce_string_list(source.get(field)):
+                _append_query_terms(carried, item, max_terms=max_terms)
+                if len(carried) >= max_terms:
+                    return
+
+    if isinstance(active_focus, dict):
+        consume_source(active_focus)
+    if isinstance(recent_semantic_turns, list):
+        for turn in recent_semantic_turns[-2:]:
+            if isinstance(turn, dict):
+                consume_source(turn)
+            if len(carried) >= max_terms:
+                break
+
+    if len(carried) < max_terms:
+        for source in (active_focus or {}, *(recent_semantic_turns[-2:] if isinstance(recent_semantic_turns, list) else [])):
+            if not isinstance(source, dict):
+                continue
+            for field in ("selected_note_titles", "selected_section_labels"):
+                for item in coerce_string_list(source.get(field)):
+                    _append_compact_term(carried, item, max_terms=max_terms)
+                    if len(carried) >= max_terms:
+                        return carried[:max_terms]
+    return carried[:max_terms]
 
 
 def coerce_string_list(value: Any) -> list[str]:
