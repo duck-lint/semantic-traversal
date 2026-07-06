@@ -49,6 +49,24 @@ SEARCH_INTENT_WORDS = {
     "search",
     "show",
 }
+DISCOURSE_OPERATOR_WORDS = {
+    "compare",
+    "compares",
+    "comparison",
+    "contrast",
+    "contrasts",
+    "difference",
+    "differences",
+    "relation",
+    "relations",
+    "related",
+    "relate",
+    "relates",
+    "similarity",
+    "similarities",
+    "vs",
+    "versus",
+}
 SCOPE_JOURNAL_WORDS = {"daily", "dailies", "journal", "journals", "journaled", "entry", "entries"}
 SEARCH_NOISE_WORDS = SEARCH_INTENT_WORDS | SCOPE_JOURNAL_WORDS | {"exact", "exactly", "literal", "literally", "term", "terms", "text"}
 DEFAULT_SELECTION_BUDGETS = {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}
@@ -65,6 +83,51 @@ KNOWN_PLANNER_FIELDS = {
     "selection_policy",
     "claim_policy",
 }
+
+
+def _quoted_terms_from_text(text: str) -> list[str]:
+    return [match.strip() for match in re.findall(r"[\"“”']([^\"“”']+)[\"“”']", text) if match.strip()]
+
+
+def _term_is_explicitly_requested(text: str, term: str) -> bool:
+    lowered = f" {text.lower()} "
+    normalized = term.lower().strip()
+    if not normalized:
+        return False
+    markers = (
+        f" word {normalized} ",
+        f" the word {normalized} ",
+        f" term {normalized} ",
+        f" the term {normalized} ",
+        f" mention {normalized} ",
+        f" mentions {normalized} ",
+        f" mentioned {normalized} ",
+        f" occurrence {normalized} ",
+        f" occurrences {normalized} ",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _clean_discourse_operator_terms(text: str, terms: list[str]) -> tuple[list[str], list[str]]:
+    quoted_terms = {term.lower() for term in _quoted_terms_from_text(text)}
+    cleaned: list[str] = []
+    demoted: list[str] = []
+    for term in terms:
+        normalized = str(term).strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in DISCOURSE_OPERATOR_WORDS and lowered not in quoted_terms and not _term_is_explicitly_requested(text, lowered):
+            if normalized not in demoted:
+                demoted.append(normalized)
+            continue
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    return cleaned, demoted
+
+
+def is_comparison_intent(text: str) -> bool:
+    return bool(set(collect_plan_terms(text)).intersection(DISCOURSE_OPERATOR_WORDS))
 
 
 def coerce_string_list(value: Any) -> list[str]:
@@ -130,10 +193,13 @@ def concepts_from_text(text: str) -> list[str]:
 
 
 def literal_terms_from_text(text: str) -> list[str]:
-    quoted_terms = [match.strip() for match in re.findall(r"[\"“”']([^\"“”']+)[\"“”']", text) if match.strip()]
+    quoted_terms = _quoted_terms_from_text(text)
     if quoted_terms:
-        return list(dict.fromkeys(quoted_terms))
-    return [term for term in collect_plan_terms(text) if term not in SEARCH_NOISE_WORDS]
+        literal_terms = list(dict.fromkeys(quoted_terms))
+    else:
+        literal_terms = [term for term in collect_plan_terms(text) if term not in SEARCH_NOISE_WORDS]
+    cleaned_terms, _ = _clean_discourse_operator_terms(text, literal_terms)
+    return cleaned_terms
 
 
 def _literal_term_entries(terms: list[str], *, required: bool) -> list[dict[str, Any]]:
@@ -179,6 +245,7 @@ def build_default_retrieval_plan(
     literal_terms = literal_terms_from_text(raw_user_input) if search_intent else []
     semantic_queries = [query.strip()] if query.strip() else []
     lexical_queries = literal_terms if literal_terms else concepts
+    lexical_queries, _ = _clean_discourse_operator_terms(raw_user_input, lexical_queries)
     intent_type = "exact_search" if search_intent else "semantic_traversal"
     if scope_requests:
         intent_type = "scoped_exact_search" if search_intent else "scoped_semantic_traversal"
@@ -292,10 +359,22 @@ def _coerce_claim_policy(value: Any, fallback: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], raw_user_input: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     diagnostics: dict[str, Any] = {"ignored_planner_fields": []}
     if not isinstance(value, dict):
-        return dict(fallback), diagnostics
+        result = dict(fallback)
+        if raw_user_input:
+            literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry.get("term", "") for entry in result.get("literal_terms", []) if isinstance(entry, dict)])
+            if demoted:
+                diagnostics["demoted_discourse_operators"] = demoted
+            allowed_terms = set(literal_terms)
+            result["literal_terms"] = [entry for entry in result.get("literal_terms", []) if isinstance(entry, dict) and entry.get("term") in allowed_terms]
+            lexical_queries, demoted_lexical = _clean_discourse_operator_terms(raw_user_input, coerce_string_list(result.get("lexical_queries")))
+            if demoted_lexical:
+                diagnostics.setdefault("demoted_discourse_operators", [])
+                diagnostics["demoted_discourse_operators"] = list(dict.fromkeys([*diagnostics.get("demoted_discourse_operators", []), *demoted_lexical]))
+            result["lexical_queries"] = lexical_queries
+        return result, diagnostics
 
     unknown_fields = sorted(set(value) - KNOWN_PLANNER_FIELDS)
     if unknown_fields:
@@ -314,6 +393,17 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any]) -> tupl
         "selection_policy": _coerce_selection_policy(value.get("selection_policy"), fallback.get("selection_policy", {})),
         "claim_policy": _coerce_claim_policy(value.get("claim_policy"), fallback.get("claim_policy", {})),
     }
+    if raw_user_input:
+        literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry["term"] for entry in result["literal_terms"]])
+        if demoted:
+            diagnostics["demoted_discourse_operators"] = demoted
+        allowed_terms = set(literal_terms)
+        result["literal_terms"] = [entry for entry in result["literal_terms"] if entry["term"] in allowed_terms]
+        lexical_queries, demoted_lexical = _clean_discourse_operator_terms(raw_user_input, result["lexical_queries"])
+        if demoted_lexical:
+            diagnostics.setdefault("demoted_discourse_operators", [])
+            diagnostics["demoted_discourse_operators"] = list(dict.fromkeys([*diagnostics.get("demoted_discourse_operators", []), *demoted_lexical]))
+        result["lexical_queries"] = lexical_queries
     return result, diagnostics
 
 

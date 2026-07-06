@@ -14,7 +14,7 @@ from .embeddings import EmbeddingBackend, resolve_embedding_backend
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .resource_inventory import build_resource_inventory
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, retrieval_plan_layer, scope_requests_from_text
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text
 from .retrieval_resolver import bind_retrieval_plan
 from .semantic_compiler import (
     SemanticCompilerBackend,
@@ -483,14 +483,15 @@ def _deterministic_semantic_packet(
     query = " ".join(concepts[:8]).strip() or raw_user_input.strip()
     scope_requests = ["journal"] if any(term in concepts for term in ("journal", "journaled", "daily", "dailies", "entries", "entry")) else []
     resolved_referents: list[str] = []
-    if _is_referential_user_input(raw_user_input):
+    carry_focus_terms = _is_referential_user_input(raw_user_input) or is_comparison_intent(raw_user_input)
+    if carry_focus_terms:
         focus_terms = _focus_terms(active_focus)
         for turn in recent_semantic_turns[-2:]:
             focus_terms.extend(_semantic_turn_focus_terms(turn))
         resolved_referents = list(dict.fromkeys(term for term in focus_terms if term))
         if resolved_referents:
             concepts = list(dict.fromkeys([*concepts, *resolved_referents]))
-            query = " ".join(resolved_referents[:8]).strip() or query
+            query = " ".join([query, *resolved_referents[:8]]).strip() or query
     graph_seeds: list[str] = [query] if query else []
     if prior_thread_state.get("latest_user_input"):
         graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
@@ -541,14 +542,15 @@ def _canonicalize_compiler_packet(
     packet["entities"] = _coerce_string_list(payload.get("entities")) or packet["entities"]
     packet["relations"] = _coerce_string_list(payload.get("relations")) or packet["relations"]
     packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
-    packet["limitations"] = _coerce_string_list(payload.get("limitations")) or packet["limitations"]
+    packet["limitations"] = _coerce_string_list(payload.get("limitations")) if isinstance(payload.get("limitations"), list) else []
     focus_terms: list[str] = []
-    if _is_referential_user_input(raw_user_input):
+    carry_focus_terms = _is_referential_user_input(raw_user_input) or is_comparison_intent(raw_user_input)
+    if carry_focus_terms:
         focus_terms = _focus_terms(active_focus)
         for turn in recent_semantic_turns[-2:]:
             focus_terms.extend(_semantic_turn_focus_terms(turn))
         focus_terms = list(dict.fromkeys(term for term in focus_terms if term))
-    if _is_referential_user_input(raw_user_input) and focus_terms:
+    if carry_focus_terms and focus_terms:
         packet["resolved_referents"] = list(dict.fromkeys([*packet["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
@@ -558,9 +560,12 @@ def _canonicalize_compiler_packet(
         graph_seeds=[packet["query"]] if packet["query"].strip() else [],
         resolved_referents=list(packet["resolved_referents"]),
     )
-    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan)
-    if _is_referential_user_input(raw_user_input):
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, raw_user_input=raw_user_input)
+    if carry_focus_terms and focus_terms:
         canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *packet["resolved_referents"]]))
+        comparison_query = " ".join([packet["query"], *focus_terms[:6]]).strip()
+        if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
+            canonical_plan["semantic_queries"].append(comparison_query)
     packet["planner_retrieval_plan"] = canonical_plan
     packet["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(

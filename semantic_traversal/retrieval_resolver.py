@@ -63,6 +63,53 @@ def _alias_filters_for_request(request: str, scope_aliases: dict[str, dict[str, 
     }
 
 
+def _record_unobserved_alias_bindings(
+    *,
+    request: str,
+    alias_filters: dict[str, list[str] | str | None],
+    observed_note_types: set[str],
+    observed_source_labels: set[str],
+    observed_paths: set[str],
+) -> list[dict[str, Any]]:
+    adjustments: list[dict[str, Any]] = []
+    note_types = [str(value).strip() for value in alias_filters.get("note_type") or [] if str(value).strip()]
+    source_label = str(alias_filters.get("source_label") or "").strip()
+    path_contains = [str(value).strip() for value in alias_filters.get("path_contains") or [] if str(value).strip()]
+
+    for value in note_types:
+        if value not in observed_note_types:
+            adjustments.append(
+                {
+                    "field": f"scope_aliases.{request}.note_type",
+                    "value": value,
+                    "action": "bound_to_alias_unobserved_in_inventory",
+                    "reason": "configured alias value was not observed in resource_inventory_summary.frontmatter_facets.note_type",
+                }
+            )
+
+    if source_label and source_label not in observed_source_labels:
+        adjustments.append(
+            {
+                "field": f"scope_aliases.{request}.source_label",
+                "value": source_label,
+                "action": "bound_to_alias_unobserved_in_inventory",
+                "reason": "configured alias value was not observed in resource_inventory_summary.observed_source_labels",
+            }
+        )
+
+    for value in path_contains:
+        if value not in observed_paths:
+            adjustments.append(
+                {
+                    "field": f"scope_aliases.{request}.path_contains",
+                    "value": value,
+                    "action": "bound_to_alias_unobserved_in_inventory",
+                    "reason": "configured alias value was not observed in resource_inventory_summary.path_topology",
+                }
+            )
+    return adjustments
+
+
 def bind_retrieval_plan(
     *,
     planner_retrieval_plan: dict[str, Any],
@@ -94,6 +141,15 @@ def bind_retrieval_plan(
                     "action": "bound_to_alias",
                     "reason": "configured scope alias",
                 }
+            )
+            adjustments.extend(
+                _record_unobserved_alias_bindings(
+                    request=scope_request,
+                    alias_filters=alias_filters,
+                    observed_note_types=observed_note_types,
+                    observed_source_labels=observed_source_labels,
+                    observed_paths=observed_paths,
+                )
             )
             continue
 

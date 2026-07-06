@@ -1076,6 +1076,108 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertIn("candy", second_turn.next_thread_state["active_focus"]["resolved_referents"])
         self.assertIn("bed", second_turn.next_thread_state["active_focus"]["resolved_referents"])
 
+    def test_comparison_intent_carries_prior_active_focus_into_semantic_context(self) -> None:
+        data_root = _prepare_data_root()
+        first_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the Schopenhauer candy vision color note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "How does della rocca and parmenidean ascent relate and contrast?",
+                "intent": "fixture response",
+                "query": "how does della rocca and parmenidean ascent relate and contrast",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": ["della rocca"],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": [],
+                    "concepts": ["della", "rocca", "parmenidean", "ascent", "relate", "contrast"],
+                    "resolved_referents": ["della rocca"],
+                    "literal_terms": ["della rocca", "relate", "contrast"],
+                    "semantic_queries": ["how does della rocca and parmenidean ascent relate and contrast"],
+                    "lexical_queries": ["della rocca", "relate", "contrast"],
+                    "graph_seeds": ["how does della rocca and parmenidean ascent relate and contrast"],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        second_turn = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="How does della rocca and parmenidean ascent relate and contrast?",
+            llm_backend=RecordingLLMBackend(),
+            thread_id=first_turn.thread_id,
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        planner_plan = second_turn.semantic_compiler_packet["planner_retrieval_plan"]
+        joined_referents = " ".join(planner_plan["resolved_referents"]).lower()
+        joined_semantic_queries = " ".join(planner_plan["semantic_queries"]).lower()
+        self.assertIn("schopenhauer", joined_referents)
+        self.assertIn("schopenhauer", joined_semantic_queries)
+        self.assertNotIn("relate", [entry["term"] for entry in planner_plan["literal_terms"]])
+        self.assertNotIn("contrast", [entry["term"] for entry in planner_plan["literal_terms"]])
+        self.assertNotIn("relate", [query.lower() for query in planner_plan["lexical_queries"]])
+        self.assertNotIn("contrast", [query.lower() for query in planner_plan["lexical_queries"]])
+
+    def test_quoted_discourse_operator_terms_remain_searchable(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": 'search journal for "contrast"',
+                "intent": "fixture response",
+                "query": 'search journal for "contrast"',
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "scoped_exact_search",
+                    "scope_requests": ["journal"],
+                    "concepts": ["contrast"],
+                    "resolved_referents": [],
+                    "literal_terms": ["contrast"],
+                    "semantic_queries": ['search journal for "contrast"'],
+                    "lexical_queries": ["contrast"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "exact_chunk_search", "required": True, "limit": 200, "return_total_count": True},
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": True, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input='search journal for "contrast"',
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        planner_plan = result.semantic_compiler_packet["planner_retrieval_plan"]
+        self.assertIn("contrast", [entry["term"] for entry in planner_plan["literal_terms"]])
+        self.assertIn("contrast", [query.lower() for query in planner_plan["lexical_queries"]])
+
     def test_recent_semantic_turns_are_capped_to_small_tail(self) -> None:
         data_root = _prepare_data_root()
         thread_id: str | None = None
@@ -1472,6 +1574,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertNotIn("scope_filters", result.semantic_compiler_packet["planner_retrieval_plan"])
         self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
         self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_alias")
+        self.assertTrue(any(adjustment["action"] == "bound_to_alias_unobserved_in_inventory" for adjustment in result.semantic_traversal_manifest["resolver_adjustments"]))
 
     def test_resolver_binds_observed_note_type_without_alias(self) -> None:
         data_root = _prepare_data_root()
@@ -1515,6 +1618,52 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
         self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_observed_note_type")
 
+    def test_alias_bound_unobserved_inventory_values_are_explicit(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        data_root = Path(temp_dir.name)
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "search journal",
+                "intent": "fixture response",
+                "query": "search journal",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": ["journal"],
+                    "concepts": ["journal"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["search journal"],
+                    "lexical_queries": ["journal"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+                "limitations": [],
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search journal",
+            llm_backend=RecordingLLMBackend(),
+            config=config,
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertTrue(any(adjustment["action"] == "bound_to_alias_unobserved_in_inventory" for adjustment in result.semantic_traversal_manifest["resolver_adjustments"]))
+
     def test_resource_inventory_observes_frontmatter_note_type(self) -> None:
         data_root = _prepare_data_root()
         result = run_thread_turn(
@@ -1542,6 +1691,47 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(any(entry["value"] == "journal_entry" and entry["count"] == 1 for entry in facets))
         source_labels = result.semantic_traversal_manifest["resource_inventory_summary"]["observed_source_labels"]
         self.assertTrue(any(entry["count"] == 1 for entry in source_labels))
+
+    def test_compiler_payload_without_limitations_does_not_inherit_fallback_limitations(self) -> None:
+        data_root = _prepare_data_root()
+        compiler_backend = ResponseCompilerBackend(
+            payload={
+                "raw_user_input": "Please retrieve the candy snack food before bed note.",
+                "intent": "fixture response",
+                "query": "candy snack food before bed",
+                "entities": [],
+                "relations": [],
+                "resolved_referents": [],
+                "planner_retrieval_plan": {
+                    "intent_type": "semantic_traversal",
+                    "scope_requests": [],
+                    "concepts": ["candy", "snack", "food", "bed"],
+                    "resolved_referents": [],
+                    "literal_terms": [],
+                    "semantic_queries": ["candy snack food before bed"],
+                    "lexical_queries": ["candy", "snack", "food", "bed"],
+                    "graph_seeds": ["candy snack food before bed"],
+                    "retrieval_layers": [
+                        {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                        {"operator": "vector_search", "required": False, "limit": 24},
+                        {"operator": "graph_expand", "required": False, "depth": 1},
+                    ],
+                    "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+                    "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+                },
+            },
+            raw_response="raw response",
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=compiler_backend,
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(result.semantic_compiler_packet["limitations"], [])
+        self.assertNotIn("deterministic compiler packet used", result.semantic_compiler_packet["limitations"])
 
     def test_compiler_request_packet_includes_compact_resource_inventory(self) -> None:
         data_root = _prepare_data_root()

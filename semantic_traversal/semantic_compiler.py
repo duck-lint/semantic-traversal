@@ -11,6 +11,7 @@ from .hashing import sha256_text
 from .retrieval_plan import (
     build_default_retrieval_plan,
     canonicalize_retrieval_plan,
+    is_comparison_intent,
     scope_requests_from_text,
 )
 
@@ -149,7 +150,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     result["raw_user_input"] = raw_user_input
     result["intent"] = str(payload.get("intent") or result["intent"]).strip() or result["intent"]
     result["query"] = str(payload.get("query") or result["query"]).strip() or result["query"]
-    for key in ("entities", "relations", "resolved_referents", "limitations"):
+    for key in ("entities", "relations", "resolved_referents"):
         value = payload.get(key)
         if isinstance(value, list):
             cleaned = []
@@ -163,8 +164,19 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
                     cleaned.append(text)
             if cleaned:
                 result[key] = cleaned
+    limitations_value = payload.get("limitations")
+    if isinstance(limitations_value, list):
+        cleaned_limitations = []
+        for item in limitations_value:
+            text = str(item).strip()
+            if text and text not in cleaned_limitations:
+                cleaned_limitations.append(text)
+        result["limitations"] = cleaned_limitations
+    else:
+        result["limitations"] = []
     focus_terms = _active_focus_terms(packet or {})
-    if _is_referential_input(raw_user_input) and focus_terms:
+    carry_focus_terms = _is_referential_input(raw_user_input) or is_comparison_intent(raw_user_input)
+    if carry_focus_terms and focus_terms:
         result["resolved_referents"] = list(dict.fromkeys([*result["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
@@ -174,9 +186,12 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         graph_seeds=[result["query"]] if result["query"].strip() else [],
         resolved_referents=list(result["resolved_referents"]),
     )
-    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan)
-    if _is_referential_input(raw_user_input) and focus_terms:
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, raw_user_input=raw_user_input)
+    if carry_focus_terms and focus_terms:
         canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *focus_terms]))
+        comparison_query = " ".join([result["query"], *focus_terms[:6]]).strip()
+        if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
+            canonical_plan["semantic_queries"].append(comparison_query)
     result["planner_retrieval_plan"] = canonical_plan
     result["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(
