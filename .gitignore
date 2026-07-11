@@ -1,3 +1,2 @@
 .env.*
 *.pyc
-obsidian-plugin/node_modules
