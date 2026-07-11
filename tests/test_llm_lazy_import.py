@@ -83,3 +83,29 @@ class LazyOpenAIImportTests(unittest.TestCase):
 
         self.assertIn("openai.OpenAI", str(exc_info.exception))
         mocked_import.assert_called_once_with("openai")
+
+    def test_responses_backend_sends_configured_reasoning_effort(self) -> None:
+        llm_module = self._import_llm_module()
+
+        class FakeResponses:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def create(self, **kwargs):
+                self.kwargs = kwargs
+                return SimpleNamespace(output_text="answer", usage=None, id="resp_test")
+
+        backend = object.__new__(llm_module.OpenAIResponsesBackend)
+        backend._client = SimpleNamespace(responses=FakeResponses())
+        backend._model = "gpt-5.6-luna"
+        backend._reasoning_effort = "medium"
+        backend._max_output_tokens = 6000
+        backend._instructions = "Respond clearly."
+        backend._instructions_hash = "test-hash"
+
+        response = backend.generate({"user_input": "test"})
+
+        self.assertEqual(response.assistant_response, "answer")
+        self.assertEqual(response.metadata["reasoning_effort"], "medium")
+        self.assertEqual(backend._client.responses.kwargs["reasoning"], {"effort": "medium"})
+        self.assertEqual(backend._client.responses.kwargs["model"], "gpt-5.6-luna")

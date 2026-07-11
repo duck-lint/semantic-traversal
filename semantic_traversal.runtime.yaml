@@ -35,7 +35,9 @@ graph_traversal:
   min_token_overlap: 3
 
 llm:
-  model: "gpt-5.4-mini"
+  model: "gpt-5.6-luna"
+  reasoning:
+    effort: medium
   max_output_tokens: 6000
 
 semantic_compiler:

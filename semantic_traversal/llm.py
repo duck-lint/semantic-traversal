@@ -55,18 +55,36 @@ class UnavailableLLMBackend:
 
 
 class OpenAIResponsesBackend:
-    def __init__(self, api_key: str, model: str, max_output_tokens: int, instructions: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        reasoning_effort: str,
+        max_output_tokens: int,
+        instructions: str,
+    ) -> None:
         self._client = _build_openai_client(api_key=api_key)
         self._model = model
+        self._reasoning_effort = reasoning_effort
         self._max_output_tokens = max_output_tokens
         self._instructions = instructions.strip()
         self._instructions_hash = sha256_text(self._instructions)
+
+    def describe_call(self) -> dict[str, Any]:
+        """Return configured call identity when no provider response is available."""
+        return {
+            "mode": "live",
+            "provider": "openai",
+            "model": self._model,
+            "reasoning_effort": self._reasoning_effort,
+        }
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
         response = self._client.responses.create(
             model=self._model,
             instructions=self._instructions,
             input=json.dumps(synthesis_context_packet, ensure_ascii=True, indent=2),
+            reasoning={"effort": self._reasoning_effort},
             max_output_tokens=self._max_output_tokens,
             store=False,
         )
@@ -79,9 +97,7 @@ class OpenAIResponsesBackend:
         return LLMResponse(
             assistant_response=assistant_text,
             metadata={
-                "mode": "live",
-                "provider": "openai",
-                "model": self._model,
+                **self.describe_call(),
                 "response_id": response_id,
                 "usage": usage_payload,
                 "frontier_synthesis_prompt_hash": self._instructions_hash,
@@ -107,11 +123,11 @@ def resolve_openai_settings(
     repo_root: Path,
     config: RuntimeConfig,
     model_override: str | None = None,
-) -> tuple[str | None, str, int]:
+) -> tuple[str | None, str, str, int]:
     dotenv_values = load_dotenv_local(repo_root)
     api_key = os.environ.get("OPENAI_API_KEY") or dotenv_values.get("OPENAI_API_KEY")
     model = model_override or config.llm_model
-    return api_key, model, config.llm_max_output_tokens
+    return api_key, model, config.llm_reasoning_effort, config.llm_max_output_tokens
 
 
 def resolve_llm_backend(
@@ -120,7 +136,7 @@ def resolve_llm_backend(
     llm_mode: str,
     model_override: str | None = None,
 ) -> LLMBackend:
-    api_key, model, max_output_tokens = resolve_openai_settings(
+    api_key, model, reasoning_effort, max_output_tokens = resolve_openai_settings(
         repo_root=repo_root,
         config=config,
         model_override=model_override,
@@ -135,6 +151,7 @@ def resolve_llm_backend(
         return OpenAIResponsesBackend(
             api_key=api_key,
             model=model,
+            reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             instructions=instructions,
         )
@@ -142,6 +159,7 @@ def resolve_llm_backend(
         return OpenAIResponsesBackend(
             api_key=api_key,
             model=model,
+            reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             instructions=instructions,
         )

@@ -2034,9 +2034,104 @@ class ThesisRuntimeTests(unittest.TestCase):
                 llm_backend=llm_backend,
                 semantic_compiler_backend=TestSemanticCompilerBackend(),
             )
+            ledger_record = read_ledger(result.thread_ledger_path)[-1]
         self.assertEqual(result.runtime_outcome, "blocked")
         self.assertEqual(len(llm_backend.calls), 0)
-        self.assertIsNone(result.assistant_response)
+        self.assertIsNotNone(result.assistant_response)
+        self.assertIn("couldn't", result.assistant_response.lower())
+        self.assertEqual(
+            ledger_record["llm_call_metadata"],
+            {
+                "synthesis_status": "not_attempted",
+                "provider": None,
+                "model": None,
+                "response_id": None,
+                "reasoning_effort": None,
+                "usage": None,
+                "error": None,
+            },
+        )
+
+    def test_ledger_records_per_synthesis_llm_telemetry(self) -> None:
+        class TelemetryLLMBackend(RecordingLLMBackend):
+            def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
+                self.calls.append(synthesis_context_packet)
+                return LLMResponse(
+                    assistant_response="Telemetry response",
+                    metadata={
+                        "mode": self.mode_name,
+                        "provider": "openai",
+                        "model": "gpt-5.6-luna",
+                        "response_id": "resp_telemetry",
+                        "reasoning_effort": "medium",
+                        "usage": {"input_tokens": 123, "output_tokens": 45, "cached_tokens": 67},
+                    },
+                )
+
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=_prepare_data_root(),
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=TelemetryLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        ledger = read_ledger(result.thread_ledger_path)
+        self.assertEqual(
+            ledger[-1]["llm_call_metadata"],
+            {
+                "synthesis_status": "completed",
+                "provider": "openai",
+                "model": "gpt-5.6-luna",
+                "response_id": "resp_telemetry",
+                "reasoning_effort": "medium",
+                "usage": {"input_tokens": 123, "output_tokens": 45, "cached_tokens": 67},
+                "error": None,
+            },
+        )
+
+    def test_frontier_failure_persists_blocked_turn_and_user_facing_response(self) -> None:
+        class FailingLLMBackend(RecordingLLMBackend):
+            def describe_call(self) -> dict[str, Any]:
+                return {
+                    "mode": "live",
+                    "provider": "openai",
+                    "model": "gpt-5.6-luna",
+                    "reasoning_effort": "medium",
+                }
+
+            def generate(self, synthesis_context_packet: dict[str, Any]):
+                raise RuntimeError("provider timed out")
+
+        data_root = _prepare_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Please retrieve the candy snack food before bed note.",
+            llm_backend=FailingLLMBackend(),
+            semantic_compiler_backend=TestSemanticCompilerBackend(),
+            embedding_backend=FakeEmbeddingBackend(),
+        )
+        self.assertEqual(result.runtime_outcome, "blocked")
+        self.assertIsNotNone(result.assistant_response)
+        self.assertIn("frontier agent was unavailable", result.assistant_response.lower())
+        self.assertTrue(result.state_delta_path.exists())
+        self.assertIn("frontier LLM failed", result.blocking_reasons[-1])
+        persisted_thread = load_json(result.conversation_thread_path)
+        persisted_state_delta = load_json(result.state_delta_path)
+        persisted_ledger = read_ledger(result.thread_ledger_path)
+        self.assertIsNotNone(persisted_thread)
+        self.assertEqual(persisted_thread["messages"][-1]["role"], "assistant")
+        self.assertEqual(persisted_thread["messages"][-1]["content"], result.assistant_response)
+        self.assertIsNotNone(persisted_state_delta)
+        self.assertEqual(persisted_state_delta["runtime_outcome"], "blocked")
+        self.assertIn("frontier LLM failed", persisted_state_delta["blocking_reasons"][-1])
+        self.assertEqual(persisted_ledger[-1]["runtime_outcome"], "blocked")
+        self.assertEqual(persisted_ledger[-1]["llm_call_metadata"]["synthesis_status"], "failed")
+        self.assertEqual(persisted_ledger[-1]["llm_call_metadata"]["provider"], "openai")
+        self.assertEqual(persisted_ledger[-1]["llm_call_metadata"]["model"], "gpt-5.6-luna")
+        self.assertEqual(persisted_ledger[-1]["llm_call_metadata"]["reasoning_effort"], "medium")
+        self.assertEqual(persisted_ledger[-1]["llm_call_metadata"]["error"], "RuntimeError: provider timed out")
 
     def test_synthesis_packet_hides_raw_compiler_backend_response(self) -> None:
         data_root = _prepare_data_root()
