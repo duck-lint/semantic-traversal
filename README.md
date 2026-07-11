@@ -1,85 +1,117 @@
 # semantic-traversal
 
-`semantic-traversal` is a local conversational runtime over persisted thread state and ingested note chunks. Each user turn preserves the raw message, compiles a canonical `semantic_compiler_packet`, activates retrieval surfaces, builds a traversal manifest, evaluates coverage, optionally synthesizes through the frontier LLM boundary, updates thread state, and appends a hash-chained ledger record.
+`semantic-traversal` is a local semantic context compiler for conversations over an Obsidian-style Markdown vault.
 
-The current runtime keeps three practical layers visible:
+The runtime owns the path from a user utterance to usable context:
 
-- canonical semantic compiler packets
-- SQLite-backed lexical, vector, graph, and primary-corpus activation surfaces
-- inspectable per-turn artifacts and ledger hashes
-
-## Runtime Shape
-
-For each user message, the runtime:
-
-1. Loads prior `thread_state` and `conversation_thread` artifacts if they exist.
-2. Preserves the raw user input unchanged.
-3. Sends the raw input plus compact prior thread state to the configured local semantic compiler.
-4. Canonicalizes the compiler response into `semantic_compiler_packet` and writes compiler diagnostics separately.
-5. Activates lexical, vector, graph, and primary-corpus surfaces from the ingestion database when available.
-6. Builds `semantic_traversal_manifest` from activated candidate regions.
-7. Assembles `retrieval_packet` only from traversal-selected chunk IDs.
-8. Evaluates coverage as `approved` or `blocked`.
-9. Builds `synthesis_context_packet` with raw input, prior thread state, compiler packet, traversal manifest, coverage report, and coverage-approved retrieval only when runtime gating permits it.
-10. Calls the frontier LLM backend only when the runtime outcome is `completed`.
-11. Saves the next thread state, state delta, turn artifacts, and hash-chained ledger record.
-
-## Config And Secrets
-
-Checked-in runtime authority lives in [`semantic_traversal.runtime.yaml`](semantic_traversal.runtime.yaml).
-
-Use that YAML for runtime paths, provider/model/base URLs, traversal knobs, storage names, and index table names.
-
-Use `.env.local` only for secrets such as `OPENAI_API_KEY`. The YAML must not contain API keys or credentials.
-
-Install dependencies before running vector-enabled runtime paths:
-
-```powershell
-pip install -r requirements.txt
+```text
+user utterance
+  -> semantic compiler
+  -> retrieval-plan binding
+  -> lexical / vector / graph activation
+  -> traversal manifest
+  -> provenance-aware retrieval
+  -> coverage audit
+  -> frontier-model synthesis
 ```
 
-## Artifact Layout
+The frontier model writes the final response. It does not choose what to retrieve, traverse the corpus, or decide whether evidence is valid.
 
-Default runtime artifacts live under the repo-local configured data root:
+This repository is local-first and deliberately inspectable. A turn leaves behind the compiler packet, traversal decisions, retrieved evidence, coverage decision, state transition, and hash-chained ledger record.
 
-- thread data root: `.semantic-traversal-data`
-- probe data root: `$env:TEMP\semantic-traversal-probes`
+## Current shape
 
-Per turn, the runtime writes:
+There are three practical parts:
 
-- `semantic_compiler_packet.json`
-- `semantic_compiler_diagnostic.json`
-- `semantic_traversal_manifest.json`
-- `retrieval_packet.json`
-- `coverage_report.json`
-- `synthesis_context_packet.json`
-- `state_delta.json`
+- **Python runtime** — ingestion, thread state, semantic compilation, retrieval, traversal, coverage gating, synthesis, and artifact persistence.
+- **SQLite latent space** — ingested note chunks, embeddings, graph nodes, and wikilink edges.
+- **Obsidian plugin** — a desktop-only chat and inspection surface over the external Python runtime.
 
-The ledger records hashes for those persisted turn artifacts, the conversation thread, and the next thread state.
+The runtime is not an autonomous RAG agent. Retrieval and evidence validity stay on the runtime side of the boundary.
 
-## Runtime Decisions
+## Runtime contract
 
-Normal runtime execution is binary:
+For each turn, the runtime:
 
-- `completed`
-- `blocked`
+1. Preserves the raw user message.
+2. Loads the prior thread state and ledger parent.
+3. Sends the message and compact thread context to the configured semantic compiler.
+4. Canonicalizes the compiler response into `semantic_compiler_packet`.
+5. Binds soft scope requests to observed corpus metadata.
+6. Activates available lexical, vector, graph, and primary-corpus surfaces.
+7. Builds a `semantic_traversal_manifest` from those activation results.
+8. Materializes `retrieval_packet` only from traversal-selected chunks.
+9. Audits retrieval and provenance against the packet's coverage policy.
+10. Calls the frontier model only when coverage approves synthesis.
+11. Persists the next thread state, state delta, artifacts, and ledger record.
 
-Blocked turns persist an explicit assistant-facing runtime response and do not
-call the frontier LLM. Frontier failures are persisted as blocked turns so the
-thread remains inspectable and retryable.
+Normal runtime outcomes are intentionally binary:
 
-Coverage uses `decision=approved` or `decision=blocked`. Blocked turns may still persist diagnostic observations, but those observations do not approve synthesis.
+- `completed` — the runtime contract was satisfied and synthesis was allowed.
+- `blocked` — a required boundary was unavailable, invalid, under-covered, or failed.
 
-Semantic compiler statuses are:
+Blocked turns still preserve diagnostics and an assistant-facing explanation. They do not call the frontier model as a fallback.
 
-- `parsed`
-- `unavailable`
-- `invalid_json`
-- `fallback`
+## Corpus model
 
-Only `parsed` compiler output may pass normal runtime coverage. Fallback packets are diagnostic scaffolding for artifact inspection; they do not authorize synthesis.
+The ingest path treats the vault as Markdown notes and chunks their substantive text into the local SQLite store.
 
-## Quick Start
+- Notes are corpus nodes.
+- Wikilinks are graph edges.
+- Frontmatter is metadata used for filtering and scope binding; it is not a graph-node layer.
+- Each note requires the configured UUID field, `uuid` by default.
+- The ingestion manifest records inserted, updated, unchanged, and deleted content.
+
+The checked-in runtime config is the authority for paths, models, retrieval limits, storage names, and prompts. Change the vault path before using the example config in a different environment.
+
+## Requirements
+
+- Python 3.11 or newer
+- Ollama for the local semantic compiler
+- An Ollama model matching `semantic_compiler.model` in the YAML
+- Sentence Transformers for local embeddings
+- An OpenAI API key for completed frontier synthesis
+- Obsidian desktop only, if using the plugin
+
+Install the Python dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install openai
+```
+
+Start Ollama and install the configured compiler model. The exact model is configuration-controlled; the checked-in example currently uses `qwen3:8b`:
+
+```powershell
+ollama serve
+ollama pull qwen3:8b
+```
+
+Put secrets in `.env.local`, not in `semantic_traversal.runtime.yaml`:
+
+```text
+OPENAI_API_KEY=your-key-here
+```
+
+The config loader rejects API keys and other credential-shaped values in YAML.
+
+## Configuration
+
+The runtime reads [`semantic_traversal.runtime.yaml`](semantic_traversal.runtime.yaml) by default. Use `--config` to supply another YAML file.
+
+The important settings are:
+
+- `paths.vault_root` — the Markdown vault to ingest.
+- `paths.data_root` — where SQLite, manifests, thread state, and turn artifacts live. Relative paths resolve under `vault_root`.
+- `semantic_compiler` — local Ollama provider, model, URL, and timeout.
+- `embeddings` — local Sentence Transformers provider and model.
+- `llm` — frontier model, reasoning effort, and output limit.
+- `retrieval`, `graph_traversal`, and `storage` — activation limits and artifact names.
+- `prompts` — compiler and synthesis instructions.
+
+The repository's example config points at one local vault path. Treat that as a template and update `paths.vault_root` for your machine.
+
+## Quick start
 
 Run the test suite:
 
@@ -87,58 +119,141 @@ Run the test suite:
 python -m unittest discover -s tests -v
 ```
 
-Build or refresh the local ingestion database:
+Ingest the configured vault:
 
 ```powershell
 python -m semantic_traversal ingest --repo-root .
 ```
 
-Run a normal CLI turn:
+Run a turn from the CLI:
 
 ```powershell
-python -m semantic_traversal --message "Please retrieve the candy snack food before bed note." --repo-root .
+python -m semantic_traversal `
+  --message "Retrieve the note about candy snack food before bed." `
+  --repo-root .
 ```
 
-A real turn requires a configured semantic compiler and, for completed synthesis, a configured frontier LLM key. Missing compiler or LLM configuration blocks the runtime rather than substituting a local pretend answer.
-
-## Probe Commands
+Continue an existing thread by passing its returned ID:
 
 ```powershell
-python -m semantic_traversal.probes new-thread --data-root $env:TEMP\semantic-traversal-probes-new
-python -m semantic_traversal.probes continue-thread --data-root $env:TEMP\semantic-traversal-probes-continuation
-python -m semantic_traversal.probes fixture-lexical-hit --data-root $env:TEMP\semantic-traversal-probes-fixture
+python -m semantic_traversal `
+  --message "Compare that with the sleep discussion." `
+  --thread-id THREAD_ID `
+  --repo-root .
 ```
 
-## How To Inspect A Turn
+The CLI prints a JSON summary containing the thread ID, runtime outcome, coverage decision, model metadata, and artifact paths. A blocked turn exits non-zero; inspect its persisted artifacts before changing configuration or retrying.
 
-Useful files after a turn:
+## Obsidian plugin
 
-- `semantic_compiler_packet.json` for the canonical compiler packet
-- `semantic_compiler_diagnostic.json` for compiler response status, metadata, diagnostics, and capped raw-response preview
-- `semantic_traversal_manifest.json` for activation surfaces, graph traversal notes, candidate counts, and selected chunk IDs
-- `retrieval_packet.json` for traversal-selected chunks and retrieval provenance
-- `coverage_report.json` for binary approval-vs-blocked gating plus blocking reasons
-- `synthesis_context_packet.json` for the exact context that would reach the final LLM when the runtime is completed
-- `state_delta.json` for the persisted state transition
-- `thread_ledger.jsonl` for the hash chain across turns
+The plugin is a desktop-only V1 interface over the external Python runtime. It does not replace the YAML configuration and does not ingest the vault automatically.
 
-## Human UAT Focus
+Build it from `obsidian-plugin`:
 
-Good break attempts:
+```powershell
+cd obsidian-plugin
+npm install
+npm run build
+```
 
-- confirm the raw user message is unchanged across compiler and synthesis artifacts
-- confirm the normal CLI blocks when no real semantic compiler is configured
-- confirm diagnostic fallback packets cannot produce `completed`
-- confirm fallback graph seeds do not include assistant-response prose
-- inspect `semantic_compiler_diagnostic.json` when compiler status is `fallback`
-- inspect traversal notes and verify raw lexical terms are not dropped when compiler extraction is sparse
-- confirm `approved_retrieval_packet` appears only when runtime gating permits synthesis
-- run two turns on the same thread and confirm the compiler request receives prior thread state
-- compare ledger hashes to the persisted artifact contents on disk
+Copy `main.js`, `manifest.json`, and `styles.css` into:
 
-## Notes
+```text
+<vault>/.obsidian/plugins/semantic-traversal/
+```
 
-- Live final-answer mode requires `OPENAI_API_KEY`.
-- Semantic compiler calls use the configured local Ollama backend.
-- Vector activation uses the configured Sentence Transformers backend by default.
-- Missing embeddings block the runtime rather than falling back to a softer completion mode.
+Configure these plugin settings:
+
+- **Python executable** — normally `python`.
+- **Runtime root** — the directory containing the `semantic_traversal` package.
+- **Runtime config path** — the YAML file used by the Python runtime.
+- **Thread artifact root** — the configured data root containing `threads/`.
+
+The plugin renders persisted conversation messages as Agent responses, exposes thread continuity, provides an ingest command, and shows runtime/coverage diagnostics for individual turns.
+
+## Artifact layout
+
+Under the configured data root, the runtime stores ingestion data and thread artifacts:
+
+```text
+<data-root>/
+├── ingestion/
+│   ├── latent_space.sqlite3
+│   └── manifests/latest.json
+└── threads/
+    └── <thread-id>/
+        ├── conversation_thread.json
+        ├── thread_state.json
+        ├── thread_ledger.jsonl
+        └── turns/
+            └── turn-000001/
+                ├── semantic_compiler_packet.json
+                ├── semantic_compiler_diagnostic.json
+                ├── semantic_traversal_manifest.json
+                ├── retrieval_packet.json
+                ├── coverage_report.json
+                ├── synthesis_context_packet.json
+                ├── state_delta.json
+                └── ...
+```
+
+The most useful turn artifacts are:
+
+| Artifact | Meaning |
+| --- | --- |
+| `semantic_compiler_packet.json` | Canonical semantic target, retrieval plan, coverage policy, and limitations. |
+| `semantic_compiler_diagnostic.json` | Backend status, diagnostics, metadata, and capped raw-response preview. |
+| `semantic_traversal_manifest.json` | Activation surfaces, candidate regions, graph expansion, and selection provenance. |
+| `retrieval_packet.json` | Concrete selected chunks and their source provenance. |
+| `coverage_report.json` | `approved` or `blocked`, with blocking and diagnostic gaps. |
+| `synthesis_context_packet.json` | The exact bounded context sent to the frontier model when synthesis is allowed. |
+| `state_delta.json` | The persisted thread transition for this turn. |
+| `thread_ledger.jsonl` | Hash-chained audit records across turns. |
+
+`synthesis_context_packet.json` is especially useful for checking what the frontier model actually received. A blocked turn must not contain approved retrieval for synthesis.
+
+## Compiler and coverage statuses
+
+Semantic compiler statuses include:
+
+- `parsed` — valid compiler output was canonicalized.
+- `unavailable` — the configured compiler could not be reached or was not configured.
+- `invalid_json` — the backend returned a response that could not be accepted as JSON.
+- `fallback` — diagnostic scaffolding was produced; it does not authorize normal synthesis.
+
+Only valid parsed compiler output can pass normal runtime coverage. A lexical hit by itself is not proof that the semantic target was covered.
+
+## Diagnostic probes
+
+The probe runner exercises isolated behavior with fixture or probe backends. Probe success is not equivalent to a successful live runtime turn.
+
+Examples:
+
+```powershell
+python -m semantic_traversal.probes new-thread `
+  --data-root $env:TEMP\semantic-traversal-probes-new
+
+python -m semantic_traversal.probes continue-thread `
+  --data-root $env:TEMP\semantic-traversal-probes-continuation
+
+python -m semantic_traversal.probes fixture-lexical-hit `
+  --data-root $env:TEMP\semantic-traversal-probes-fixture
+```
+
+These are useful for artifact persistence, thread continuity, lexical retrieval, and blocked-runtime behavior. They do not prove that Ollama, Sentence Transformers, OpenAI, or the Obsidian plugin are working on a particular machine.
+
+## Project boundaries
+
+The project is intentionally conservative about authority:
+
+- The semantic compiler plans; it does not answer the user.
+- The runtime activates, traverses, retrieves, and audits evidence.
+- The frontier model synthesizes from runtime-approved context.
+- Coverage is a provenance/alignment gate, not a claim of perfect semantic entailment.
+- Missing required runtime surfaces block completion rather than becoming a softer success mode.
+
+The current implementation is still under active development around canonical semantic compilation and human UAT. The artifacts are designed to make weak evidence, missing surfaces, and blocked turns visible instead of hiding them behind a plausible answer.
+
+## License and project status
+
+No public license or release contract is declared yet. Treat this repository as an active local project rather than a packaged distribution.
