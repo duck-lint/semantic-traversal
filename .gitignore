@@ -2,3 +2,4 @@
 *.pyc
 corpus/
 .semantic-traversal-data/
+obsidian-plugin/node_modules
