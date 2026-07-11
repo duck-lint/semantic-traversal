@@ -644,10 +644,6 @@ def _layer_limit(layer: dict[str, Any] | None, fallback: int) -> int:
         return fallback
 
 
-def _layer_enabled(plan: dict[str, Any], operator: str) -> bool:
-    return retrieval_plan_layer(plan, operator) is not None
-
-
 def _scope_values(scope_filters: dict[str, Any], key: str) -> list[str]:
     return [str(value).strip().lower() for value in _coerce_string_list(scope_filters.get(key)) if str(value).strip()]
 
@@ -1547,6 +1543,9 @@ def _coverage_report(
     semantic_queries = list(bound_plan.get("semantic_queries") or [])
     if selected_count == 0 and (semantic_queries or graph_seeds):
         blocking_reasons.append("retrieval required but no chunks were selected")
+    selection_notes = traversal_manifest.get("selection_notes") if isinstance(traversal_manifest, dict) else []
+    if isinstance(selection_notes, list) and any("ingestion database unavailable" in str(note).lower() for note in selection_notes):
+        blocking_reasons.append("ingestion database unavailable; run ingest before asking corpus questions")
     return {
         "decision": "approved" if not blocking_reasons and (selected_count > 0 or not (semantic_queries or graph_seeds)) else "blocked",
         "blocking_reasons": blocking_reasons,
@@ -1558,6 +1557,20 @@ def _coverage_report(
         "retrieval_packet_hash": sha256_json(retrieval_packet),
         "selected_chunk_count": selected_count,
     }
+
+
+def _blocked_turn_response(*, blocking_reasons: list[str]) -> str:
+    """Return an honest assistant message for a turn that never reached synthesis."""
+    reasons = " ".join(str(reason).strip() for reason in blocking_reasons if str(reason).strip()).lower()
+    if "semantic compiler" in reasons:
+        return "I couldn't interpret that turn because the semantic compiler is unavailable or returned invalid output."
+    if "ingestion database" in reasons:
+        return "I couldn't search the vault because the ingestion index is unavailable. Run ingestion, then retry."
+    if "no chunks were selected" in reasons:
+        return "I couldn't find matching material in the indexed vault. Try rephrasing the request or narrowing its scope."
+    if "llm backend unavailable" in reasons or "frontier llm" in reasons:
+        return "I prepared the turn, but the frontier agent was unavailable. Please retry when the frontier provider is available."
+    return "I couldn't complete that turn. Please retry after checking the runtime diagnostics."
 
 
 def _build_visible_transcript_tail(messages: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
@@ -1649,6 +1662,7 @@ def _build_ledger_record(
     runtime_outcome: str,
     blocking_reasons: list[str],
     llm_metadata: dict[str, Any],
+    llm_synthesis_attempted: bool,
     semantic_compiler_status: str,
     semantic_compiler_packet: dict[str, Any],
     semantic_compiler_diagnostic: dict[str, Any],
@@ -1661,12 +1675,31 @@ def _build_ledger_record(
     thread_state: dict[str, Any],
     parent_perturbation_hash: str | None,
 ) -> dict[str, Any]:
+    llm_call_metadata = {
+        # A blocked coverage turn has no frontier synthesis to account for.
+        # Keep that distinct from a synthesis attempt that reached a provider
+        # and failed before it could return usage telemetry.
+        "synthesis_status": (
+            "failed"
+            if llm_synthesis_attempted and llm_metadata.get("error")
+            else "completed"
+            if llm_synthesis_attempted
+            else "not_attempted"
+        ),
+        "provider": llm_metadata.get("provider"),
+        "model": llm_metadata.get("model"),
+        "response_id": llm_metadata.get("response_id"),
+        "reasoning_effort": llm_metadata.get("reasoning_effort"),
+        "usage": llm_metadata.get("usage"),
+        "error": llm_metadata.get("error"),
+    }
     return {
         "thread_id": thread_id,
         "turn_id": turn_id,
         "runtime_outcome": runtime_outcome,
         "blocking_reasons": blocking_reasons,
         "llm_mode": llm_metadata.get("mode"),
+        "llm_call_metadata": llm_call_metadata,
         "semantic_compiler_status": semantic_compiler_status,
         "parent_perturbation_hash": parent_perturbation_hash,
         "state_perturbation_hash": sha256_json(state_delta),
@@ -1862,12 +1895,11 @@ def run_thread_turn(
             graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
         )
-    bound_retrieval_plan, resolver_adjustments, resource_inventory_summary = bind_retrieval_plan(
-        planner_retrieval_plan=planner_retrieval_plan,
-        inventory_summary=resource_inventory_summary,
-        config=resolved_config,
-        raw_user_input=user_input,
-    )
+    # The database-backed path binds inside _semantic_traversal, where the same
+    # live inventory is already loaded. Only bind here for the no-database
+    # diagnostic path so resolver work is not performed twice per turn.
+    bound_retrieval_plan = planner_retrieval_plan
+    resolver_adjustments: list[dict[str, Any]] = []
 
     if database_path.exists():
         if embedding_backend is None:
@@ -1885,6 +1917,12 @@ def run_thread_turn(
         finally:
             connection.close()
     else:
+        bound_retrieval_plan, resolver_adjustments, resource_inventory_summary = bind_retrieval_plan(
+            planner_retrieval_plan=planner_retrieval_plan,
+            inventory_summary=resource_inventory_summary,
+            config=resolved_config,
+            raw_user_input=user_input,
+        )
         semantic_traversal_manifest = {
             "planner_retrieval_plan": planner_retrieval_plan,
             "bound_retrieval_plan": bound_retrieval_plan,
@@ -1949,10 +1987,40 @@ def run_thread_turn(
     llm_metadata: dict[str, Any] = {
         "mode": getattr(llm_backend, "mode_name", "unknown"),
     }
+    llm_synthesis_attempted = False
     if runtime_outcome == "completed":
-        llm_response = llm_backend.generate(synthesis_context_packet)
-        assistant_response_text = llm_response.assistant_response
-        llm_metadata = dict(llm_response.metadata)
+        try:
+            llm_synthesis_attempted = True
+            llm_response = llm_backend.generate(synthesis_context_packet)
+            assistant_response_text = llm_response.assistant_response
+            llm_metadata = dict(llm_response.metadata)
+        except Exception as exc:  # noqa: BLE001
+            # Persist the submitted turn and its diagnostics even when the
+            # frontier provider fails. The caller can retry the same thread.
+            blocking_reasons.append(f"frontier LLM failed: {type(exc).__name__}: {exc}")
+            runtime_outcome = "blocked"
+            assistant_response_text = _blocked_turn_response(blocking_reasons=blocking_reasons)
+            describe_call = getattr(llm_backend, "describe_call", None)
+            llm_metadata = dict(describe_call()) if callable(describe_call) else {
+                "mode": getattr(llm_backend, "mode_name", "unknown"),
+            }
+            llm_metadata["error"] = f"{type(exc).__name__}: {exc}"
+            approved_retrieval_packet = None
+            synthesis_context_packet = _build_synthesis_context_packet(
+                thread_id=thread_id_value,
+                turn_id=turn_id,
+                raw_user_input=user_input,
+                prior_thread_state=prior_thread_state,
+                visible_transcript_tail=visible_transcript_tail,
+                semantic_compiler_packet=semantic_compiler_packet,
+                semantic_traversal_manifest=semantic_traversal_manifest,
+                approved_retrieval_packet=None,
+                coverage_report=coverage_report,
+                runtime_outcome=runtime_outcome,
+                blocking_reasons=blocking_reasons,
+            )
+    else:
+        assistant_response_text = _blocked_turn_response(blocking_reasons=blocking_reasons)
 
     thread_state = _update_thread_state(
         prior_thread_state=prior_thread_state,
@@ -1996,6 +2064,7 @@ def run_thread_turn(
         runtime_outcome=runtime_outcome,
         blocking_reasons=blocking_reasons,
         llm_metadata=llm_metadata,
+        llm_synthesis_attempted=llm_synthesis_attempted,
         semantic_compiler_status=semantic_compiler_status,
         semantic_compiler_packet=semantic_compiler_packet,
         semantic_compiler_diagnostic=semantic_compiler_diagnostic,

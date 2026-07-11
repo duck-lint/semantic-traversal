@@ -7,6 +7,7 @@ from typing import Any
 
 from .ingest import IngestSourceRoot, run_ingest
 from .llm import LLMResponse
+from .retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
 from .runtime import run_thread_turn
 from .semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from .storage import load_json, read_ledger
@@ -38,6 +39,14 @@ class ProbeSemanticCompilerBackend:
         raw_user_input = str(packet.get("raw_user_input") or "")
         query = raw_user_input.strip()
         terms = collect_compiler_terms(raw_user_input)
+        planner_retrieval_plan = build_default_retrieval_plan(
+            raw_user_input=raw_user_input,
+            query=query,
+            concepts=terms,
+            scope_requests=scope_requests_from_text(raw_user_input),
+            graph_seeds=[query] if terms else [],
+            resolved_referents=[],
+        )
         return SemanticCompilerResponse(
             parsed_payload={
                 "raw_user_input": raw_user_input,
@@ -46,9 +55,7 @@ class ProbeSemanticCompilerBackend:
                 "entities": [],
                 "relations": [],
                 "resolved_referents": [],
-                "retrieval_terms": terms,
-                "vector_query": query,
-                "graph_seeds": [query] if terms else [],
+                "planner_retrieval_plan": planner_retrieval_plan,
                 "limitations": ["probe compiler backend used"],
             },
             raw_response=None,

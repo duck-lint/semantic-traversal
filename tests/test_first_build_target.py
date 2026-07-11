@@ -78,7 +78,8 @@ class FirstBuildTargetTests(unittest.TestCase):
             self.assertEqual(len(ledger), 1)
             self.assertEqual(thread_document["thread_id"], turn.thread_id)
             self.assertEqual(turn.runtime_outcome, "blocked")
-            self.assertIsNone(turn.assistant_response)
+            self.assertIsNotNone(turn.assistant_response)
+            self.assertIn("couldn't", turn.assistant_response.lower())
 
 
 if __name__ == "__main__":

@@ -56,6 +56,9 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     },
     "llm": {
         "model": str,
+        "reasoning": {
+            "effort": str,
+        },
         "max_output_tokens": int,
     },
     "semantic_compiler": {
@@ -231,6 +234,10 @@ class RuntimeConfig:
     @property
     def llm_model(self) -> str:
         return str(self.raw["llm"]["model"])
+
+    @property
+    def llm_reasoning_effort(self) -> str:
+        return str(self.raw["llm"]["reasoning"]["effort"])
 
     @property
     def llm_max_output_tokens(self) -> int:

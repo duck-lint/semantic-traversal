@@ -64,6 +64,10 @@ Normal runtime execution is binary:
 - `completed`
 - `blocked`
 
+Blocked turns persist an explicit assistant-facing runtime response and do not
+call the frontier LLM. Frontier failures are persisted as blocked turns so the
+thread remains inspectable and retryable.
+
 Coverage uses `decision=approved` or `decision=blocked`. Blocked turns may still persist diagnostic observations, but those observations do not approve synthesis.
 
 Semantic compiler statuses are:
