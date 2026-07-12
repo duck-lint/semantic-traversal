@@ -229,7 +229,6 @@ class SemanticTraversalView extends ItemView {
   private messagesEl!: HTMLElement;
   private threadSelect!: HTMLSelectElement;
   private input!: HTMLTextAreaElement;
-  private statusEl!: HTMLElement;
   private inspectorEl!: HTMLElement;
   private scrollPersistTimer: number | null = null;
 
@@ -278,8 +277,6 @@ class SemanticTraversalView extends ItemView {
     });
     const sendButton = composer.createEl("button", { text: "Send" });
     sendButton.addEventListener("click", () => void this.submit());
-    this.statusEl = composer.createDiv({ cls: "semantic-traversal-status", attr: { "aria-live": "polite" } });
-    this.statusEl.setText("Enter to send · Shift+Enter for a new line · Ctrl/Cmd+Enter to send");
   }
 
   private async renderThreadList(selectActiveThread = true): Promise<void> {
@@ -308,7 +305,7 @@ class SemanticTraversalView extends ItemView {
     const document = await this.plugin.readThread(threadId);
     this.messagesEl.empty();
     if (!document) {
-      this.statusEl.setText("Could not render the selected thread");
+      new Notice("Could not render the selected thread");
       return;
     }
     const turnSummaries = await this.plugin.readThreadTurnSummaries(threadId);
@@ -320,7 +317,6 @@ class SemanticTraversalView extends ItemView {
         if (summary && summary.turn_id === document.latest_turn_id) this.renderInspector(summary);
       }
     }
-    this.statusEl.setText("Enter to send · Shift+Enter for a new line · Ctrl/Cmd+Enter to send");
     const savedScrollPosition = this.plugin.settings.threadScrollPositions[threadId];
     this.messagesEl.scrollTop = savedScrollPosition ?? this.messagesEl.scrollHeight;
   }
@@ -346,7 +342,6 @@ class SemanticTraversalView extends ItemView {
     loadingEl.createDiv({ text: "Assistant", cls: "semantic-traversal-message-label" });
     loadingEl.createDiv({ text: "Preparing context for the Agent…", cls: "semantic-traversal-message-content" });
     this.scrollToElement(loadingEl);
-    this.statusEl.setText("Assistant is preparing context for the Agent…");
     try {
       const result = await this.plugin.runTurn(message, this.plugin.activeThreadId);
       const previousThreadId = this.plugin.activeThreadId;
@@ -359,8 +354,7 @@ class SemanticTraversalView extends ItemView {
       this.renderInspector(latestSummary ?? result);
       this.scrollToBottom();
     } catch (error) {
-      this.statusEl.addClass("semantic-traversal-error");
-      this.statusEl.setText(error instanceof Error ? error.message : String(error));
+      new Notice(error instanceof Error ? error.message : String(error));
     } finally {
       this.input.disabled = false;
       this.input.focus();
@@ -374,7 +368,6 @@ class SemanticTraversalView extends ItemView {
     this.messagesEl.empty();
     this.inspectorEl.empty();
     this.inspectorEl.createDiv({ text: "New thread. Runtime will create an id when you send the first message." });
-    this.statusEl.setText("New thread");
     this.input.focus();
   }
 
