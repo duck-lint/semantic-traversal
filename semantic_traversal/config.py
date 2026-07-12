@@ -42,6 +42,21 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "max_depth": int,
             "max_candidates": int,
         },
+        "planner_defaults": {
+            "exact_limit": int,
+            "exact_return_total_count": bool,
+            "lexical_limit": int,
+            "vector_limit": int,
+            "graph_depth": int,
+            "selection_policy": {
+                "max_chunks": int,
+                "preserve_required_layers": bool,
+                "budgets": dict,
+            },
+            "claim_policy": {
+                "negative_claims_require_exact_layer": bool,
+            },
+        },
         "scope_aliases": dict,
     },
     "runtime_conversation": {
@@ -49,6 +64,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "referential_surface_words": [str],
         "recent_semantic_turn_limit": int,
         "recent_message_limit": int,
+        "visible_transcript_tail_limit": int,
         "assistant_snippet_limit": int,
         "raw_response_preview_limit": int,
     },
@@ -87,13 +103,6 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "model": (str, type(None)),
         "base_url": str,
         "request_timeout_seconds": int,
-        "prompt_example": {
-            "lexical_limit": int,
-            "vector_limit": int,
-            "graph_depth": int,
-            "max_chunks": int,
-            "selection_budgets": dict,
-        },
     },
     "embeddings": {
         "provider": str,
@@ -236,6 +245,10 @@ class RuntimeConfig:
         return self.raw["retrieval_scoring"]
 
     @property
+    def retrieval_planner_defaults(self) -> dict[str, Any]:
+        return self.raw["retrieval"]["planner_defaults"]
+
+    @property
     def graph_traversal_enabled(self) -> bool:
         return bool(self.raw["graph_traversal"]["enabled"])
 
@@ -307,10 +320,6 @@ class RuntimeConfig:
     @property
     def semantic_compiler_request_timeout_seconds(self) -> int:
         return int(self.raw["semantic_compiler"]["request_timeout_seconds"])
-
-    @property
-    def semantic_compiler_prompt_example(self) -> dict[str, Any]:
-        return self.raw["semantic_compiler"]["prompt_example"]
 
     @property
     def embedding_model(self) -> str:

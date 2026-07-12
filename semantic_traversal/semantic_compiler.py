@@ -76,7 +76,7 @@ def collect_compiler_terms(text: str) -> list[str]:
     return terms
 
 
-def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
+def _deterministic_compiler_packet(raw_user_input: str, *, planner_defaults: dict[str, Any]) -> dict[str, Any]:
     query = raw_user_input.strip()
     concepts = collect_compiler_terms(raw_user_input)
     scope_requests = scope_requests_from_text(raw_user_input)
@@ -97,6 +97,7 @@ def _deterministic_compiler_packet(raw_user_input: str) -> dict[str, Any]:
         scope_requests=scope_requests,
         graph_seeds=graph_seeds,
         resolved_referents=[],
+        planner_defaults=planner_defaults,
     )
     packet["planner_diagnostics"] = {"ignored_planner_fields": []}
     return packet
@@ -107,8 +108,8 @@ def _is_referential_input(text: str) -> bool:
     return any(f" {surface} " in f" {lowered} " for surface in ("it", "that", "this", "those", "they", "them"))
 
 
-def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None, *, packet: dict[str, Any] | None = None) -> dict[str, Any]:
-    fallback = _deterministic_compiler_packet(raw_user_input)
+def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None, *, planner_defaults: dict[str, Any], packet: dict[str, Any] | None = None) -> dict[str, Any]:
+    fallback = _deterministic_compiler_packet(raw_user_input, planner_defaults=planner_defaults)
     if not isinstance(payload, dict):
         return fallback
     result = dict(fallback)
@@ -153,8 +154,9 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         scope_requests=scope_requests_from_text(result["query"]),
         graph_seeds=[result["query"]] if result["query"].strip() else [],
         resolved_referents=list(result["resolved_referents"]),
+        planner_defaults=planner_defaults,
     )
-    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, raw_user_input=raw_user_input)
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, planner_defaults=planner_defaults, raw_user_input=raw_user_input)
     if carry_focus_terms and focus_terms:
         canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *focus_terms]))
         comparison_query = " ".join([result["query"], *focus_terms[:6]]).strip()
@@ -185,35 +187,35 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     return result
 
 
-def _render_ollama_prompt(*, packet: dict[str, Any], template: str, prompt_example: dict[str, Any] | None = None) -> str:
+def _render_ollama_prompt(*, packet: dict[str, Any], template: str, planner_defaults: dict[str, Any]) -> str:
+    rendered_template = template
+    selection_policy = planner_defaults["selection_policy"]
+    budgets = selection_policy["budgets"]
+    replacements = {
+        "{semantic_compiler_lexical_limit}": planner_defaults["lexical_limit"],
+        "{semantic_compiler_vector_limit}": planner_defaults["vector_limit"],
+        "{semantic_compiler_graph_depth}": planner_defaults["graph_depth"],
+        "{semantic_compiler_max_chunks}": selection_policy["max_chunks"],
+        "{semantic_compiler_exact_budget}": budgets["exact"],
+        "{semantic_compiler_lexical_budget}": budgets["lexical"],
+        "{semantic_compiler_vector_budget}": budgets["vector"],
+        "{semantic_compiler_graph_budget}": budgets["graph"],
+    }
+    for marker, value in replacements.items():
+        rendered_template = rendered_template.replace(marker, str(value))
     packet_json = json.dumps(packet, ensure_ascii=True, indent=2)
-    rendered = template.replace("{packet}", packet_json)
-    if prompt_example is not None:
-        budgets = prompt_example["selection_budgets"]
-        replacements = {
-            "{semantic_compiler_lexical_limit}": prompt_example["lexical_limit"],
-            "{semantic_compiler_vector_limit}": prompt_example["vector_limit"],
-            "{semantic_compiler_graph_depth}": prompt_example["graph_depth"],
-            "{semantic_compiler_max_chunks}": prompt_example["max_chunks"],
-            "{semantic_compiler_exact_budget}": budgets["exact"],
-            "{semantic_compiler_lexical_budget}": budgets["lexical"],
-            "{semantic_compiler_vector_budget}": budgets["vector"],
-            "{semantic_compiler_graph_budget}": budgets["graph"],
-        }
-        for marker, value in replacements.items():
-            rendered = rendered.replace(marker, str(value))
-    return rendered.strip()
+    return rendered_template.replace("{packet}", packet_json).strip()
 
 
 class OllamaSemanticCompilerBackend:
     mode_name = "ollama"
 
-    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, prompt_template: str, prompt_example: dict[str, Any]) -> None:
+    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, prompt_template: str, planner_defaults: dict[str, Any]) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._prompt_template = prompt_template
-        self._prompt_example = prompt_example
+        self._planner_defaults = planner_defaults
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
@@ -224,7 +226,7 @@ class OllamaSemanticCompilerBackend:
                 diagnostics={},
                 status="unavailable",
             )
-        prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template, prompt_example=self._prompt_example)
+        prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template, planner_defaults=self._planner_defaults)
         prompt_hash = sha256_text(prompt)
         payload = {"model": self._model, "prompt": prompt, "stream": False}
         raw_response_text: str | None = None
@@ -283,7 +285,7 @@ class OllamaSemanticCompilerBackend:
                 diagnostics={},
                 status="invalid_json",
             )
-        canonical_payload = _canonicalize_response_payload(str(packet.get("raw_user_input") or ""), parsed_payload, packet=packet)
+        canonical_payload = _canonicalize_response_payload(str(packet.get("raw_user_input") or ""), parsed_payload, planner_defaults=self._planner_defaults, packet=packet)
         return SemanticCompilerResponse(
             parsed_payload=canonical_payload,
             raw_response=raw_response_text,
@@ -331,6 +333,6 @@ def resolve_semantic_compiler_backend(
             base_url=configured_base_url.strip(),
             timeout_seconds=timeout_seconds,
             prompt_template=config.semantic_compiler_prompt_template,
-            prompt_example=config.semantic_compiler_prompt_example,
+            planner_defaults=config.retrieval_planner_defaults,
         )
     return UnavailableSemanticCompilerBackend(reason=f"unsupported semantic compiler provider: {configured_provider}", configured_mode=configured_provider)

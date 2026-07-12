@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .ingest import IngestSourceRoot, run_ingest
+from .config import load_runtime_config
 from .llm import LLMResponse
 from .retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
 from .runtime import run_thread_turn
@@ -35,6 +36,9 @@ class ProbeLLMBackend:
 class ProbeSemanticCompilerBackend:
     mode_name = "probe"
 
+    def __init__(self) -> None:
+        self._planner_defaults = load_runtime_config(repo_root=REPO_ROOT).retrieval_planner_defaults
+
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input") or "")
         query = raw_user_input.strip()
@@ -46,6 +50,7 @@ class ProbeSemanticCompilerBackend:
             scope_requests=scope_requests_from_text(raw_user_input),
             graph_seeds=[query] if terms else [],
             resolved_referents=[],
+            planner_defaults=self._planner_defaults,
         )
         return SemanticCompilerResponse(
             parsed_payload={

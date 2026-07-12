@@ -79,6 +79,9 @@ class TestLLMBackend:
 class TestSemanticCompilerBackend:
     mode_name = "test"
 
+    def __init__(self) -> None:
+        self._planner_defaults = load_runtime_config(repo_root=REPO_ROOT).retrieval_planner_defaults
+
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         raw_user_input = str(packet.get("raw_user_input") or "")
         query = raw_user_input.strip()
@@ -90,6 +93,7 @@ class TestSemanticCompilerBackend:
             scope_requests=scope_requests_from_text(raw_user_input),
             graph_seeds=[query] if query else [],
             resolved_referents=[],
+            planner_defaults=self._planner_defaults,
         )
         return SemanticCompilerResponse(
             parsed_payload={
@@ -1400,8 +1404,9 @@ class ThesisRuntimeTests(unittest.TestCase):
         adjusted = _apply_retrieval_candidate_hygiene(
             candidates=[template_candidate, journal_candidate],
             semantic_compiler_packet=semantic_compiler_packet,
+            config=load_runtime_config(repo_root=REPO_ROOT),
         )
-        ranked = _merge_candidates([], adjusted, [])
+        ranked = _merge_candidates([], adjusted, [], config=load_runtime_config(repo_root=REPO_ROOT))
         selected = _select_retrieval_chunks(merged_candidates=ranked, max_chunks=2)
         self.assertEqual([chunk["chunk_id"] for chunk in selected], ["journal", "template"])
         self.assertIn("template boilerplate demoted", selected[1]["selection_reason"])
@@ -1443,6 +1448,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         adjusted = _apply_retrieval_candidate_hygiene(
             candidates=[template_candidate],
             semantic_compiler_packet=semantic_compiler_packet,
+            config=load_runtime_config(repo_root=REPO_ROOT),
         )
         self.assertNotIn("template boilerplate demoted", adjusted[0]["selection_reason"])
 

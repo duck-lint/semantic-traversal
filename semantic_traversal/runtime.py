@@ -417,6 +417,7 @@ def _deterministic_semantic_packet(
         scope_requests=scope_requests,
         graph_seeds=graph_seeds,
         resolved_referents=resolved_referents,
+        planner_defaults=config.retrieval_planner_defaults,
     )
     packet["planner_diagnostics"] = {"ignored_planner_fields": []}
     return packet
@@ -463,8 +464,9 @@ def _canonicalize_compiler_packet(
         scope_requests=scope_requests_from_text(packet["query"]),
         graph_seeds=[packet["query"]] if packet["query"].strip() else [],
         resolved_referents=list(packet["resolved_referents"]),
+        planner_defaults=config.retrieval_planner_defaults,
     )
-    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, raw_user_input=raw_user_input)
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, planner_defaults=config.retrieval_planner_defaults, raw_user_input=raw_user_input)
     if carry_focus_terms and focus_terms:
         canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *packet["resolved_referents"]]))
         comparison_query = " ".join([packet["query"], *focus_terms[:6]]).strip()
@@ -769,13 +771,12 @@ def _graph_match_note_nodes(
     node_type_allowlist: set[str],
     match_mode: str,
     min_token_overlap: int,
-    config: RuntimeConfig | None = None,
+    config: RuntimeConfig,
 ) -> list[dict[str, Any]]:
-    resolved_config = config or load_runtime_config(repo_root=Path.cwd())
     exact_matches: list[dict[str, Any]] = []
     overlap_matches: list[dict[str, Any]] = []
     seed_normalized = _normalize_text(seed)
-    seed_tokens = _graph_token_set(seed, config=resolved_config)
+    seed_tokens = _graph_token_set(seed, config=config)
     for row in node_rows:
         node_type = str(row.get("node_type") or "")
         if node_type not in node_type_allowlist:
@@ -789,7 +790,7 @@ def _graph_match_note_nodes(
             continue
         if match_mode != "exact_or_token_overlap":
             continue
-        node_tokens = _graph_token_set(f"{label} {ref_id}", config=resolved_config)
+        node_tokens = _graph_token_set(f"{label} {ref_id}", config=config)
         if len(seed_tokens.intersection(node_tokens)) >= min_token_overlap:
             overlap_matches.append(dict(row))
     return exact_matches or overlap_matches
@@ -1146,16 +1147,15 @@ def _apply_retrieval_candidate_hygiene(
     *,
     candidates: list[dict[str, Any]],
     semantic_compiler_packet: dict[str, Any],
-    config: RuntimeConfig | None = None,
+    config: RuntimeConfig,
 ) -> list[dict[str, Any]]:
-    resolved_config = config or load_runtime_config(repo_root=Path.cwd())
     if _is_template_or_schema_query(semantic_compiler_packet):
         return candidates
     adjusted: list[dict[str, Any]] = []
     for candidate in candidates:
         next_candidate = dict(candidate)
         if _is_template_boilerplate_candidate(next_candidate):
-            next_candidate["score"] = float(next_candidate.get("score") or 0.0) - float(resolved_config.retrieval_scoring["demotion_penalty"])
+            next_candidate["score"] = float(next_candidate.get("score") or 0.0) - float(config.retrieval_scoring["demotion_penalty"])
             next_candidate["_retrieval_demoted"] = True
             next_candidate["selection_reason"] = "; ".join(
                 part
@@ -1173,12 +1173,11 @@ def _merge_candidates(
     lexical_candidates: list[dict[str, Any]],
     vector_candidates: list[dict[str, Any]],
     graph_candidates: list[dict[str, Any]],
-    config: RuntimeConfig | None = None,
+    config: RuntimeConfig,
     exact_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
-    resolved_config = config or load_runtime_config(repo_root=Path.cwd())
-    source_priority = {str(key): int(value) for key, value in resolved_config.retrieval_scoring["source_priority"].items()}
+    source_priority = {str(key): int(value) for key, value in config.retrieval_scoring["source_priority"].items()}
 
     def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
@@ -1297,6 +1296,7 @@ def _semantic_traversal(
             scope_requests=_coerce_string_list(semantic_compiler_packet.get("scope_requests")),
             graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
+            planner_defaults=config.retrieval_planner_defaults,
         )
 
     resource_inventory_summary = build_resource_inventory(connection=connection, config=config)
@@ -1872,6 +1872,7 @@ def run_thread_turn(
             scope_requests=_coerce_string_list(semantic_compiler_packet.get("scope_requests")),
             graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
+            planner_defaults=resolved_config.retrieval_planner_defaults,
         )
     # The database-backed path binds inside _semantic_traversal, where the same
     # live inventory is already loaded. Only bind here for the no-database
@@ -1948,7 +1949,7 @@ def run_thread_turn(
     approved_retrieval_packet = retrieval_packet if runtime_outcome == "completed" else None
     visible_transcript_tail = _build_visible_transcript_tail(
         _ensure_message_list(conversation_thread.get("messages")),
-        limit=int(resolved_config.runtime_conversation["recent_message_limit"]),
+        limit=int(resolved_config.runtime_conversation["visible_transcript_tail_limit"]),
     )
     synthesis_context_packet = _build_synthesis_context_packet(
         thread_id=thread_id_value,

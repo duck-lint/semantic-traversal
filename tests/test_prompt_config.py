@@ -16,6 +16,7 @@ class PromptConfigTests(unittest.TestCase):
         prompt = _render_ollama_prompt(
             packet={"raw_user_input": "hello"},
             template="Compiler prompt starts here.\n{packet}",
+            planner_defaults=load_runtime_config(repo_root=REPO_ROOT).retrieval_planner_defaults,
         )
 
         self.assertTrue(prompt.startswith("Compiler prompt starts here."))

@@ -18,12 +18,29 @@ retrieval:
     default_depth: 1
     max_depth: 2
     max_candidates: 24
+  planner_defaults:
+    exact_limit: 200
+    exact_return_total_count: true
+    lexical_limit: 50
+    vector_limit: 24
+    graph_depth: 1
+    selection_policy:
+      max_chunks: 24
+      preserve_required_layers: true
+      budgets:
+        exact: 12
+        lexical: 6
+        vector: 6
+        graph: 4
+    claim_policy:
+      negative_claims_require_exact_layer: true
 
 runtime_conversation:
   stop_words: [a, an, and, are, as, at, be, but, by, about, do, for, from, how, i, if, in, into, is, it, my, of, "on", or, our, retrieve, retrieved, retrieves, retrieving, note, notes, regarding, search, the, find, found, locate, mention, mentions, show, to, with, you, your]
   referential_surface_words: [it, that, this, those, they, them]
   recent_semantic_turn_limit: 6
   recent_message_limit: 6
+  visible_transcript_tail_limit: 6
   assistant_snippet_limit: 120
   raw_response_preview_limit: 1200
 
@@ -70,16 +87,6 @@ semantic_compiler:
   model: qwen3:8b
   base_url: "http://localhost:11434"
   request_timeout_seconds: 120
-  prompt_example:
-    lexical_limit: 50
-    vector_limit: 24
-    graph_depth: 1
-    max_chunks: 24
-    selection_budgets:
-      exact: 12
-      lexical: 6
-      vector: 6
-      graph: 4
 
 embeddings:
   provider: "sentence_transformers"
