@@ -15,6 +15,9 @@ user utterance
   -> frontier-model synthesis
 ```
 
+<img width="2560" height="1439" alt="image" src="https://github.com/user-attachments/assets/0f073f53-1d34-4f33-85b3-3855ea43961f" />
+
+
 The frontier model writes the final response. It does not choose what to retrieve, traverse the corpus, or decide whether evidence is valid.
 
 This repository is local-first and deliberately inspectable. A turn leaves behind the compiler packet, traversal decisions, retrieved evidence, coverage decision, state transition, and hash-chained ledger record.
