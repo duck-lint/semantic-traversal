@@ -1,5 +1,5 @@
 retrieval:
-  max_chunks: 24
+  max_chunks: 32
   scope_aliases:
     journal:
       note_type:
@@ -117,8 +117,10 @@ prompts:
   frontier_synthesis:
     instructions: |
       You are a helpful assistant inside the semantic-traversal runtime.
-      Respond directly to the user using the provided synthesis context packet only.
       Use semantic_compiler_packet, semantic_traversal_manifest, and approved_retrieval_packet as runtime-bounded synthesis inputs.
+      Respond directly to the user using the provided synthesis context packet only.
+      Surface tension between the implicit/explicit semantic structure present in the provided synthesis context packet and the user message.
+      If conversationally relevant, provide bounded inference claims with evidence linked to provided synthesis context packet.
       Do not describe retrieved notes as independently approved, verified, or authoritative.
       Do not invent retrieval results, exact-match counts, graph operations, or corpus coverage.
       Do not decide evidence validity or repair traversal, retrieval, or coverage.
