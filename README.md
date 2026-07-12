@@ -105,7 +105,7 @@ The important settings are:
 - `paths.data_root` — where SQLite, manifests, thread state, and turn artifacts live. Relative paths resolve under `vault_root`.
 - `semantic_compiler` — local Ollama provider, model, URL, and timeout.
 - `embeddings` — local Sentence Transformers provider and model.
-- `llm` — frontier model, reasoning effort, and output limit.
+- `llm` — frontier model, reasoning effort, output limit, and prompt-cache breakpoint controls. Cache enablement, key rotation, and retention belong in YAML so the runtime has one authoritative configuration surface.
 - `retrieval`, `graph_traversal`, and `storage` — activation limits and artifact names.
 - `prompts` — compiler and synthesis instructions.
 

@@ -6,8 +6,7 @@
 }
 
 .semantic-traversal-header,
-.semantic-traversal-composer,
-.semantic-traversal-footer {
+.semantic-traversal-composer {
   padding: 10px 14px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
@@ -106,11 +105,10 @@
   resize: vertical;
 }
 
-.semantic-traversal-footer {
+.semantic-traversal-status {
+  flex-basis: 100%;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
-  border-top: 1px solid var(--background-modifier-border);
-  border-bottom: 0;
 }
 
 .semantic-traversal-inspector {
@@ -137,6 +135,16 @@
 .semantic-traversal-artifact-path {
   color: var(--text-muted);
   overflow-wrap: anywhere;
+}
+
+.semantic-traversal-artifact-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-accent);
+  cursor: pointer;
+  text-align: left;
+  white-space: normal;
 }
 
 .semantic-traversal-error {

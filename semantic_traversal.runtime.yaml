@@ -39,6 +39,11 @@ llm:
   reasoning:
     effort: medium
   max_output_tokens: 6000
+  prompt_cache:
+    enabled: true
+    # Change this value when the stable instruction/packet prefix changes.
+    key: "semantic-traversal-v1"
+    retention: "24h"
 
 semantic_compiler:
   provider: "ollama"

@@ -62,6 +62,9 @@ class OpenAIResponsesBackend:
         reasoning_effort: str,
         max_output_tokens: int,
         instructions: str,
+        prompt_cache_enabled: bool,
+        prompt_cache_key: str,
+        prompt_cache_retention: str,
     ) -> None:
         self._client = _build_openai_client(api_key=api_key)
         self._model = model
@@ -69,6 +72,9 @@ class OpenAIResponsesBackend:
         self._max_output_tokens = max_output_tokens
         self._instructions = instructions.strip()
         self._instructions_hash = sha256_text(self._instructions)
+        self._prompt_cache_enabled = prompt_cache_enabled
+        self._prompt_cache_key = prompt_cache_key.strip()
+        self._prompt_cache_retention = prompt_cache_retention.strip()
 
     def describe_call(self) -> dict[str, Any]:
         """Return configured call identity when no provider response is available."""
@@ -77,17 +83,32 @@ class OpenAIResponsesBackend:
             "provider": "openai",
             "model": self._model,
             "reasoning_effort": self._reasoning_effort,
+            "prompt_cache_enabled": getattr(self, "_prompt_cache_enabled", False),
+            "prompt_cache_key": getattr(self, "_prompt_cache_key", "") or None,
+            "prompt_cache_retention": getattr(self, "_prompt_cache_retention", "") or None,
         }
 
     def generate(self, synthesis_context_packet: dict[str, Any]) -> LLMResponse:
-        response = self._client.responses.create(
-            model=self._model,
-            instructions=self._instructions,
-            input=json.dumps(synthesis_context_packet, ensure_ascii=True, indent=2),
-            reasoning={"effort": self._reasoning_effort},
-            max_output_tokens=self._max_output_tokens,
-            store=False,
-        )
+        request: dict[str, Any] = {
+            "model": self._model,
+            "instructions": self._instructions,
+            "input": json.dumps(synthesis_context_packet, ensure_ascii=True, indent=2),
+            "reasoning": {"effort": self._reasoning_effort},
+            "max_output_tokens": self._max_output_tokens,
+            "store": False,
+        }
+        # Prompt caching is opt-in at the request boundary. Keeping the cache
+        # key explicit makes cache invalidation a deliberate control surface
+        # when instructions or the synthesis packet contract changes.
+        prompt_cache_enabled = getattr(self, "_prompt_cache_enabled", False)
+        prompt_cache_key = getattr(self, "_prompt_cache_key", "")
+        prompt_cache_retention = getattr(self, "_prompt_cache_retention", "")
+        if prompt_cache_enabled:
+            if prompt_cache_key:
+                request["prompt_cache_key"] = prompt_cache_key
+            if prompt_cache_retention:
+                request["prompt_cache_retention"] = prompt_cache_retention
+        response = self._client.responses.create(**request)
         assistant_text = (getattr(response, "output_text", "") or "").strip()
         if not assistant_text:
             assistant_text = "The model returned an empty response."
@@ -123,11 +144,19 @@ def resolve_openai_settings(
     repo_root: Path,
     config: RuntimeConfig,
     model_override: str | None = None,
-) -> tuple[str | None, str, str, int]:
+) -> tuple[str | None, str, str, int, bool, str, str]:
     dotenv_values = load_dotenv_local(repo_root)
     api_key = os.environ.get("OPENAI_API_KEY") or dotenv_values.get("OPENAI_API_KEY")
     model = model_override or config.llm_model
-    return api_key, model, config.llm_reasoning_effort, config.llm_max_output_tokens
+    return (
+        api_key,
+        model,
+        config.llm_reasoning_effort,
+        config.llm_max_output_tokens,
+        config.llm_prompt_cache_enabled,
+        config.llm_prompt_cache_key,
+        config.llm_prompt_cache_retention,
+    )
 
 
 def resolve_llm_backend(
@@ -136,7 +165,7 @@ def resolve_llm_backend(
     llm_mode: str,
     model_override: str | None = None,
 ) -> LLMBackend:
-    api_key, model, reasoning_effort, max_output_tokens = resolve_openai_settings(
+    api_key, model, reasoning_effort, max_output_tokens, prompt_cache_enabled, prompt_cache_key, prompt_cache_retention = resolve_openai_settings(
         repo_root=repo_root,
         config=config,
         model_override=model_override,
@@ -154,6 +183,9 @@ def resolve_llm_backend(
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             instructions=instructions,
+            prompt_cache_enabled=prompt_cache_enabled,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
         )
     if llm_mode == "live":
         return OpenAIResponsesBackend(
@@ -162,5 +194,8 @@ def resolve_llm_backend(
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             instructions=instructions,
+            prompt_cache_enabled=prompt_cache_enabled,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
         )
     raise ValueError(f"Unsupported llm_mode: {llm_mode}")

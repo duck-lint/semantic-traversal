@@ -1,4 +1,5 @@
 import { ItemView, MarkdownRenderer, Notice, Plugin, PluginSettingTab, Setting, WorkspaceLeaf } from "obsidian";
+import { shell } from "electron";
 import { spawn } from "child_process";
 import { existsSync, promises as fs } from "fs";
 import * as path from "path";
@@ -271,11 +272,14 @@ class SemanticTraversalView extends ItemView {
     const composer = root.createDiv({ cls: "semantic-traversal-composer" });
     this.input = composer.createEl("textarea", { cls: "semantic-traversal-input", attr: { placeholder: "Ask about your vault…" } });
     this.input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void this.submit();
+      if (event.key !== "Enter" || event.isComposing || event.shiftKey) return;
+      event.preventDefault();
+      void this.submit();
     });
     const sendButton = composer.createEl("button", { text: "Send" });
     sendButton.addEventListener("click", () => void this.submit());
-    this.statusEl = root.createDiv({ cls: "semantic-traversal-footer", text: "No thread selected" });
+    this.statusEl = composer.createDiv({ cls: "semantic-traversal-status", attr: { "aria-live": "polite" } });
+    this.statusEl.setText("Enter to send · Shift+Enter for a new line · Ctrl/Cmd+Enter to send");
   }
 
   private async renderThreadList(selectActiveThread = true): Promise<void> {
@@ -313,10 +317,10 @@ class SemanticTraversalView extends ItemView {
       await this.renderMessage(message.role, message.content);
       if (message.role === "assistant" && typeof message.turn_id === "number") {
         const summary = summaryByTurnId.get(message.turn_id);
-        if (summary) this.renderTurnDisclosure(summary);
+        if (summary && summary.turn_id === document.latest_turn_id) this.renderInspector(summary);
       }
     }
-    this.statusEl.setText(`Thread ${threadId.slice(0, 8)} · ${document.latest_turn_id ?? 0} turns`);
+    this.statusEl.setText("Enter to send · Shift+Enter for a new line · Ctrl/Cmd+Enter to send");
     const savedScrollPosition = this.plugin.settings.threadScrollPositions[threadId];
     this.messagesEl.scrollTop = savedScrollPosition ?? this.messagesEl.scrollHeight;
   }
@@ -390,22 +394,18 @@ class SemanticTraversalView extends ItemView {
     if (persisted.llmCallMetadata?.usage) detailGrid.createEl("div", { text: `Usage telemetry: ${JSON.stringify(persisted.llmCallMetadata.usage)}` });
     if (persisted.llmCallMetadata?.error) detailGrid.createEl("div", { text: `Agent error: ${persisted.llmCallMetadata.error}` });
     if (result.blocking_reasons?.length) detailGrid.createEl("div", { text: `Blocking reasons: ${result.blocking_reasons.join(" ")}` });
-    if (result.turn_root) detailGrid.createEl("div", { text: `Turn artifacts: ${result.turn_root}`, cls: "semantic-traversal-artifact-path" });
+    if (result.turn_root) {
+      const artifact = detailGrid.createDiv({ cls: "semantic-traversal-artifact-path" });
+      artifact.createEl("span", { text: "Turn artifacts: " });
+      const openButton = artifact.createEl("button", { text: result.turn_root, cls: "semantic-traversal-artifact-button" });
+      openButton.title = "Open this turn's artifact folder in the file explorer";
+      openButton.addEventListener("click", () => void this.openArtifactFolder(result.turn_root!));
+    }
   }
 
-  private renderTurnDisclosure(summary: PersistedTurnSummary): void {
-    const coverage = summary.coverage_decision ?? "unknown coverage";
-    const agentStatus = summary.llmCallMetadata?.synthesis_status ?? (summary.runtime_outcome === "completed" ? "completed" : "not attempted");
-    const disclosure = this.messagesEl.createEl("details", { cls: "semantic-traversal-turn-disclosure" });
-    disclosure.createEl("summary", { text: `Turn ${summary.turn_id} · ${summary.runtime_outcome} · ${coverage}` });
-    const content = disclosure.createDiv({ cls: "semantic-traversal-turn-disclosure-content" });
-    content.createDiv({ text: `Assistant preparation: ${summary.semantic_compiler_status ?? "unknown"}` });
-    content.createDiv({ text: `Agent synthesis: ${agentStatus}` });
-    if (summary.blocking_reasons?.length) content.createDiv({ text: `Blocking reasons: ${summary.blocking_reasons.join(" ")}` });
-    content.createDiv({ text: "Select this disclosure to inspect its persisted diagnostics." });
-    disclosure.addEventListener("toggle", () => {
-      if (disclosure.open) this.renderInspector(summary);
-    });
+  private async openArtifactFolder(folderPath: string): Promise<void> {
+    const error = await shell.openPath(folderPath);
+    if (error) new Notice(`Could not open artifact folder: ${error}`);
   }
 
   private scrollToElement(element: HTMLElement): void {

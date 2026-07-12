@@ -37,7 +37,12 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     args = build_turn_parser().parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
     config = load_runtime_config(repo_root=repo_root, config_path=args.config)
-    llm_backend = resolve_llm_backend(repo_root=repo_root, config=config, llm_mode="auto", model_override=None)
+    llm_backend = resolve_llm_backend(
+        repo_root=repo_root,
+        config=config,
+        llm_mode="auto",
+        model_override=None,
+    )
     semantic_compiler_backend = resolve_semantic_compiler_backend(config=config)
     result = run_thread_turn(
         repo_root=repo_root,

@@ -60,6 +60,11 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "effort": str,
         },
         "max_output_tokens": int,
+        "prompt_cache": {
+            "enabled": bool,
+            "key": str,
+            "retention": str,
+        },
     },
     "semantic_compiler": {
         "provider": str,
@@ -242,6 +247,18 @@ class RuntimeConfig:
     @property
     def llm_max_output_tokens(self) -> int:
         return int(self.raw["llm"]["max_output_tokens"])
+
+    @property
+    def llm_prompt_cache_enabled(self) -> bool:
+        return bool(self.raw["llm"]["prompt_cache"]["enabled"])
+
+    @property
+    def llm_prompt_cache_key(self) -> str:
+        return str(self.raw["llm"]["prompt_cache"]["key"])
+
+    @property
+    def llm_prompt_cache_retention(self) -> str:
+        return str(self.raw["llm"]["prompt_cache"]["retention"])
 
     @property
     def semantic_compiler_model(self) -> str | None:
