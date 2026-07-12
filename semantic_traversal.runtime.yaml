@@ -19,6 +19,26 @@ retrieval:
     max_depth: 2
     max_candidates: 24
 
+runtime_conversation:
+  stop_words: [a, an, and, are, as, at, be, but, by, about, do, for, from, how, i, if, in, into, is, it, my, of, "on", or, our, retrieve, retrieved, retrieves, retrieving, note, notes, regarding, search, the, find, found, locate, mention, mentions, show, to, with, you, your]
+  referential_surface_words: [it, that, this, those, they, them]
+  recent_semantic_turn_limit: 6
+  recent_message_limit: 6
+  assistant_snippet_limit: 120
+  raw_response_preview_limit: 1200
+
+retrieval_scoring:
+  exact_bonus: 4.0
+  lexical_bonus: 2.0
+  vector_bonus: 1.0
+  graph_bonus: 1.5
+  demotion_penalty: 10.0
+  source_priority:
+    exact: 4
+    lexical: 3
+    vector: 2
+    graph: 1
+
 graph_traversal:
   enabled: true
   hop_limit: 2
@@ -50,6 +70,16 @@ semantic_compiler:
   model: qwen3:8b
   base_url: "http://localhost:11434"
   request_timeout_seconds: 120
+  prompt_example:
+    lexical_limit: 50
+    vector_limit: 24
+    graph_depth: 1
+    max_chunks: 24
+    selection_budgets:
+      exact: 12
+      lexical: 6
+      vector: 6
+      graph: 4
 
 embeddings:
   provider: "sentence_transformers"
@@ -102,11 +132,11 @@ prompts:
           "lexical_queries": [],
           "graph_seeds": [],
           "retrieval_layers": [
-            {"operator": "lexical_chunk_search", "required": false, "limit": 50},
-            {"operator": "vector_search", "required": false, "limit": 24},
-            {"operator": "graph_expand", "required": false, "depth": 1}
+            {"operator": "lexical_chunk_search", "required": false, "limit": {semantic_compiler_lexical_limit}},
+            {"operator": "vector_search", "required": false, "limit": {semantic_compiler_vector_limit}},
+            {"operator": "graph_expand", "required": false, "depth": {semantic_compiler_graph_depth}}
           ],
-          "selection_policy": {"max_chunks": 24, "preserve_required_layers": true, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+          "selection_policy": {"max_chunks": {semantic_compiler_max_chunks}, "preserve_required_layers": true, "budgets": {"exact": {semantic_compiler_exact_budget}, "lexical": {semantic_compiler_lexical_budget}, "vector": {semantic_compiler_vector_budget}, "graph": {semantic_compiler_graph_budget}}},
           "claim_policy": {"coverage_claims_allowed": false, "negative_claims_require_exact_layer": true}
         },
         "limitations": []

@@ -44,6 +44,22 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         },
         "scope_aliases": dict,
     },
+    "runtime_conversation": {
+        "stop_words": [str],
+        "referential_surface_words": [str],
+        "recent_semantic_turn_limit": int,
+        "recent_message_limit": int,
+        "assistant_snippet_limit": int,
+        "raw_response_preview_limit": int,
+    },
+    "retrieval_scoring": {
+        "exact_bonus": (int, float),
+        "lexical_bonus": (int, float),
+        "vector_bonus": (int, float),
+        "graph_bonus": (int, float),
+        "demotion_penalty": (int, float),
+        "source_priority": dict,
+    },
     "graph_traversal": {
         "enabled": bool,
         "hop_limit": int,
@@ -71,6 +87,13 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "model": (str, type(None)),
         "base_url": str,
         "request_timeout_seconds": int,
+        "prompt_example": {
+            "lexical_limit": int,
+            "vector_limit": int,
+            "graph_depth": int,
+            "max_chunks": int,
+            "selection_budgets": dict,
+        },
     },
     "embeddings": {
         "provider": str,
@@ -205,6 +228,14 @@ class RuntimeConfig:
         return aliases
 
     @property
+    def runtime_conversation(self) -> dict[str, Any]:
+        return self.raw["runtime_conversation"]
+
+    @property
+    def retrieval_scoring(self) -> dict[str, Any]:
+        return self.raw["retrieval_scoring"]
+
+    @property
     def graph_traversal_enabled(self) -> bool:
         return bool(self.raw["graph_traversal"]["enabled"])
 
@@ -276,6 +307,10 @@ class RuntimeConfig:
     @property
     def semantic_compiler_request_timeout_seconds(self) -> int:
         return int(self.raw["semantic_compiler"]["request_timeout_seconds"])
+
+    @property
+    def semantic_compiler_prompt_example(self) -> dict[str, Any]:
+        return self.raw["semantic_compiler"]["prompt_example"]
 
     @property
     def embedding_model(self) -> str:

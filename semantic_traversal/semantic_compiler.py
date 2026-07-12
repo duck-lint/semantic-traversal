@@ -185,19 +185,35 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     return result
 
 
-def _render_ollama_prompt(*, packet: dict[str, Any], template: str) -> str:
+def _render_ollama_prompt(*, packet: dict[str, Any], template: str, prompt_example: dict[str, Any] | None = None) -> str:
     packet_json = json.dumps(packet, ensure_ascii=True, indent=2)
-    return template.replace("{packet}", packet_json).strip()
+    rendered = template.replace("{packet}", packet_json)
+    if prompt_example is not None:
+        budgets = prompt_example["selection_budgets"]
+        replacements = {
+            "{semantic_compiler_lexical_limit}": prompt_example["lexical_limit"],
+            "{semantic_compiler_vector_limit}": prompt_example["vector_limit"],
+            "{semantic_compiler_graph_depth}": prompt_example["graph_depth"],
+            "{semantic_compiler_max_chunks}": prompt_example["max_chunks"],
+            "{semantic_compiler_exact_budget}": budgets["exact"],
+            "{semantic_compiler_lexical_budget}": budgets["lexical"],
+            "{semantic_compiler_vector_budget}": budgets["vector"],
+            "{semantic_compiler_graph_budget}": budgets["graph"],
+        }
+        for marker, value in replacements.items():
+            rendered = rendered.replace(marker, str(value))
+    return rendered.strip()
 
 
 class OllamaSemanticCompilerBackend:
     mode_name = "ollama"
 
-    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, prompt_template: str) -> None:
+    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, prompt_template: str, prompt_example: dict[str, Any]) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._prompt_template = prompt_template
+        self._prompt_example = prompt_example
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
@@ -208,7 +224,7 @@ class OllamaSemanticCompilerBackend:
                 diagnostics={},
                 status="unavailable",
             )
-        prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template)
+        prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template, prompt_example=self._prompt_example)
         prompt_hash = sha256_text(prompt)
         payload = {"model": self._model, "prompt": prompt, "stream": False}
         raw_response_text: str | None = None
@@ -315,5 +331,6 @@ def resolve_semantic_compiler_backend(
             base_url=configured_base_url.strip(),
             timeout_seconds=timeout_seconds,
             prompt_template=config.semantic_compiler_prompt_template,
+            prompt_example=config.semantic_compiler_prompt_example,
         )
     return UnavailableSemanticCompilerBackend(reason=f"unsupported semantic compiler provider: {configured_provider}", configured_mode=configured_provider)

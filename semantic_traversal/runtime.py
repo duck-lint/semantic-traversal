@@ -27,55 +27,6 @@ from .storage import append_ledger_record, create_thread_paths, load_json, write
 
 
 QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
-STOP_WORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "but",
-    "by",
-    "about",
-    "do",
-    "for",
-    "from",
-    "how",
-    "i",
-    "if",
-    "in",
-    "into",
-    "is",
-    "it",
-    "my",
-    "of",
-    "on",
-    "or",
-    "our",
-    "retrieve",
-    "retrieved",
-    "retrieves",
-    "retrieving",
-    "note",
-    "notes",
-    "regarding",
-    "search",
-    "the",
-    "find",
-    "found",
-    "locate",
-    "mention",
-    "mentions",
-    "show",
-    "to",
-    "with",
-    "you",
-    "your",
-}
-REFERENTIAL_SURFACE_WORDS = {"it", "that", "this", "those", "they", "them"}
-RECENT_SEMANTIC_TURN_LIMIT = 6
-ASSISTANT_SNIPPET_LIMIT = 120
 LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph"}
 
 
@@ -147,11 +98,11 @@ def _normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
 
 
-def _extract_terms(text: str) -> list[str]:
+def _extract_terms(text: str, *, config: RuntimeConfig) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for token in QUERY_TOKEN_RE.findall(text.lower()):
-        if len(token) < 3 or token in STOP_WORDS or token.isdigit():
+        if len(token) < 3 or token in set(config.runtime_conversation["stop_words"]) or token.isdigit():
             continue
         if token not in seen:
             seen.add(token)
@@ -201,7 +152,7 @@ def _ensure_message_list(messages: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _ensure_recent_semantic_turns(value: Any) -> list[dict[str, Any]]:
+def _ensure_recent_semantic_turns(value: Any, *, config: RuntimeConfig) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     turns: list[dict[str, Any]] = []
@@ -236,7 +187,7 @@ def _ensure_recent_semantic_turns(value: Any) -> list[dict[str, Any]]:
                 "selected_section_labels": _coerce_string_list(entry.get("selected_section_labels")),
             }
         )
-    return turns[-RECENT_SEMANTIC_TURN_LIMIT:]
+    return turns[-int(config.runtime_conversation["recent_semantic_turn_limit"]):]
 
 
 def _normalize_active_focus(value: Any) -> dict[str, Any]:
@@ -262,12 +213,12 @@ def _normalize_active_focus(value: Any) -> dict[str, Any]:
     return focus
 
 
-def _is_referential_user_input(text: str) -> bool:
+def _is_referential_user_input(text: str, *, config: RuntimeConfig) -> bool:
     lowered = f" {text.lower()} "
-    return any(f" {surface} " in lowered for surface in REFERENTIAL_SURFACE_WORDS)
+    return any(f" {surface} " in lowered for surface in config.runtime_conversation["referential_surface_words"])
 
 
-def _snippet(text: str, limit: int = ASSISTANT_SNIPPET_LIMIT) -> str:
+def _snippet(text: str, *, limit: int) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if len(cleaned) <= limit:
         return cleaned
@@ -317,8 +268,8 @@ def _compact_active_focus(
     }
 
 
-def _recent_semantic_turns_from_state(value: Any) -> list[dict[str, Any]]:
-    return _ensure_recent_semantic_turns(value)
+def _recent_semantic_turns_from_state(value: Any, *, config: RuntimeConfig) -> list[dict[str, Any]]:
+    return _ensure_recent_semantic_turns(value, config=config)
 
 
 def _build_recent_semantic_turn(
@@ -328,6 +279,7 @@ def _build_recent_semantic_turn(
     assistant_response: str | None,
     planner_retrieval_plan: dict[str, Any],
     retrieval_packet: dict[str, Any],
+    config: RuntimeConfig,
 ) -> dict[str, Any]:
     selected_chunks = retrieval_packet.get("selected_chunks")
     selected_chunk_ids: list[str] = []
@@ -350,7 +302,7 @@ def _build_recent_semantic_turn(
     return {
         "turn_id": turn_id,
         "raw_user_input": raw_user_input,
-        "assistant_response_snippet": _snippet(assistant_response or ""),
+        "assistant_response_snippet": _snippet(assistant_response or "", limit=int(config.runtime_conversation["assistant_snippet_limit"])),
         "query": semantic_queries[0] if semantic_queries else "",
         "entities": [],
         "relations": [],
@@ -431,13 +383,14 @@ def _deterministic_semantic_packet(
     prior_thread_state: dict[str, Any],
     active_focus: dict[str, Any],
     recent_semantic_turns: list[dict[str, Any]],
+    config: RuntimeConfig,
     limitations: list[str] | None = None,
 ) -> dict[str, Any]:
-    concepts = _extract_terms(raw_user_input)
+    concepts = _extract_terms(raw_user_input, config=config)
     query = " ".join(concepts[:8]).strip() or raw_user_input.strip()
     scope_requests = ["journal"] if any(term in concepts for term in ("journal", "journaled", "daily", "dailies", "entries", "entry")) else []
     resolved_referents: list[str] = []
-    carry_focus_terms = _is_referential_user_input(raw_user_input) or is_comparison_intent(raw_user_input)
+    carry_focus_terms = _is_referential_user_input(raw_user_input, config=config) or is_comparison_intent(raw_user_input)
     if carry_focus_terms:
         focus_terms = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
         resolved_referents = list(dict.fromkeys(term for term in focus_terms if term))
@@ -476,6 +429,7 @@ def _canonicalize_compiler_packet(
     active_focus: dict[str, Any],
     recent_semantic_turns: list[dict[str, Any]],
     payload: dict[str, Any] | None,
+    config: RuntimeConfig,
     fallback_limitations: list[str] | None = None,
 ) -> dict[str, Any]:
     fallback_packet = _deterministic_semantic_packet(
@@ -483,6 +437,7 @@ def _canonicalize_compiler_packet(
         prior_thread_state=prior_thread_state,
         active_focus=active_focus,
         recent_semantic_turns=recent_semantic_turns,
+        config=config,
         limitations=fallback_limitations,
     )
     if not isinstance(payload, dict):
@@ -496,7 +451,7 @@ def _canonicalize_compiler_packet(
     packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
     packet["limitations"] = _coerce_string_list(payload.get("limitations")) if isinstance(payload.get("limitations"), list) else []
     focus_terms: list[str] = []
-    carry_focus_terms = _is_referential_user_input(raw_user_input) or is_comparison_intent(raw_user_input)
+    carry_focus_terms = _is_referential_user_input(raw_user_input, config=config) or is_comparison_intent(raw_user_input)
     if carry_focus_terms:
         focus_terms = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
     if carry_focus_terms and focus_terms:
@@ -504,7 +459,7 @@ def _canonicalize_compiler_packet(
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=packet["query"],
-        concepts=_extract_terms(packet["query"]),
+        concepts=_extract_terms(packet["query"], config=config),
         scope_requests=scope_requests_from_text(packet["query"]),
         graph_seeds=[packet["query"]] if packet["query"].strip() else [],
         resolved_referents=list(packet["resolved_referents"]),
@@ -546,6 +501,7 @@ def _compiler_response_to_packet(
     prior_thread_state: dict[str, Any],
     active_focus: dict[str, Any],
     recent_semantic_turns: list[dict[str, Any]],
+    config: RuntimeConfig,
     response: SemanticCompilerResponse,
 ) -> tuple[dict[str, Any], str]:
     payload = response.parsed_payload if isinstance(response.parsed_payload, dict) else None
@@ -556,6 +512,7 @@ def _compiler_response_to_packet(
                 prior_thread_state=prior_thread_state,
                 active_focus=active_focus,
                 recent_semantic_turns=recent_semantic_turns,
+                config=config,
                 payload=payload,
             ),
             response.status,
@@ -566,6 +523,7 @@ def _compiler_response_to_packet(
             prior_thread_state=prior_thread_state,
             active_focus=active_focus,
             recent_semantic_turns=recent_semantic_turns,
+            config=config,
             limitations=["semantic compiler backend unavailable; deterministic lexical fallback used"],
         ),
         "fallback",
@@ -576,6 +534,7 @@ def _semantic_compiler_diagnostic_packet(
     *,
     response: SemanticCompilerResponse,
     semantic_compiler_status: str,
+    config: RuntimeConfig,
 ) -> dict[str, Any]:
     raw_response = response.raw_response if isinstance(response.raw_response, str) else None
     return {
@@ -586,7 +545,7 @@ def _semantic_compiler_diagnostic_packet(
         "parsed_payload_available": isinstance(response.parsed_payload, dict),
         "raw_response_available": bool(raw_response),
         "raw_response_hash": sha256_text(raw_response) if raw_response else None,
-        "raw_response_preview": _snippet(raw_response, limit=1200) if raw_response else None,
+        "raw_response_preview": _snippet(raw_response, limit=int(config.runtime_conversation["raw_response_preview_limit"])) if raw_response else None,
     }
 
 
@@ -702,6 +661,7 @@ def _exact_candidates(
     *,
     scope_filters: dict[str, Any],
     limit: int,
+    config: RuntimeConfig,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
     terms = [str(entry.get("term") or "").strip() for entry in literal_terms if isinstance(entry, dict) and str(entry.get("term") or "").strip()]
@@ -736,7 +696,7 @@ def _exact_candidates(
             {
                 **row,
                 "selection_reason": f"exact literal match: {', '.join(matched_terms)}",
-                "score": len(matched_terms) + 4.0,
+                "score": len(matched_terms) + float(config.retrieval_scoring["exact_bonus"]),
                 "selection_source": "exact",
                 "match_reason": f"literal term {', '.join(matched_terms)}",
                 "scope_match": scope_filters,
@@ -798,8 +758,8 @@ def _graph_seed_values(
     return [(source, seed) for source, seed in seeds if seed]
 
 
-def _graph_token_set(value: str) -> set[str]:
-    return set(_extract_terms(value))
+def _graph_token_set(value: str, *, config: RuntimeConfig) -> set[str]:
+    return set(_extract_terms(value, config=config))
 
 
 def _graph_match_note_nodes(
@@ -809,11 +769,13 @@ def _graph_match_note_nodes(
     node_type_allowlist: set[str],
     match_mode: str,
     min_token_overlap: int,
+    config: RuntimeConfig | None = None,
 ) -> list[dict[str, Any]]:
+    resolved_config = config or load_runtime_config(repo_root=Path.cwd())
     exact_matches: list[dict[str, Any]] = []
     overlap_matches: list[dict[str, Any]] = []
     seed_normalized = _normalize_text(seed)
-    seed_tokens = _graph_token_set(seed)
+    seed_tokens = _graph_token_set(seed, config=resolved_config)
     for row in node_rows:
         node_type = str(row.get("node_type") or "")
         if node_type not in node_type_allowlist:
@@ -827,7 +789,7 @@ def _graph_match_note_nodes(
             continue
         if match_mode != "exact_or_token_overlap":
             continue
-        node_tokens = _graph_token_set(f"{label} {ref_id}")
+        node_tokens = _graph_token_set(f"{label} {ref_id}", config=resolved_config)
         if len(seed_tokens.intersection(node_tokens)) >= min_token_overlap:
             overlap_matches.append(dict(row))
     return exact_matches or overlap_matches
@@ -839,6 +801,7 @@ def _lexical_candidates(
     *,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
+    config: RuntimeConfig,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     candidates: list[dict[str, Any]] = []
     notes: list[str] = []
@@ -860,7 +823,7 @@ def _lexical_candidates(
             {
                 **row,
                 "selection_reason": f"lexical match: {', '.join(matched_terms)}",
-                "score": len(matched_terms) + 2.0,
+                "score": len(matched_terms) + float(config.retrieval_scoring["lexical_bonus"]),
                 "selection_source": "lexical",
                 "match_reason": f"lexical term {', '.join(matched_terms)}",
             }
@@ -929,7 +892,7 @@ def _vector_candidates(
             {
                 **chunk_row,
                 "selection_reason": f"vector similarity {similarity:.3f}",
-                "score": similarity + 1.0,
+                "score": similarity + float(config.retrieval_scoring["vector_bonus"]),
                 "selection_source": "vector",
                 "match_reason": f"vector query similarity {similarity:.3f}",
             }
@@ -1020,6 +983,7 @@ def _graph_candidates(
             node_type_allowlist=node_type_allowlist,
             match_mode=config.graph_traversal_match_mode,
             min_token_overlap=config.graph_traversal_min_token_overlap,
+            config=config,
         )
         if not matched_nodes:
             continue
@@ -1107,7 +1071,7 @@ def _graph_candidates(
             {
                 **chunk_row,
                 "selection_reason": reason,
-                "score": 1.5,
+                "score": float(config.retrieval_scoring["graph_bonus"]),
                 "selection_source": "graph",
                 "match_reason": "graph expansion",
             }
@@ -1182,14 +1146,16 @@ def _apply_retrieval_candidate_hygiene(
     *,
     candidates: list[dict[str, Any]],
     semantic_compiler_packet: dict[str, Any],
+    config: RuntimeConfig | None = None,
 ) -> list[dict[str, Any]]:
+    resolved_config = config or load_runtime_config(repo_root=Path.cwd())
     if _is_template_or_schema_query(semantic_compiler_packet):
         return candidates
     adjusted: list[dict[str, Any]] = []
     for candidate in candidates:
         next_candidate = dict(candidate)
         if _is_template_boilerplate_candidate(next_candidate):
-            next_candidate["score"] = float(next_candidate.get("score") or 0.0) - 10.0
+            next_candidate["score"] = float(next_candidate.get("score") or 0.0) - float(resolved_config.retrieval_scoring["demotion_penalty"])
             next_candidate["_retrieval_demoted"] = True
             next_candidate["selection_reason"] = "; ".join(
                 part
@@ -1207,10 +1173,12 @@ def _merge_candidates(
     lexical_candidates: list[dict[str, Any]],
     vector_candidates: list[dict[str, Any]],
     graph_candidates: list[dict[str, Any]],
+    config: RuntimeConfig | None = None,
     exact_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
-    source_priority = {"exact": 4, "lexical": 3, "vector": 2, "graph": 1}
+    resolved_config = config or load_runtime_config(repo_root=Path.cwd())
+    source_priority = {str(key): int(value) for key, value in resolved_config.retrieval_scoring["source_priority"].items()}
 
     def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
@@ -1369,6 +1337,7 @@ def _semantic_traversal(
             literal_terms,
             scope_filters=scope_filters,
             limit=_layer_limit(exact_layer, config.retrieval_exact_max_matches),
+            config=config,
         )
     else:
         execution["layers_skipped"].append({"layer": "exact_chunk_search", "reason": "not requested by bound retrieval plan"})
@@ -1384,6 +1353,7 @@ def _semantic_traversal(
             lexical_queries,
             scope_filters=scope_filters,
             limit=_layer_limit(lexical_layer, config.retrieval_lexical_max_candidates),
+            config=config,
         )
     else:
         execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by bound retrieval plan"})
@@ -1432,21 +1402,25 @@ def _semantic_traversal(
     exact_candidates = _apply_retrieval_candidate_hygiene(
         candidates=exact_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
+        config=config,
     )
     lexical_candidates = _apply_retrieval_candidate_hygiene(
         candidates=lexical_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
+        config=config,
     )
     vector_candidates = _apply_retrieval_candidate_hygiene(
         candidates=vector_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
+        config=config,
     )
     graph_candidates = _apply_retrieval_candidate_hygiene(
         candidates=graph_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
+        config=config,
     )
 
-    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, exact_candidates=exact_candidates)
+    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates)
     selected_candidates = _select_retrieval_chunks(
         merged_candidates=merged_candidates,
         max_chunks=int(bound_retrieval_plan.get("selection_policy", {}).get("max_chunks") or config.max_retrieval_chunks),
@@ -1573,7 +1547,7 @@ def _blocked_turn_response(*, blocking_reasons: list[str]) -> str:
     return "I couldn't complete that turn. Please retry after checking the runtime diagnostics."
 
 
-def _build_visible_transcript_tail(messages: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+def _build_visible_transcript_tail(messages: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     return messages[-limit:]
 
 
@@ -1725,14 +1699,15 @@ def _update_thread_state(
     semantic_compiler_packet: dict[str, Any],
     retrieval_packet: dict[str, Any],
     created_at: str,
+    config: RuntimeConfig,
 ) -> dict[str, Any]:
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
     _append_turn_message(messages=recent_messages, role="user", content=raw_user_input, turn_id=turn_id)
     if assistant_response is not None:
         _append_turn_message(messages=recent_messages, role="assistant", content=assistant_response, turn_id=turn_id)
-    recent_messages = recent_messages[-6:]
-    recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"))
+    recent_messages = recent_messages[-int(config.runtime_conversation["recent_message_limit"]):]
+    recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"), config=config)
     recent_semantic_turns.append(
         _build_recent_semantic_turn(
             turn_id=turn_id,
@@ -1740,9 +1715,10 @@ def _update_thread_state(
             assistant_response=assistant_response,
             planner_retrieval_plan=planner_retrieval_plan,
             retrieval_packet=retrieval_packet,
+            config=config,
         )
     )
-    recent_semantic_turns = recent_semantic_turns[-RECENT_SEMANTIC_TURN_LIMIT:]
+    recent_semantic_turns = recent_semantic_turns[-int(config.runtime_conversation["recent_semantic_turn_limit"]):]
     active_focus = _compact_active_focus(
         planner_retrieval_plan=planner_retrieval_plan,
         retrieval_packet=retrieval_packet,
@@ -1831,7 +1807,7 @@ def run_thread_turn(
         config=resolved_config,
     )
     recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
-    recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"))
+    recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"), config=resolved_config)
     active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
     prior_thread_state = dict(prior_thread_state)
     prior_thread_state["recent_messages"] = recent_messages
@@ -1880,10 +1856,12 @@ def run_thread_turn(
         active_focus=active_focus,
         recent_semantic_turns=recent_semantic_turns,
         response=compiler_response,
+        config=resolved_config,
     )
     semantic_compiler_diagnostic = _semantic_compiler_diagnostic_packet(
         response=compiler_response,
         semantic_compiler_status=semantic_compiler_status,
+        config=resolved_config,
     )
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
@@ -1968,7 +1946,10 @@ def run_thread_turn(
         blocking_reasons.append(f"LLM backend unavailable: {llm_unavailable_reason}")
     runtime_outcome = "completed" if coverage_report["decision"] == "approved" and not blocking_reasons else "blocked"
     approved_retrieval_packet = retrieval_packet if runtime_outcome == "completed" else None
-    visible_transcript_tail = _build_visible_transcript_tail(_ensure_message_list(conversation_thread.get("messages")))
+    visible_transcript_tail = _build_visible_transcript_tail(
+        _ensure_message_list(conversation_thread.get("messages")),
+        limit=int(resolved_config.runtime_conversation["recent_message_limit"]),
+    )
     synthesis_context_packet = _build_synthesis_context_packet(
         thread_id=thread_id_value,
         turn_id=turn_id,
@@ -2031,6 +2012,7 @@ def run_thread_turn(
         semantic_compiler_packet=semantic_compiler_packet,
         retrieval_packet=retrieval_packet,
         created_at=created_at,
+        config=resolved_config,
     )
 
     conversation_thread = _build_conversation_thread(
