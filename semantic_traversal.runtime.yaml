@@ -49,7 +49,7 @@ semantic_compiler:
   provider: "ollama"
   model: qwen3:8b
   base_url: "http://localhost:11434"
-  request_timeout_seconds: 60
+  request_timeout_seconds: 120
 
 embeddings:
   provider: "sentence_transformers"
@@ -58,7 +58,7 @@ embeddings:
   batch_size: 32
   normalize_embeddings: true
   device: null
-  request_timeout_seconds: 60
+  request_timeout_seconds: 120
 
 paths:
   vault_root: C:\Users\madis\Desktop\kháos
