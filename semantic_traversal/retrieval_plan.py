@@ -463,6 +463,14 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
             layer["return_total_count"] = bool(entry.get("return_total_count"))
         if "mode" in entry:
             layer["mode"] = str(entry.get("mode") or "").strip()
+        for field in ("anchor_types", "authorities"):
+            if field in entry and isinstance(entry.get(field), list):
+                layer[field] = [str(item).strip() for item in entry[field] if str(item).strip()]
+        for field in ("before", "after", "start", "end", "direction"):
+            if field in entry:
+                layer[field] = entry.get(field)
+        if "include_unresolved" in entry:
+            layer["include_unresolved"] = bool(entry.get("include_unresolved"))
         layers.append(layer)
     return layers or list(fallback)
 

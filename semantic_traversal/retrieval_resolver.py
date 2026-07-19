@@ -226,16 +226,19 @@ def bind_retrieval_plan(
     for raw_layer in retrieval_layers:
         layer = dict(raw_layer)
         operator = str(layer.get("operator") or "")
-        if operator in {"lexical_chunk_search", "vector_search", "graph_expand"}:
+        if operator in {"lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}:
             if operator == "lexical_chunk_search":
                 default_limit = config.retrieval_planner_defaults["lexical_limit"]
                 maximum_limit = config.retrieval_lexical_max_candidates
             elif operator == "vector_search":
                 default_limit = config.retrieval_planner_defaults["vector_limit"]
                 maximum_limit = config.retrieval_vector_max_candidates
-            else:
+            elif operator == "graph_expand":
                 default_limit = config.retrieval_graph_max_candidates
                 maximum_limit = config.retrieval_graph_max_candidates
+            else:
+                default_limit = config.retrieval_temporal_default_limit
+                maximum_limit = config.retrieval_temporal_max_candidates
             raw_limit = layer.get("limit") if "limit" in layer else None
             requested_limit: int | None
             limit_adjustment = "none"
@@ -305,6 +308,21 @@ def bind_retrieval_plan(
                     "reason": "runtime-owned retrieval.graph default/max bounds",
                 }
             )
+        if operator == "temporal_retrieve":
+            mode = str(layer.get("mode") or "earliest").strip()
+            if mode not in config.retrieval_temporal_allowed_modes:
+                adjustments.append({"field": "retrieval_layers.temporal_retrieve.mode", "requested": mode, "effective": None, "action": "unsupported", "reason": "runtime YAML allowed temporal modes"})
+                layer["mode_adjustment"] = "unsupported"
+            else:
+                layer["mode_adjustment"] = "none"
+            requested_types = [str(value) for value in layer.get("anchor_types", []) if str(value).strip()]
+            layer["anchor_types"] = [value for value in requested_types if value in config.retrieval_temporal_default_anchor_types or value in {str(item.get("anchor_type")) for item in config.retrieval_temporal_field_mappings.values()}]
+            if not layer["anchor_types"]:
+                layer["anchor_types"] = list(config.retrieval_temporal_default_anchor_types)
+                layer["anchor_types_adjustment"] = "defaulted"
+            requested_authorities = [str(value) for value in layer.get("authorities", []) if str(value).strip()]
+            layer["authorities"] = [value for value in requested_authorities if value in config.retrieval_temporal_allowed_authorities] or list(config.retrieval_temporal_allowed_authorities)
+            layer["include_unresolved"] = bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default))
         canonical_layers.append(layer)
     retrieval_layers = canonical_layers
     requested_selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})

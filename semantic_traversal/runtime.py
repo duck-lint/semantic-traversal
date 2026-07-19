@@ -4,7 +4,7 @@ import json
 import math
 import re
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +23,7 @@ from .resource_inventory import build_resource_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan
 from .text_filters import is_low_signal_apparatus_text
+from .temporal import parse_temporal_value, relation_for_anchor
 from .semantic_compiler import (
     INTERNAL_COMPILER_ECHO_FIELDS,
     SemanticCompilerBackend,
@@ -33,7 +34,7 @@ from .storage import append_ledger_record, create_thread_paths, load_json, write
 
 
 QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
-LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph"}
+LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph", "temporal_retrieve": "temporal"}
 EXACT_SEARCH_STATUSES = {
     "not_requested",
     "skipped_no_terms",
@@ -729,11 +730,13 @@ def _candidate_source_layers(candidate: dict[str, Any]) -> list[str]:
             observed.add(source)
     # Keep packet and manifest ordering stable even when candidates arrive from
     # different executors or contain duplicate support entries.
-    return [source for source in ("exact", "lexical", "vector", "graph") if source in observed]
+    return [source for source in ("exact", "lexical", "vector", "graph", "temporal") if source in observed]
 
 
 def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[str, int]:
     counts = {"exact": 0, "lexical": 0, "vector": 0, "graph": 0}
+    if any("temporal" in _candidate_source_layers(candidate) for candidate in selected_candidates):
+        counts["temporal"] = 0
     for candidate in selected_candidates:
         for source in _candidate_source_layers(candidate):
             if source in counts:
@@ -1101,6 +1104,7 @@ def _vector_candidates(
     vector_queries: list[str] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
+    eligible_chunk_ids: set[str] | None = None,
     return_diagnostics: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
@@ -1263,6 +1267,8 @@ def _vector_candidates(
         query_candidates: list[dict[str, Any]] = []
         query_result["vector_rows_considered"] = len(rows)
         for row, chunk_row, vector, stored_identity in valid_rows:
+            if eligible_chunk_ids is not None and str(row["chunk_id"]) not in eligible_chunk_ids:
+                continue
             if not _chunk_matches_scope(chunk_row, scope_filters or {}):
                 continue
             query_result["scope_admissible_rows"] += 1
@@ -1699,7 +1705,131 @@ def _apply_retrieval_candidate_hygiene(
     return adjusted
 
 
-_FUSION_SURFACE_ORDER = ("exact", "lexical", "vector", "graph")
+def _temporal_candidates(
+    *,
+    connection: sqlite3.Connection,
+    config: RuntimeConfig,
+    chunk_rows: list[dict[str, Any]],
+    layer: dict[str, Any],
+    lexical_queries: list[str],
+    semantic_queries: list[str],
+    literal_terms: list[dict[str, Any]],
+    scope_filters: dict[str, Any],
+    embedding_backend: EmbeddingBackend,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    mode = str(layer.get("mode") or "earliest")
+    diagnostics: dict[str, Any] = {
+        "operator": "temporal_retrieve",
+        "status": "not_requested",
+        "mode": mode,
+        "candidate_count": 0,
+        "matched_anchor_count": 0,
+        "matched_note_count": 0,
+        "internal_surface_counts": {"lexical": 0, "vector": 0},
+        "searches_full_temporal_projection": True,
+        "relation_certainty_counts": {},
+        "anchor_types": list(layer.get("anchor_types") or config.retrieval_temporal_default_anchor_types),
+        "authorities": list(layer.get("authorities") or config.retrieval_temporal_allowed_authorities),
+        "include_unresolved": bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default)),
+    }
+    if not config.retrieval_temporal_enabled:
+        diagnostics.update({"status": "disabled", "failure_reason": "temporal retrieval disabled by runtime YAML"})
+        return [], ["temporal retrieval disabled"], diagnostics
+    if mode not in config.retrieval_temporal_allowed_modes:
+        diagnostics.update({"status": "unsupported", "failure_reason": "temporal mode is not YAML-allowed"})
+        return [], ["temporal retrieval mode unsupported"], diagnostics
+    try:
+        boundary_start = parse_temporal_value(layer["before"])[0] if layer.get("before") is not None else parse_temporal_value(layer["start"])[0] if layer.get("start") is not None else None
+        boundary_end = parse_temporal_value(layer["after"])[1] if layer.get("after") is not None else parse_temporal_value(layer["end"])[1] if layer.get("end") is not None else None
+        if mode == "between" and (boundary_start is None or boundary_end is None):
+            raise ValueError("between requires start and end")
+        if boundary_start and boundary_end and boundary_start > boundary_end:
+            raise ValueError("temporal boundaries are contradictory")
+    except (TypeError, ValueError) as exc:
+        diagnostics.update({"status": "failed", "failure_reason": str(exc)})
+        return [], [f"temporal boundary failure: {exc}"], diagnostics
+
+    anchor_rows = connection.execute(
+        "SELECT anchor_id, note_id, chunk_id, anchor_type, canonical_start, canonical_end, precision, source_field, original_source_value, authority, parsing_status, conflict_group, unresolved, diagnostic_reason FROM temporal_anchors ORDER BY canonical_start, anchor_id"
+    ).fetchall()
+    allowed_types = set(diagnostics["anchor_types"])
+    allowed_authorities = set(diagnostics["authorities"])
+    eligible_anchors: list[dict[str, Any]] = []
+    for row in anchor_rows:
+        anchor = dict(row)
+        if anchor["anchor_type"] not in allowed_types or anchor["authority"] not in allowed_authorities:
+            continue
+        relation = relation_for_anchor(anchor, mode=mode, boundary_start=boundary_start, boundary_end=boundary_end, include_unresolved=diagnostics["include_unresolved"])
+        if relation is None:
+            continue
+        anchor["relation_certainty"] = relation
+        eligible_anchors.append(anchor)
+    diagnostics["matched_anchor_count"] = len(eligible_anchors)
+    if not eligible_anchors:
+        diagnostics.update({"status": "completed_no_candidates", "relation_certainty_counts": {}})
+        return [], ["temporal retrieval found no qualifying anchors"], diagnostics
+
+    combined_lexical_queries = list(dict.fromkeys([*lexical_queries, *[str(item.get("term")) for item in literal_terms if item.get("term")]]))
+    lexical, lexical_notes, lexical_diag = _lexical_candidates(
+        chunk_rows, combined_lexical_queries, connection=connection, scope_filters=scope_filters,
+        limit=None, config=config, mode=config.retrieval_lexical_default_mode, return_diagnostics=True,
+    )
+    eligible_note_ids = {str(anchor["note_id"]) for anchor in eligible_anchors}
+    eligible_chunk_ids = {str(row["chunk_id"]) for row in chunk_rows if str(row.get("note_id")) in eligible_note_ids and _chunk_matches_scope(row, scope_filters)}
+    lexical = [candidate for candidate in lexical if str(candidate.get("chunk_id")) in eligible_chunk_ids]
+    vector, vector_notes, vector_diag = _vector_candidates(
+        connection=connection, config=config, embedding_backend=embedding_backend,
+        vector_query=semantic_queries[0] if semantic_queries else "", vector_queries=semantic_queries,
+        scope_filters=scope_filters, limit=config.retrieval_temporal_max_candidates,
+        eligible_chunk_ids=eligible_chunk_ids, return_diagnostics=True,
+    )
+    lexical_by_id = {str(candidate["chunk_id"]): (index, candidate) for index, candidate in enumerate(lexical, start=1)}
+    vector_by_id = {str(candidate["chunk_id"]): (index, candidate) for index, candidate in enumerate(vector, start=1)}
+    diagnostics["internal_surface_counts"] = {"lexical": len(lexical), "vector": len(vector)}
+    rows_by_id = {str(row["chunk_id"]): row for row in chunk_rows}
+    anchor_by_note: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for anchor in eligible_anchors:
+        anchor_by_note[str(anchor["note_id"])].append(anchor)
+    temporal: list[dict[str, Any]] = []
+    for chunk_id in sorted(set(lexical_by_id) | set(vector_by_id)):
+        row = rows_by_id.get(chunk_id)
+        if row is None:
+            continue
+        anchors = anchor_by_note.get(str(row.get("note_id")), [])
+        if not anchors:
+            continue
+        anchor = sorted(anchors, key=lambda item: (str(item.get("canonical_start") or ""), str(item["anchor_id"]))) [0]
+        lexical_rank = lexical_by_id.get(chunk_id, (None, {}))[0]
+        vector_rank = vector_by_id.get(chunk_id, (None, {}))[0]
+        ranks = [rank for rank in (lexical_rank, vector_rank) if rank is not None]
+        ordinal = sum(1.0 / rank for rank in ranks) if ranks else 0.0
+        provenance = [{"anchor_id": item["anchor_id"], "anchor_type": item["anchor_type"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "precision": item["precision"], "authority": item["authority"], "source_field": item["source_field"], "relation": mode, "relation_certainty": item["relation_certainty"]} for item in anchors]
+        temporal.append({
+            **row,
+            "selection_source": "temporal",
+            "source_layers": ["temporal"],
+            "score": ordinal,
+            "internal_lexical_rank": lexical_rank,
+            "internal_vector_rank": vector_rank,
+            "internal_ordinal_relevance": ordinal,
+            "temporal_anchor_ids": [item["anchor_id"] for item in anchors],
+            "temporal_provenance": provenance,
+            "temporal_mode": mode,
+            "relation_status": anchor["relation_certainty"],
+            "selection_reason": f"temporal {mode} relevance admission",
+            "match_reason": f"temporal {mode} relation with ordinal relevance",
+        })
+    reverse = mode in {"latest", "after"} or (mode == "ordered" and str(layer.get("direction") or "ascending") == "descending")
+    if reverse:
+        temporal.sort(key=lambda candidate: (str(candidate["temporal_provenance"][0].get("canonical_start") or ""), float(candidate.get("internal_ordinal_relevance") or 0.0), str(candidate["chunk_id"])), reverse=True)
+    else:
+        temporal.sort(key=lambda candidate: (str(candidate["temporal_provenance"][0].get("canonical_start") or ""), -float(candidate.get("internal_ordinal_relevance") or 0.0), str(candidate["chunk_id"])))
+    temporal = temporal[: min(config.retrieval_temporal_max_candidates, max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit)))))]
+    diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "matched_note_count": len({str(item["note_id"]) for item in temporal}), "relation_certainty_counts": dict(sorted(Counter(str(item.get("relation_status")) for item in temporal).items()))})
+    return temporal, [*lexical_notes, *vector_notes], diagnostics
+
+
+_FUSION_SURFACE_ORDER = ("exact", "lexical", "vector", "graph", "temporal")
 
 
 def _deduplicate_surface_candidates(
@@ -1765,6 +1895,7 @@ def _merge_candidates(
     graph_candidates: list[dict[str, Any]],
     config: RuntimeConfig,
     exact_candidates: list[dict[str, Any]] | None = None,
+    temporal_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     surface_candidates = {
@@ -1772,6 +1903,7 @@ def _merge_candidates(
         "lexical": _deduplicate_surface_candidates(lexical_candidates, surface="lexical"),
         "vector": _deduplicate_surface_candidates(vector_candidates, surface="vector"),
         "graph": _deduplicate_surface_candidates(graph_candidates, surface="graph"),
+        "temporal": _deduplicate_surface_candidates(list(temporal_candidates or []), surface="temporal"),
     }
     surface_ranks, surface_raw_scores = _surface_rank_maps(surface_candidates)
     surface_representations = {
@@ -1825,6 +1957,8 @@ def _merge_candidates(
         merge_list(existing, candidate, "exact_term_provenance")
         merge_list(existing, candidate, "exact_match_evidence")
         merge_list(existing, candidate, "graph_hop_provenance")
+        merge_list(existing, candidate, "temporal_provenance")
+        merge_list(existing, candidate, "temporal_anchor_ids")
         if existing_graph_provenance or candidate_graph_provenance:
             existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
         if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
@@ -1872,6 +2006,8 @@ def _merge_candidates(
             "semantic_query_provenance",
             "vector_best_query",
             "vector_similarity",
+            "temporal_provenance",
+            "temporal_anchor_ids",
             "selection_reason",
             "surface_ranks",
             "surface_raw_scores",
@@ -2157,12 +2293,13 @@ def _semantic_traversal(
     exact_layer = retrieval_plan_layer(bound_retrieval_plan, "exact_chunk_search")
     lexical_layer = retrieval_plan_layer(bound_retrieval_plan, "lexical_chunk_search")
     vector_layer = retrieval_plan_layer(bound_retrieval_plan, "vector_search")
+    temporal_layer = retrieval_plan_layer(bound_retrieval_plan, "temporal_retrieve")
 
     chunk_rows = _load_chunk_rows(connection)
     layer_manifests: dict[str, Any] = {}
     execution = {"layers_executed": [], "layers_skipped": []}
     unsupported_layer_requests: list[dict[str, Any]] = []
-    supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand"}
+    supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
     for layer in bound_retrieval_plan.get("retrieval_layers", []):
         if not isinstance(layer, dict) or str(layer.get("operator") or "") in supported_operators:
             continue
@@ -2280,6 +2417,24 @@ def _semantic_traversal(
             "traversal_hops": [],
         }
 
+    temporal_candidates: list[dict[str, Any]] = []
+    temporal_notes: list[str] = []
+    temporal_info: dict[str, Any] = {"operator": "temporal_retrieve", "status": "not_requested", "candidate_count": 0}
+    if temporal_layer is not None:
+        execution["layers_executed"].append("temporal_retrieve")
+        try:
+            temporal_candidates, temporal_notes, temporal_info = _temporal_candidates(
+                connection=connection, config=config, chunk_rows=chunk_rows,
+                layer=temporal_layer, lexical_queries=lexical_queries,
+                semantic_queries=semantic_queries, literal_terms=literal_terms,
+                scope_filters=scope_filters, embedding_backend=embedding_backend,
+            )
+        except sqlite3.OperationalError as exc:
+            temporal_info = {"operator": "temporal_retrieve", "status": "unavailable", "candidate_count": 0, "failure_reason": str(exc)}
+            temporal_notes = [f"temporal retrieval unavailable: {exc}"]
+    else:
+        execution["layers_skipped"].append({"layer": "temporal_retrieve", "reason": "not requested by bound retrieval plan"})
+
     exact_candidates = _apply_retrieval_candidate_hygiene(
         candidates=exact_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
@@ -2297,6 +2452,11 @@ def _semantic_traversal(
     )
     graph_candidates = _apply_retrieval_candidate_hygiene(
         candidates=graph_candidates,
+        semantic_compiler_packet=semantic_compiler_packet,
+        config=config,
+    )
+    temporal_candidates = _apply_retrieval_candidate_hygiene(
+        candidates=temporal_candidates,
         semantic_compiler_packet=semantic_compiler_packet,
         config=config,
     )
@@ -2330,6 +2490,13 @@ def _semantic_traversal(
         candidate_count=len(graph_candidates),
         diagnostics=graph_traversal_info,
     )
+    layer_manifests["temporal"] = _non_exact_layer_manifest(
+        operator="temporal_retrieve",
+        layer=temporal_layer,
+        status=str(temporal_info.get("status") or ("completed_with_candidates" if temporal_candidates else "completed_no_candidates")),
+        candidate_count=len(temporal_candidates),
+        diagnostics=temporal_info,
+    )
     lexical_candidates = _annotate_scope_matches(
         lexical_candidates,
         hard_scope_filters=scope_filters,
@@ -2345,8 +2512,13 @@ def _semantic_traversal(
         hard_scope_filters=scope_filters,
         preferred_scope_filters=preferred_scope_filters,
     )
+    temporal_candidates = _annotate_scope_matches(
+        temporal_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
 
-    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates)
+    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates, temporal_candidates=temporal_candidates)
     required_exact_terms = {
         str(result.get("term"))
         for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
@@ -2370,7 +2542,7 @@ def _semantic_traversal(
         selection_diagnostics=selection_diagnostics,
     )
     selected_counts = _count_selected_by_layer(selected_candidates)
-    for source, manifest in (("lexical", layer_manifests.get("lexical")), ("vector", layer_manifests.get("vector")), ("graph", layer_manifests.get("graph"))):
+    for source, manifest in (("lexical", layer_manifests.get("lexical")), ("vector", layer_manifests.get("vector")), ("graph", layer_manifests.get("graph")), ("temporal", layer_manifests.get("temporal"))):
         if not isinstance(manifest, dict):
             continue
         selected_for_source = [candidate for candidate in selected_candidates if source in _candidate_source_layers(candidate)]
@@ -2454,7 +2626,7 @@ def _semantic_traversal(
             "operator": operator,
             "source": source,
             "status": status,
-            "candidate_count": int(manifest.get("candidate_count") or len({"exact": exact_candidates, "lexical": lexical_candidates, "vector": vector_candidates, "graph": graph_candidates}.get(source, []))),
+            "candidate_count": int(manifest.get("candidate_count") or len({"exact": exact_candidates, "lexical": lexical_candidates, "vector": vector_candidates, "graph": graph_candidates, "temporal": temporal_candidates}.get(source, []))),
             "selected_contribution_count": selected_contribution,
             "adequate_contribution": adequate,
             "blocking_reason": None,
@@ -2502,6 +2674,7 @@ def _semantic_traversal(
             "lexical": len(lexical_candidates),
             "vector": len(vector_candidates),
             "graph": len(graph_candidates),
+            "temporal": len(temporal_candidates),
         },
         "selected_counts": selected_counts,
         "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
@@ -2515,7 +2688,7 @@ def _semantic_traversal(
             "preferred": preferred_scope_filters,
             "bound_requests": bound_retrieval_plan.get("scope_resolution", {}),
         },
-        "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes],
+        "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes, *temporal_notes],
     }
 
     retrieval_packet = {
@@ -2542,6 +2715,10 @@ def _semantic_traversal(
                 "graph_direction": candidate.get("graph_direction"),
                 "graph_provenance": candidate.get("graph_provenance", []),
                 "graph_hop_provenance": candidate.get("graph_hop_provenance", []),
+                "temporal_mode": candidate.get("temporal_mode"),
+                "temporal_anchor_ids": candidate.get("temporal_anchor_ids", []),
+                "temporal_provenance": candidate.get("temporal_provenance", []),
+                "relation_status": candidate.get("relation_status"),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
                 "preferred_scope_match": bool(candidate.get("preferred_scope_match")),

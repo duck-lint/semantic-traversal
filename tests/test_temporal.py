@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import unittest
+from pathlib import Path
+
+from semantic_traversal.config import load_runtime_config
+from semantic_traversal.runtime import _temporal_candidates
+from semantic_traversal.temporal import build_temporal_anchors, parse_temporal_value
+
+
+class _UnavailableEmbedding:
+    mode_name = "unavailable"
+
+    def embed_query_text(self, query: str):  # pragma: no cover - temporal lexical tests do not call it
+        raise AssertionError(query)
+
+
+class TemporalTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = load_runtime_config(repo_root=Path(__file__).resolve().parents[1])
+
+    def test_strict_precision_and_intervals(self) -> None:
+        year = parse_temporal_value("2025")
+        month = parse_temporal_value("2025-03")
+        day = parse_temporal_value("2025-03-04")
+        instant = parse_temporal_value("2025-03-04T12:00:00-07:00")
+        self.assertEqual(year[2], "year")
+        self.assertEqual(month[2], "month")
+        self.assertEqual(day[2], "day")
+        self.assertEqual(instant[2], "datetime")
+        self.assertTrue(instant[0].endswith("Z"))
+        with self.assertRaises(ValueError):
+            parse_temporal_value("03/04/25")
+
+    def test_multiple_meanings_and_same_type_conflicts_remain_visible(self) -> None:
+        anchors, issues = build_temporal_anchors(
+            note_id="vault::uuid::n1",
+            frontmatter={"entry": "2025-01-01", "published": "2025-02", "entry_later": "2025-03-01"},
+            mappings={
+                "entry": {"anchor_type": "journal_entry", "authority": "explicit_primary"},
+                "entry_later": {"anchor_type": "journal_entry", "authority": "explicit_primary"},
+                "published": {"anchor_type": "publication", "authority": "explicit_secondary"},
+            },
+            ingest_run_id="run-1",
+        )
+        self.assertEqual(issues, [])
+        self.assertEqual({anchor.anchor_type for anchor in anchors}, {"journal_entry", "publication"})
+        self.assertEqual(len({anchor.conflict_group for anchor in anchors if anchor.conflict_group}), 1)
+        self.assertEqual(len([anchor for anchor in anchors if anchor.anchor_type == "publication"]), 1)
+
+    def test_temporal_earliest_requires_lexical_relevance_and_uses_full_temporal_pool(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata);
+            CREATE TABLE temporal_anchors (anchor_id TEXT, note_id TEXT, chunk_id TEXT, anchor_type TEXT, canonical_start TEXT, canonical_end TEXT, precision TEXT, source_field TEXT, original_source_value TEXT, authority TEXT, parsing_status TEXT, conflict_group TEXT, unresolved INTEGER, diagnostic_reason TEXT);
+            """
+        )
+        rows = [
+            {"chunk_id": "c-old", "note_id": "n-old", "source_root_label": "vault", "source_root_path": "", "relative_path": "old.md", "note_title": "Old", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha origin", "chunk_hash": "h-old"},
+            {"chunk_id": "c-new", "note_id": "n-new", "source_root_label": "vault", "source_root_path": "", "relative_path": "new.md", "note_title": "New", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha reinforcement", "chunk_hash": "h-new"},
+            {"chunk_id": "c-noise", "note_id": "n-noise", "source_root_label": "vault", "source_root_path": "", "relative_path": "noise.md", "note_title": "Noise", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "unrelated", "chunk_hash": "h-noise"},
+        ]
+        connection.executemany("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", rows)
+        connection.executemany("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows)
+        connection.executemany(
+            "INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("a-old", "n-old", None, "journal_entry", "2020-01-01T00:00:00Z", "2020-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2020", "explicit_primary", "valid", None, 0, None),
+                ("a-new", "n-new", None, "journal_entry", "2025-01-01T00:00:00Z", "2025-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2025", "explicit_primary", "valid", None, 0, None),
+            ],
+        )
+        candidates, _, diagnostics = _temporal_candidates(
+            connection=connection,
+            config=self.config,
+            chunk_rows=rows,
+            layer={"mode": "earliest", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 10},
+            lexical_queries=["alpha"], semantic_queries=[], literal_terms=[], scope_filters={}, embedding_backend=_UnavailableEmbedding(),
+        )
+        self.assertEqual([candidate["chunk_id"] for candidate in candidates], ["c-old", "c-new"])
+        self.assertTrue(diagnostics["searches_full_temporal_projection"])
+        self.assertEqual(candidates[0]["temporal_provenance"][0]["anchor_id"], "a-old")
+        connection.close()
+
