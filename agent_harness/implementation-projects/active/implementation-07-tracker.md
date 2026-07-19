@@ -38,7 +38,7 @@
 
 | Blocker | Boundary | Owner Agent | Resolution |
 | --- | --- | --- | --- |
-| No delegated-agent tool is exposed in this session | execution model | Coordinator | Execute seams directly; do not claim delegation |
+| No delegated-agent tool is exposed in this session | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; work was therefore coordinator-executed. |
 | Corpus-level UAT is required | evidence boundary | Operator/user | Run disposable complete-corpus checks in implementation-07-UAT-request.md | Do not archive until artifacts or bounded follow-up seams are recorded |
 
 ## Closeout Note
