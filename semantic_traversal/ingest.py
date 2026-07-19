@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import math
 import os
 import re
 import sqlite3
@@ -15,7 +16,13 @@ from typing import Any
 import yaml
 
 from .config import RuntimeConfig, load_runtime_config
-from .embeddings import EmbeddingBackend, resolve_embedding_backend
+from .embeddings import (
+    EmbeddingBackend,
+    embedding_identity_from_response,
+    embedding_identity_hash,
+    embedding_identity_hint,
+    resolve_embedding_backend,
+)
 from .hashing import sha256_json, sha256_text
 from .text_filters import is_low_signal_apparatus_text
 
@@ -282,6 +289,7 @@ def run_ingest(
     active_database_replaced = False
     candidate_database_cleaned = False
     lexical_index: dict[str, Any] | None = None
+    vector_index: dict[str, Any] | None = None
     try:
         _clone_active_database(
             active_database_path=active_database_path,
@@ -308,6 +316,15 @@ def run_ingest(
                 raise RuntimeError(
                     f"candidate lexical index validation failed: {lexical_index.get('failure_reason', 'alignment mismatch')}"
                 )
+            vector_index = _validate_vector_index(
+                connection=connection,
+                config=resolved_config,
+                embedding_backend=resolved_embedding_backend,
+            )
+            if vector_index.get("status") == "invalid":
+                raise RuntimeError(
+                    f"candidate vector index validation failed: {vector_index.get('failure_reason', 'invalid vector index')}"
+                )
         finally:
             connection.close()
 
@@ -326,6 +343,7 @@ def run_ingest(
             counts=counts,
             skipped_sources=skipped_sources,
             lexical_index=lexical_index or {},
+            vector_index=vector_index or {},
         )
         manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
         _write_success_artifact(ingest_paths=ingest_paths, manifest_path=manifest_path, manifest=manifest)
@@ -1181,6 +1199,8 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
             vector_dimensions INTEGER NOT NULL,
             embedding_provider TEXT NOT NULL,
             embedding_model TEXT NOT NULL,
+            embedding_identity_json TEXT NOT NULL DEFAULT '{{}}',
+            embedding_identity_hash TEXT NOT NULL DEFAULT '',
             content_hash TEXT NOT NULL,
             last_indexed_run_id TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -1213,6 +1233,11 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         CREATE INDEX IF NOT EXISTS idx_{graph_edges_table}_type ON {graph_edges_table}(edge_type);
         """
     )
+    vector_columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({vector_table})").fetchall()}
+    if "embedding_identity_json" not in vector_columns:
+        connection.execute(f"ALTER TABLE {vector_table} ADD COLUMN embedding_identity_json TEXT NOT NULL DEFAULT '{{}}'")
+    if "embedding_identity_hash" not in vector_columns:
+        connection.execute(f"ALTER TABLE {vector_table} ADD COLUMN embedding_identity_hash TEXT NOT NULL DEFAULT ''")
     connection.commit()
 
 
@@ -1391,6 +1416,154 @@ def _refresh_lexical_index(*, connection: sqlite3.Connection) -> None:
         ORDER BY chunk_id
         """
     )
+
+
+def _validate_vector_index(
+    *,
+    connection: sqlite3.Connection,
+    config: RuntimeConfig,
+    embedding_backend: EmbeddingBackend | None,
+) -> dict[str, Any]:
+    vector_table = config.vector_table
+    configured_hint = embedding_identity_hint(backend=embedding_backend, config=config) if embedding_backend is not None else None
+    result: dict[str, Any] = {
+        "status": "invalid",
+        "table": vector_table,
+        "canonical_chunk_count": 0,
+        "vector_row_count": 0,
+        "compatible_vector_count": 0,
+        "missing_vector_count": 0,
+        "orphan_vector_count": 0,
+        "invalid_json_count": 0,
+        "invalid_numeric_count": 0,
+        "empty_vector_count": 0,
+        "dimension_mismatch_count": 0,
+        "identity_mismatch_count": 0,
+        "zero_norm_count": 0,
+        "configured_identity": configured_hint or {
+            "provider": config.embedding_provider,
+            "model": config.embedding_model,
+            "dimensions": config.embedding_dimensions,
+            "normalize_embeddings": config.embedding_normalize_embeddings,
+            "encoding_strategy": "chunk_embedding_text_v1",
+        },
+        "observed_identities": [],
+        "bad_chunk_id_sample": [],
+    }
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
+    ).fetchone()
+    if table is None:
+        result["status"] = "degraded_unavailable"
+        result["failure_reason"] = "vector table is missing"
+        return result
+    canonical_ids = {
+        str(row[0]) for row in connection.execute("SELECT chunk_id FROM chunks ORDER BY chunk_id").fetchall()
+    }
+    rows = connection.execute(
+        f"SELECT chunk_id, vector_json, vector_dimensions, embedding_provider, embedding_model, embedding_identity_json, embedding_identity_hash FROM {vector_table} ORDER BY chunk_id"
+    ).fetchall()
+    observed: dict[str, dict[str, Any]] = {}
+    bad_ids: set[str] = set()
+    compatible_count = 0
+    for row in rows:
+        chunk_id = str(row["chunk_id"])
+        if chunk_id not in canonical_ids:
+            result["orphan_vector_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        try:
+            identity = json.loads(str(row["embedding_identity_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        required_identity_fields = {"provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy"}
+        if not isinstance(identity, dict) or not required_identity_fields.issubset(identity):
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        identity_key = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        observed[identity_key] = identity
+        try:
+            columns_match = (
+                str(row["embedding_provider"]) == str(identity["provider"])
+                and str(row["embedding_model"]) == str(identity["model"])
+                and int(row["vector_dimensions"]) == int(identity["dimensions"])
+            )
+        except (TypeError, ValueError):
+            columns_match = False
+        if not columns_match:
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if str(row["embedding_identity_hash"] or "") != embedding_identity_hash(identity):
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if configured_hint is not None:
+            for field in ("provider", "model", "normalize_embeddings", "encoding_strategy"):
+                if identity.get(field) != configured_hint.get(field):
+                    result["identity_mismatch_count"] += 1
+                    bad_ids.add(chunk_id)
+                    break
+            else:
+                if configured_hint.get("dimensions") is not None and identity.get("dimensions") != configured_hint.get("dimensions"):
+                    result["dimension_mismatch_count"] += 1
+                    bad_ids.add(chunk_id)
+                    continue
+            if chunk_id in bad_ids:
+                continue
+        try:
+            vector = json.loads(str(row["vector_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            result["invalid_json_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if not isinstance(vector, list):
+            result["invalid_numeric_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if not vector:
+            result["empty_vector_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if not all(isinstance(value, (int, float)) for value in vector):
+            result["invalid_numeric_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if len(vector) != int(identity["dimensions"]) or len(vector) != int(row["vector_dimensions"]):
+            result["dimension_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        norm = math.sqrt(sum(float(value) * float(value) for value in vector))
+        if norm == 0.0:
+            result["zero_norm_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        compatible_count += 1
+    result.update(
+        {
+            "canonical_chunk_count": len(canonical_ids),
+            "vector_row_count": len(rows),
+            "compatible_vector_count": compatible_count,
+            "missing_vector_count": len(canonical_ids - {str(row["chunk_id"]) for row in rows}),
+            "observed_identities": list(sorted(observed.values(), key=lambda value: json.dumps(value, sort_keys=True)))[:5],
+            "bad_chunk_id_sample": sorted(bad_ids)[:10],
+            "mixed_identity_count": max(0, len(observed) - 1),
+        }
+    )
+    if not rows:
+        result["status"] = "valid" if not canonical_ids else "degraded_unavailable"
+    elif compatible_count == len(canonical_ids) and len(rows) == len(canonical_ids) and not bad_ids and result["mixed_identity_count"] == 0:
+        result["status"] = "valid"
+    elif compatible_count or result["missing_vector_count"]:
+        result["status"] = "degraded_partial"
+    else:
+        result["status"] = "invalid"
+    if result["status"] != "valid":
+        result["failure_reason"] = "vector rows are missing, malformed, incompatible, or degraded"
+    return result
 
 
 def _upsert_note(
@@ -1814,21 +1987,49 @@ def _refresh_chunk_vectors(
 
     placeholders = ",".join("?" for _ in processed_chunk_ids)
     existing_rows = connection.execute(
-        f"SELECT chunk_id, content_hash FROM {vector_table} WHERE chunk_id IN ({placeholders})",
+        f"SELECT chunk_id, content_hash, embedding_identity_json, embedding_identity_hash FROM {vector_table} WHERE chunk_id IN ({placeholders})",
         tuple(processed_chunk_ids),
     ).fetchall()
-    existing_hashes = {str(row["chunk_id"]): str(row["content_hash"]) for row in existing_rows}
+    identity_hint = embedding_identity_hint(backend=embedding_backend, config=config) if embedding_backend is not None else None
+    existing_rows_by_id = {str(row["chunk_id"]): row for row in existing_rows}
     rows_to_index: list[ChunkRecord] = []
     for note_record in note_records:
         for chunk in note_record.chunks:
-            if existing_hashes.get(chunk.chunk_id) != chunk.chunk_hash:
+            existing = existing_rows_by_id.get(chunk.chunk_id)
+            reusable = False
+            if existing is not None and str(existing["content_hash"]) == chunk.chunk_hash:
+                try:
+                    stored_identity = json.loads(str(existing["embedding_identity_json"]))
+                    reusable = _embedding_identity_compatible_for_reuse(
+                        stored_identity=stored_identity,
+                        expected_identity=identity_hint,
+                        configured_dimensions=config.embedding_dimensions,
+                    ) and str(existing["embedding_identity_hash"] or "") == embedding_identity_hash(stored_identity)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    reusable = False
+            if not reusable:
                 rows_to_index.append(chunk)
 
     if embedding_backend is not None and rows_to_index:
         response = embedding_backend.embed_texts([_embedding_text_for_chunk(chunk) for chunk in rows_to_index])
         if response.status == "embedded" and response.vectors is not None and len(response.vectors) == len(rows_to_index):
-            model_name = str(response.metadata.get("model") or "unknown")
-            provider_name = str(response.metadata.get("backend_mode") or getattr(embedding_backend, "mode_name", "unknown"))
+            vector_rows = []
+            for chunk, vector in zip(rows_to_index, response.vectors, strict=True):
+                identity = embedding_identity_from_response(response, config=config, vector=vector)
+                vector_rows.append(
+                    (
+                        chunk.chunk_id,
+                        json.dumps(vector, ensure_ascii=True),
+                        len(vector),
+                        str(identity["provider"]),
+                        str(identity["model"]),
+                        json.dumps(identity, sort_keys=True, ensure_ascii=True),
+                        embedding_identity_hash(identity),
+                        chunk.chunk_hash,
+                        run_id,
+                        generated_at,
+                    )
+                )
             connection.executemany(
                 f"""
                 INSERT INTO {vector_table} (
@@ -1837,32 +2038,24 @@ def _refresh_chunk_vectors(
                     vector_dimensions,
                     embedding_provider,
                     embedding_model,
+                    embedding_identity_json,
+                    embedding_identity_hash,
                     content_hash,
                     last_indexed_run_id,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chunk_id) DO UPDATE SET
                     vector_json=excluded.vector_json,
                     vector_dimensions=excluded.vector_dimensions,
                     embedding_provider=excluded.embedding_provider,
                     embedding_model=excluded.embedding_model,
+                    embedding_identity_json=excluded.embedding_identity_json,
+                    embedding_identity_hash=excluded.embedding_identity_hash,
                     content_hash=excluded.content_hash,
                     last_indexed_run_id=excluded.last_indexed_run_id,
                     updated_at=excluded.updated_at
                 """,
-                [
-                    (
-                        chunk.chunk_id,
-                        json.dumps(vector, ensure_ascii=True),
-                        len(vector),
-                        provider_name,
-                        model_name,
-                        chunk.chunk_hash,
-                        run_id,
-                        generated_at,
-                    )
-                    for chunk, vector in zip(rows_to_index, response.vectors, strict=True)
-                ],
+                vector_rows,
             )
         else:
             placeholders = ",".join("?" for _ in rows_to_index)
@@ -1879,6 +2072,29 @@ def _refresh_chunk_vectors(
 
 def _embedding_text_for_chunk(chunk: ChunkRecord) -> str:
     return chunk.embedding_text
+
+
+def _embedding_identity_compatible_for_reuse(
+    *,
+    stored_identity: Any,
+    expected_identity: dict[str, Any] | None,
+    configured_dimensions: int | None,
+) -> bool:
+    if not isinstance(stored_identity, dict):
+        return False
+    required = {"provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy"}
+    if not required.issubset(stored_identity):
+        return False
+    if expected_identity is not None:
+        for field in ("provider", "model", "normalize_embeddings", "encoding_strategy"):
+            if stored_identity.get(field) != expected_identity.get(field):
+                return False
+    if configured_dimensions is not None and int(stored_identity.get("dimensions", -1)) != configured_dimensions:
+        return False
+    try:
+        return int(stored_identity["dimensions"]) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _note_node_id(note_id: str) -> str:
@@ -1933,6 +2149,7 @@ def _build_manifest(
     counts: dict[str, int],
     skipped_sources: list[dict[str, Any]],
     lexical_index: dict[str, Any],
+    vector_index: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "status": "success",
@@ -1954,6 +2171,7 @@ def _build_manifest(
         },
         "skipped_sources": skipped_sources,
         "lexical_index": lexical_index,
+        "vector_index": vector_index,
         "notes": [
             {
                 "note_id": note_record.note_id,

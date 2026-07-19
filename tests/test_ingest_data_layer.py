@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from semantic_traversal.config import load_runtime_config
+from copy import deepcopy
+
+from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
-from semantic_traversal.ingest import IngestSourceRoot, _validate_lexical_index, run_ingest
+from semantic_traversal.ingest import IngestSourceRoot, _validate_lexical_index, _validate_vector_index, run_ingest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +30,15 @@ class FakeEmbeddingBackend:
 
     def embed_query_text(self, text: str) -> EmbeddingResponse:
         return self.embed_texts([text])
+
+
+class CountingEmbeddingBackend(FakeEmbeddingBackend):
+    def __init__(self) -> None:
+        self.embed_texts_calls = 0
+
+    def embed_texts(self, texts: list[str]) -> EmbeddingResponse:
+        self.embed_texts_calls += 1
+        return super().embed_texts(texts)
 
 
 def _write_note(root: Path, relative_path: str, content: str) -> Path:
@@ -70,6 +81,50 @@ class IngestDataLayerTests(unittest.TestCase):
             self.assertEqual(lexical["duplicate_chunk_id_count"], 0)
             self.assertEqual(lexical["field_mismatch_count"], 0)
             self.assertEqual(lexical["query_probe_status"], "passed")
+            vector = manifest["vector_index"]
+            self.assertEqual(vector["status"], "valid")
+            self.assertEqual(vector["canonical_chunk_count"], vector["compatible_vector_count"])
+            self.assertEqual(vector["missing_vector_count"], 0)
+            self.assertEqual(vector["identity_mismatch_count"], 0)
+
+    def test_vector_reuse_requires_content_and_embedding_identity(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            _write_note(source_root, "Stable.md", "# Stable\n\nidentity-token")
+            first_backend = CountingEmbeddingBackend()
+            first = run_ingest(repo_root=REPO_ROOT, data_root=data_root, source_roots=(IngestSourceRoot(label="source", path=source_root),), embedding_backend=first_backend, config=config)
+            self.assertEqual(first_backend.embed_texts_calls, 1)
+            second_backend = CountingEmbeddingBackend()
+            run_ingest(repo_root=REPO_ROOT, data_root=data_root, source_roots=(IngestSourceRoot(label="source", path=source_root),), embedding_backend=second_backend, config=config)
+            self.assertEqual(second_backend.embed_texts_calls, 0)
+            changed_raw = deepcopy(config.raw)
+            changed_raw["embeddings"]["model"] = "changed-model"
+            changed_config = RuntimeConfig(repo_root=config.repo_root, config_path=config.config_path, raw=changed_raw)
+            third_backend = CountingEmbeddingBackend()
+            run_ingest(repo_root=REPO_ROOT, data_root=data_root, source_roots=(IngestSourceRoot(label="source", path=source_root),), embedding_backend=third_backend, config=changed_config)
+            self.assertEqual(third_backend.embed_texts_calls, 1)
+            with closing(sqlite3.connect(first.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                row = connection.execute(f"SELECT embedding_identity_json, embedding_identity_hash FROM {config.vector_table}").fetchone()
+                self.assertIn("encoding_strategy", row["embedding_identity_json"])
+                self.assertTrue(row["embedding_identity_hash"])
+
+    def test_vector_validator_counts_malformed_and_incompatible_rows(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "source"
+            _write_note(source_root, "Stable.md", "# Stable\n\nidentity-token")
+            result = run_ingest(repo_root=REPO_ROOT, data_root=data_root, source_roots=(IngestSourceRoot(label="source", path=source_root),), embedding_backend=FakeEmbeddingBackend(), config=config)
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                connection.execute(f"UPDATE {config.vector_table} SET vector_json = ?", ("broken-json",))
+                connection.commit()
+                validation = _validate_vector_index(connection=connection, config=config, embedding_backend=FakeEmbeddingBackend())
+            self.assertEqual(validation["status"], "invalid")
+            self.assertEqual(validation["invalid_json_count"], 1)
 
     def test_fts_freshness_tracks_update_metadata_rename_delete_and_unchanged_reingest(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)

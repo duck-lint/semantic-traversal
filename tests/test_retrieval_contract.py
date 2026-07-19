@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 import unittest
 from copy import deepcopy
 from pathlib import Path
 
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
-from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend
+from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, embedding_identity_hash
 from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _select_retrieval_chunks, _vector_candidates
 from semantic_traversal.retrieval_resolver import bind_retrieval_plan
 
@@ -37,6 +38,18 @@ class RetrievalContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.config = load_runtime_config(repo_root=Path(__file__).resolve().parents[1])
+
+    def _vector_connection(self, entries: list[tuple[str, str, list[float], dict[str, object] | None]]) -> sqlite3.Connection:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT)")
+        connection.execute("CREATE TABLE chunk_vectors (chunk_id TEXT PRIMARY KEY, vector_json TEXT, vector_dimensions INTEGER, embedding_provider TEXT, embedding_model TEXT, embedding_identity_json TEXT, embedding_identity_hash TEXT, content_hash TEXT, last_indexed_run_id TEXT, updated_at TEXT)")
+        default_identity = {"provider": "test", "model": self.config.embedding_model, "dimensions": 2, "normalize_embeddings": self.config.embedding_normalize_embeddings, "encoding_strategy": "chunk_embedding_text_v1"}
+        for chunk_id, note_id, vector, identity_override in entries:
+            identity = identity_override or default_identity
+            connection.execute("INSERT INTO chunks VALUES (?, ?, 'vault', '', ?, ?, '{}', 'Body', ?, ?)", (chunk_id, note_id, f"{note_id}.md", note_id, note_id, chunk_id))
+            connection.execute("INSERT INTO chunk_vectors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (chunk_id, json.dumps(vector), len(vector), identity["provider"], identity["model"], json.dumps(identity), embedding_identity_hash(identity), chunk_id, "run", "now"))
+        return connection
 
     def test_exact_status_distinguishes_no_terms_and_no_matches(self) -> None:
         rows = [
@@ -158,9 +171,10 @@ class RetrievalContractTests(unittest.TestCase):
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row
         connection.execute("CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT)")
-        connection.execute("CREATE TABLE chunk_vectors (chunk_id TEXT, vector_json TEXT)")
+        connection.execute("CREATE TABLE chunk_vectors (chunk_id TEXT PRIMARY KEY, vector_json TEXT, vector_dimensions INTEGER, embedding_provider TEXT, embedding_model TEXT, embedding_identity_json TEXT, embedding_identity_hash TEXT, content_hash TEXT, last_indexed_run_id TEXT, updated_at TEXT)")
         connection.execute("INSERT INTO chunks VALUES ('c1','n1','vault','','idea.md','Idea','{}','Body','Semantic geometry','h1')")
-        connection.execute("INSERT INTO chunk_vectors VALUES ('c1','[1.0, 0.0]')")
+        identity = {"provider": "test", "model": self.config.embedding_model, "dimensions": 2, "normalize_embeddings": self.config.embedding_normalize_embeddings, "encoding_strategy": "chunk_embedding_text_v1"}
+        connection.execute("INSERT INTO chunk_vectors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("c1", "[1.0, 0.0]", 2, "test", self.config.embedding_model, json.dumps(identity), embedding_identity_hash(identity), "h1", "run", "now"))
         backend = _FakeEmbeddingBackend({"first query": [1.0, 0.0], "second query": [1.0, 0.0]})
         candidates, _ = _vector_candidates(
             connection=connection, config=self.config, embedding_backend=backend,
@@ -168,6 +182,63 @@ class RetrievalContractTests(unittest.TestCase):
             scope_filters={}, limit=10,
         )
         self.assertEqual(candidates[0]["semantic_query_provenance"], ["first query", "second query"])
+
+    def test_vector_threshold_is_inclusive_and_multi_query_allocation_is_diverse(self) -> None:
+        raw = deepcopy(self.config.raw)
+        raw["retrieval"]["vector"].update({"min_similarity": 0.8, "per_query_max_candidates": 3, "max_chunks_per_note": 1, "max_candidates": 4})
+        config = RuntimeConfig(repo_root=self.config.repo_root, config_path=self.config.config_path, raw=raw)
+        connection = self._vector_connection([
+            ("c1", "n1", [1.0, 0.0], None),
+            ("c2", "n1", [0.9, 0.1], None),
+            ("c3", "n2", [0.0, 1.0], None),
+            ("c4", "n3", [0.8, 0.6], None),
+        ])
+        backend = _FakeEmbeddingBackend({"alpha": [1.0, 0.0], "beta": [0.0, 1.0]})
+        candidates, _, diagnostics = _vector_candidates(
+            connection=connection, config=config, embedding_backend=backend,
+            vector_query="alpha", vector_queries=["beta", "alpha"], scope_filters={}, limit=4,
+            return_diagnostics=True,
+        )
+        self.assertEqual([item["chunk_id"] for item in candidates], ["c1", "c3", "c4"])
+        self.assertEqual(max(sum(1 for item in candidates if item["note_id"] == note_id) for note_id in {item["note_id"] for item in candidates}), 1)
+        self.assertEqual(diagnostics["effective_min_similarity"], 0.8)
+        self.assertGreaterEqual(diagnostics["at_or_above_threshold_count"], 4)
+        self.assertEqual(diagnostics["query_results"][0]["query"], "alpha")
+        self.assertEqual({item["query"] for item in candidates[0]["vector_query_scores"]}, {"alpha"})
+        self.assertTrue(any(item["query"] == "beta" for item in candidates[1]["vector_query_scores"]))
+
+    def test_vector_identity_mismatch_blocks_comparison_and_malformed_rows_are_diagnosed(self) -> None:
+        mismatched = {"provider": "other", "model": self.config.embedding_model, "dimensions": 2, "normalize_embeddings": self.config.embedding_normalize_embeddings, "encoding_strategy": "chunk_embedding_text_v1"}
+        connection = self._vector_connection([("bad", "n1", [1.0, 0.0], mismatched), ("good", "n2", [1.0, 0.0], None), ("mismatch", "n3", [1.0, 0.0], mismatched)])
+        connection.execute("UPDATE chunk_vectors SET vector_json = ? WHERE chunk_id = ?", ("not-json", "bad"))
+        backend = _FakeEmbeddingBackend({"query": [1.0, 0.0]})
+        candidates, _, diagnostics = _vector_candidates(
+            connection=connection, config=self.config, embedding_backend=backend,
+            vector_query="query", vector_queries=["query"], scope_filters={}, limit=10, return_diagnostics=True,
+        )
+        self.assertEqual([item["chunk_id"] for item in candidates], ["good"])
+        self.assertEqual(diagnostics["invalid_json_count"], 1)
+        self.assertGreaterEqual(diagnostics["identity_mismatch_count"], 0)
+        self.assertEqual(diagnostics["status"], "partial_failure")
+
+    def test_vector_query_order_and_vector_row_insertion_order_are_canonical(self) -> None:
+        entries = [("c1", "n1", [1.0, 0.0], None), ("c2", "n2", [0.0, 1.0], None)]
+        first = self._vector_connection(entries)
+        second = self._vector_connection(list(reversed(entries)))
+        backend = _FakeEmbeddingBackend({"zeta": [1.0, 0.0], "alpha": [0.0, 1.0]})
+        first_result = _vector_candidates(connection=first, config=self.config, embedding_backend=backend, vector_query="zeta", vector_queries=["zeta", "alpha"], scope_filters={}, limit=10)
+        second_result = _vector_candidates(connection=second, config=self.config, embedding_backend=backend, vector_query="alpha", vector_queries=["alpha", "zeta"], scope_filters={}, limit=10)
+        self.assertEqual([item["chunk_id"] for item in first_result[0]], [item["chunk_id"] for item in second_result[0]])
+        self.assertEqual(first_result[0][0]["semantic_query_provenance"], second_result[0][0]["semantic_query_provenance"])
+
+    def test_vector_score_provenance_survives_merge_when_another_surface_wins(self) -> None:
+        vector = [{"chunk_id": "shared", "chunk_hash": "h", "selection_source": "vector", "score": 2.0, "vector_query_scores": [{"query": "alpha", "similarity": 0.7}, {"query": "beta", "similarity": 0.6}], "semantic_query_provenance": ["alpha", "beta"], "vector_best_query": "alpha", "vector_similarity": 0.7}]
+        lexical = [{"chunk_id": "shared", "chunk_hash": "h", "selection_source": "lexical", "score": 4.0}]
+        merged = _merge_candidates(lexical, vector, [], config=self.config)
+        self.assertEqual(merged[0]["selection_source"], "lexical")
+        self.assertEqual(merged[0]["vector_best_query"], "alpha")
+        self.assertEqual(merged[0]["semantic_query_provenance"], ["alpha", "beta"])
+        self.assertEqual(merged[0]["vector_query_scores"], [{"query": "alpha", "similarity": 0.7}, {"query": "beta", "similarity": 0.6}])
 
     def test_lexical_manifest_statuses_distinguish_input_mode_and_index(self) -> None:
         rows = [{"chunk_id": "c1", "note_id": "n1", "source_root_label": "vault", "source_root_path": "", "relative_path": "idea.md", "note_title": "Idea", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "h"}]
@@ -196,7 +267,7 @@ class RetrievalContractTests(unittest.TestCase):
         self.assertEqual(unavailable["status"], "unavailable")
         self.assertEqual(empty["status"], "skipped_no_input")
         self.assertEqual(partial["status"], "partial_failure")
-        self.assertEqual([item["query"] for item in partial["query_results"]], ["good query", "bad query"])
+        self.assertEqual([item["query"] for item in partial["query_results"]], ["bad query", "good query"])
 
     def test_required_layer_reservation_uses_source_layers_and_respects_zero_budget(self) -> None:
         candidates = [

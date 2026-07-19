@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from .config import RuntimeConfig, load_runtime_config
-from .embeddings import EmbeddingBackend, resolve_embedding_backend
+from .embeddings import (
+    EmbeddingBackend,
+    embedding_identity_from_response,
+    embedding_identity_hash,
+    resolve_embedding_backend,
+)
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .resource_inventory import build_resource_inventory
@@ -1098,100 +1103,242 @@ def _vector_candidates(
     return_diagnostics: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
+    candidates: list[dict[str, Any]] = []
     diagnostics: dict[str, Any] = {
         "requested_queries": [],
+        "effective_queries": [],
         "query_results": [],
         "candidate_count": 0,
+        "effective_limit": 0,
+        "configured_min_similarity": config.retrieval_vector_min_similarity,
+        "effective_min_similarity": config.retrieval_vector_min_similarity,
+        "configured_per_query_max_candidates": config.retrieval_vector_per_query_max_candidates,
+        "configured_max_chunks_per_note": config.retrieval_vector_max_chunks_per_note,
+        "stored_vector_row_count": 0,
+        "compatible_vector_count": 0,
+        "invalid_json_count": 0,
+        "invalid_numeric_count": 0,
+        "empty_vector_count": 0,
+        "zero_norm_count": 0,
+        "dimension_mismatch_count": 0,
+        "identity_mismatch_count": 0,
+        "mixed_identity_count": 0,
+        "below_threshold_count": 0,
+        "at_or_above_threshold_count": 0,
+        "note_cap_attrition_count": 0,
+        "per_query_cap_attrition_count": 0,
+        "query_order_policy": "canonical_lexicographic",
     }
+
     def finish() -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
         diagnostics["candidate_count"] = len(candidates)
+        diagnostics["returned_candidate_count"] = len(candidates)
         return (candidates, notes, diagnostics) if return_diagnostics else (candidates, notes)
 
-    queries = [str(query).strip() for query in (vector_queries or [vector_query]) if str(query).strip()]
-    diagnostics["requested_queries"] = list(queries)
+    requested_queries = [str(query).strip() for query in (vector_queries or [vector_query]) if str(query).strip()]
+    queries = sorted(set(requested_queries))
+    diagnostics["requested_queries"] = requested_queries
+    diagnostics["effective_queries"] = queries
+    effective_limit = min(config.retrieval_vector_max_candidates, max(0, int(limit if limit is not None else config.retrieval_vector_max_candidates)))
+    diagnostics["effective_limit"] = effective_limit
     if not queries:
         diagnostics["status"] = "skipped_no_input"
-        candidates: list[dict[str, Any]] = []
         return finish()
     if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
         diagnostics["status"] = "unavailable"
-        candidates = []
+        diagnostics["failure_reason"] = "embedding backend unavailable"
         return finish()
 
-    query_vectors: list[tuple[str, list[float]]] = []
+    query_vectors: list[tuple[str, list[float], dict[str, Any]]] = []
     query_failures: list[str] = []
     for query in queries:
         response = embedding_backend.embed_query_text(query)
-        if response.status == "embedded" and response.vectors:
-            query_vectors.append((query, response.vectors[0]))
-            diagnostics["query_results"].append({"query": query, "backend_status": response.status, "embedding_succeeded": True, "candidate_count_before_merge": 0})
+        query_result: dict[str, Any] = {
+            "query": query,
+            "backend_status": response.status,
+            "embedding_succeeded": False,
+            "vector_rows_considered": 0,
+            "scope_admissible_rows": 0,
+            "rows_at_or_above_threshold": 0,
+            "candidates_before_per_query_cap": 0,
+            "candidates_after_per_query_cap": 0,
+            "candidates_represented_after_merged_allocation": 0,
+        }
+        if response.status == "embedded" and response.vectors and isinstance(response.vectors[0], list):
+            query_vector = response.vectors[0]
+            if query_vector and all(isinstance(value, (int, float)) for value in query_vector):
+                query_identity = embedding_identity_from_response(response, config=config, vector=[float(value) for value in query_vector])
+                if not isinstance(response.metadata, dict) or not response.metadata.get("backend_mode"):
+                    query_identity["provider"] = str(getattr(embedding_backend, "mode_name", "unknown"))
+                query_norm = math.sqrt(sum(float(value) * float(value) for value in query_vector))
+                if query_norm > 0.0:
+                    query_vectors.append((query, [float(value) for value in query_vector], query_identity))
+                    query_result.update(
+                        {
+                            "embedding_succeeded": True,
+                            "query_identity": query_identity,
+                            "query_dimensions": len(query_vector),
+                        }
+                    )
+                else:
+                    query_result["diagnostic"] = "query vector has zero norm"
+            else:
+                query_result["diagnostic"] = "query vector is empty or nonnumeric"
         else:
+            query_result["diagnostic"] = "query embedding failed"
+        if not query_result["embedding_succeeded"]:
             query_failures.append(f"{query}: {response.status}")
-            diagnostics["query_results"].append({"query": query, "backend_status": response.status, "embedding_succeeded": False, "candidate_count_before_merge": 0, "diagnostic": "embedding failed"})
+        diagnostics["query_results"].append(query_result)
     if not query_vectors:
         diagnostics["status"] = "failed" if query_failures else "unavailable"
-        candidates = []
-        return ([], [f"vector search unavailable: {'; '.join(query_failures)}"], diagnostics) if return_diagnostics else ([], [f"vector search unavailable: {'; '.join(query_failures)}"])
-    try:
-        rows = connection.execute(
-            f"SELECT chunk_id, vector_json FROM {config.vector_table}"
-        ).fetchall()
-    except sqlite3.OperationalError as exc:
-        diagnostics["status"] = "unavailable"
-        candidates = []
-        message = [f"vector search unavailable: {exc}"]
-        return ([], message, diagnostics) if return_diagnostics else ([], message)
-    if not rows:
-        diagnostics["status"] = "partial_failure" if query_failures else "completed_no_candidates"
-        candidates = []
         return finish()
 
-    chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
-    candidates: list[dict[str, Any]] = []
-    query_hit_counts = {query: 0 for query, _ in query_vectors}
+    try:
+        rows = connection.execute(
+            f"SELECT chunk_id, vector_json, vector_dimensions, embedding_provider, embedding_model, embedding_identity_json, embedding_identity_hash FROM {config.vector_table} ORDER BY chunk_id"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        diagnostics["status"] = "partial_failure" if query_failures else "unavailable"
+        diagnostics["failure_reason"] = f"vector identity columns unavailable: {exc}"
+        return finish()
+    diagnostics["stored_vector_row_count"] = len(rows)
+    chunk_rows = {str(row["chunk_id"]): row for row in _load_chunk_rows(connection)}
+    valid_rows: list[tuple[Any, dict[str, Any], list[float], dict[str, Any]]] = []
+    observed_identity_keys: set[str] = set()
     for row in rows:
         chunk_id = str(row["chunk_id"])
         chunk_row = chunk_rows.get(chunk_id)
-        if chunk_row is None or not _chunk_matches_scope(chunk_row, scope_filters or {}):
+        if chunk_row is None:
+            diagnostics["identity_mismatch_count"] += 1
             continue
         try:
+            identity = json.loads(str(row["embedding_identity_json"]))
             vector = json.loads(str(row["vector_json"]))
-        except json.JSONDecodeError:
+        except (TypeError, ValueError, json.JSONDecodeError):
+            diagnostics["invalid_json_count"] += 1
             continue
-        if not isinstance(vector, list) or not all(isinstance(value, (int, float)) for value in vector):
+        if not isinstance(identity, dict) or not {"provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy"}.issubset(identity):
+            diagnostics["identity_mismatch_count"] += 1
             continue
-        similarities = [
-            (query, _cosine_similarity(query_vector, [float(value) for value in vector]))
-            for query, query_vector in query_vectors
-        ]
-        query, similarity = max(similarities, key=lambda item: (item[1], item[0]))
-        if similarity <= 0.0:
+        observed_identity_keys.add(json.dumps(identity, sort_keys=True, separators=(",", ":")))
+        try:
+            columns_match = (
+                str(row["embedding_provider"]) == str(identity["provider"])
+                and str(row["embedding_model"]) == str(identity["model"])
+                and int(row["vector_dimensions"]) == int(identity["dimensions"])
+            )
+        except (TypeError, ValueError):
+            columns_match = False
+        if not columns_match:
+            diagnostics["identity_mismatch_count"] += 1
             continue
-        matching_queries = [query_name for query_name, score in similarities if score > 0.0]
-        for query_name in matching_queries:
-            query_hit_counts[query_name] += 1
+        if str(row["embedding_identity_hash"] or "") != embedding_identity_hash(identity):
+            diagnostics["identity_mismatch_count"] += 1
+            continue
+        if not isinstance(vector, list):
+            diagnostics["invalid_numeric_count"] += 1
+            continue
+        if not vector:
+            diagnostics["empty_vector_count"] += 1
+            continue
+        if not all(isinstance(value, (int, float)) for value in vector):
+            diagnostics["invalid_numeric_count"] += 1
+            continue
+        if len(vector) != int(identity["dimensions"]) or len(vector) != int(row["vector_dimensions"]):
+            diagnostics["dimension_mismatch_count"] += 1
+            continue
+        if math.sqrt(sum(float(value) * float(value) for value in vector)) == 0.0:
+            diagnostics["zero_norm_count"] += 1
+            continue
+        diagnostics["compatible_vector_count"] += 1
+        valid_rows.append((row, chunk_row, [float(value) for value in vector], identity))
+    diagnostics["observed_identity_count"] = len(observed_identity_keys)
+    diagnostics["mixed_identity_count"] = max(0, len(observed_identity_keys) - 1)
+
+    per_query_lists: dict[str, list[dict[str, Any]]] = {}
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    for query, query_vector, query_identity in query_vectors:
+        query_result = next(result for result in diagnostics["query_results"] if result["query"] == query)
+        query_candidates: list[dict[str, Any]] = []
+        query_result["vector_rows_considered"] = len(rows)
+        for row, chunk_row, vector, stored_identity in valid_rows:
+            if not _chunk_matches_scope(chunk_row, scope_filters or {}):
+                continue
+            query_result["scope_admissible_rows"] += 1
+            if any(stored_identity.get(field) != query_identity.get(field) for field in ("provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy")):
+                diagnostics["identity_mismatch_count"] += 1
+                continue
+            similarity = _cosine_similarity(query_vector, vector)
+            if similarity < config.retrieval_vector_min_similarity:
+                diagnostics["below_threshold_count"] += 1
+                continue
+            diagnostics["at_or_above_threshold_count"] += 1
+            query_result["rows_at_or_above_threshold"] += 1
+            query_candidates.append({"chunk_id": str(row["chunk_id"]), "query": query, "similarity": similarity, "chunk_row": chunk_row})
+        query_candidates.sort(key=lambda item: (-float(item["similarity"]), str(item["chunk_id"])))
+        query_result["candidates_before_per_query_cap"] = len(query_candidates)
+        if len(query_candidates) > config.retrieval_vector_per_query_max_candidates:
+            diagnostics["per_query_cap_attrition_count"] += len(query_candidates) - config.retrieval_vector_per_query_max_candidates
+        query_candidates = query_candidates[: config.retrieval_vector_per_query_max_candidates]
+        query_result["candidates_after_per_query_cap"] = len(query_candidates)
+        per_query_lists[query] = query_candidates
+        for item in query_candidates:
+            candidate = merged_by_id.setdefault(item["chunk_id"], {"chunk_row": item["chunk_row"], "scores": {}})
+            candidate["scores"][query] = float(item["similarity"])
+
+    selected_ids: set[str] = set()
+    selected_order: list[str] = []
+    note_counts: dict[str, int] = {}
+    query_indexes = {query: 0 for query in queries if query in per_query_lists}
+    while len(selected_ids) < effective_limit and any(query_indexes[query] < len(per_query_lists[query]) for query in query_indexes):
+        progressed = False
+        for query in queries:
+            if query not in query_indexes or query_indexes[query] >= len(per_query_lists[query]) or len(selected_ids) >= effective_limit:
+                continue
+            item = per_query_lists[query][query_indexes[query]]
+            query_indexes[query] += 1
+            progressed = True
+            chunk_id = item["chunk_id"]
+            if chunk_id in selected_ids:
+                continue
+            note_id = str(item["chunk_row"].get("note_id") or "")
+            if note_counts.get(note_id, 0) >= config.retrieval_vector_max_chunks_per_note:
+                diagnostics["note_cap_attrition_count"] += 1
+                continue
+            selected_ids.add(chunk_id)
+            selected_order.append(chunk_id)
+            note_counts[note_id] = note_counts.get(note_id, 0) + 1
+        if not progressed:
+            break
+
+    for chunk_id in selected_order:
+        merged = merged_by_id[chunk_id]
+        scores = {query: merged["scores"][query] for query in sorted(merged["scores"])}
+        best_query = sorted(scores, key=lambda query: (-scores[query], query))[0]
+        best_similarity = scores[best_query]
         candidates.append(
             {
-                **chunk_row,
-                "selection_reason": f"vector similarity {similarity:.3f}",
-                "score": similarity + float(config.retrieval_scoring["vector_bonus"]),
+                **merged["chunk_row"],
+                "selection_reason": f"vector similarity {best_similarity:.3f} from {best_query}",
+                "score": best_similarity + float(config.retrieval_scoring["vector_bonus"]),
                 "selection_source": "vector",
-                "match_reason": f"vector query similarity {similarity:.3f}",
-                "semantic_query_provenance": matching_queries,
+                "match_reason": f"vector query similarity {best_similarity:.3f}",
+                "semantic_query_provenance": list(scores),
+                "vector_query_scores": [{"query": query, "similarity": scores[query]} for query in scores],
+                "vector_best_query": best_query,
+                "vector_similarity": best_similarity,
             }
         )
-    candidates = sorted(candidates, key=lambda candidate: -float(candidate.get("score") or 0.0))
-    if limit is not None:
-        candidates = candidates[:limit]
+    for result in diagnostics["query_results"]:
+        result["candidates_represented_after_merged_allocation"] = sum(1 for candidate in candidates if result["query"] in candidate.get("semantic_query_provenance", []))
     if candidates:
         notes.append(f"vector search matched {len(candidates)} chunk(s) across {len(query_vectors)} semantic quer{'y' if len(query_vectors) == 1 else 'ies'}")
     else:
         notes.append("vector search produced no matches")
     if query_failures:
         notes.append(f"vector queries failed: {'; '.join(query_failures)}")
-    for result in diagnostics["query_results"]:
-        result["candidate_count_before_merge"] = query_hit_counts.get(result["query"], 0)
-    diagnostics["status"] = "partial_failure" if query_failures else ("completed_with_candidates" if candidates else "completed_no_candidates")
+    degraded = any(diagnostics[key] for key in ("invalid_json_count", "invalid_numeric_count", "empty_vector_count", "zero_norm_count", "dimension_mismatch_count", "identity_mismatch_count", "mixed_identity_count")) and diagnostics["compatible_vector_count"] > 0
+    diagnostics["status"] = "partial_failure" if query_failures or degraded else ("completed_with_candidates" if candidates else "completed_no_candidates")
     return finish()
 
 
@@ -1570,6 +1717,20 @@ def _merge_candidates(
                     unique.append(value)
             existing[field] = unique
 
+    def merge_vector_provenance(existing: dict[str, Any], candidate: dict[str, Any]) -> None:
+        scores: dict[str, float] = {}
+        for item in [*existing.get("vector_query_scores", []), *candidate.get("vector_query_scores", [])]:
+            if isinstance(item, dict) and str(item.get("query") or ""):
+                scores[str(item["query"])] = max(scores.get(str(item["query"]), float("-inf")), float(item.get("similarity") or 0.0))
+        if not scores:
+            return
+        ordered_scores = {query: scores[query] for query in sorted(scores)}
+        best_query = sorted(ordered_scores, key=lambda query: (-ordered_scores[query], query))[0]
+        existing["vector_query_scores"] = [{"query": query, "similarity": ordered_scores[query]} for query in ordered_scores]
+        existing["semantic_query_provenance"] = list(ordered_scores)
+        existing["vector_best_query"] = best_query
+        existing["vector_similarity"] = ordered_scores[best_query]
+
     def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
         existing = merged.get(chunk_id)
@@ -1587,6 +1748,7 @@ def _merge_candidates(
         existing_graph_provenance = _coerce_string_list(existing.get("graph_provenance"))
         candidate_graph_provenance = _coerce_string_list(candidate.get("graph_provenance"))
         existing["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
+        merge_vector_provenance(existing, candidate)
         existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
         existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
         merge_list(existing, candidate, "exact_term_provenance")
@@ -1612,6 +1774,7 @@ def _merge_candidates(
             merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
             merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
             merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
+            merge_vector_provenance(merged[chunk_id], existing)
             merged[chunk_id]["exact_term_provenance"] = list(dict.fromkeys([*_coerce_string_list(existing.get("exact_term_provenance")), *_coerce_string_list(candidate.get("exact_term_provenance"))]))
             evidence = [*existing.get("exact_match_evidence", []), *candidate.get("exact_match_evidence", [])]
             merged[chunk_id]["exact_match_evidence"] = []
@@ -1624,6 +1787,7 @@ def _merge_candidates(
             existing["selection_reason"] = ", ".join(
                 part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
             )
+            merge_vector_provenance(existing, candidate)
 
     for candidate in list(exact_candidates or []) + lexical_candidates + vector_candidates + graph_candidates:
         absorb(candidate)
@@ -2195,6 +2359,9 @@ def _semantic_traversal(
                 "selection_source": str(candidate.get("selection_source") or ""),
                 "exact_match_evidence": candidate.get("exact_match_evidence", []),
                 "semantic_query_provenance": _coerce_string_list(candidate.get("semantic_query_provenance")),
+                "vector_query_scores": candidate.get("vector_query_scores", []),
+                "vector_best_query": candidate.get("vector_best_query"),
+                "vector_similarity": candidate.get("vector_similarity"),
                 "graph_direction": candidate.get("graph_direction"),
                 "graph_provenance": candidate.get("graph_provenance", []),
                 "graph_hop_provenance": candidate.get("graph_hop_provenance", []),

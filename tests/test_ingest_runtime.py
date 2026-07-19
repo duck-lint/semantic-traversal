@@ -2460,6 +2460,10 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertIn(field, chunk)
         self.assertIsInstance(chunk["source_layers"], list)
         self.assertIsInstance(chunk["selection_source"], str)
+        vector_chunks = [item for item in result.retrieval_packet["selected_chunks"] if "vector" in item["source_layers"]]
+        if vector_chunks:
+            self.assertIn("vector_query_scores", vector_chunks[0])
+            self.assertIn("vector_best_query", vector_chunks[0])
 
     def test_required_lexical_layer_uses_structured_status_and_selected_contribution(self) -> None:
         data_root = _prepare_data_root()

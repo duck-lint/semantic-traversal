@@ -43,6 +43,19 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "graph_traversal.direction"):
                 load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
 
+    def test_vector_controls_are_yaml_owned_and_validated(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        self.assertEqual(config.retrieval_vector_min_similarity, 0.5)
+        self.assertEqual(config.retrieval_vector_per_query_max_candidates, 50)
+        self.assertEqual(config.retrieval_vector_max_chunks_per_note, 4)
+        self.assertIsNone(config.embedding_dimensions)
+        source = (REPO_ROOT / "semantic_traversal.runtime.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "invalid-vector.yaml"
+            path.write_text(source.replace("min_similarity: 0.5", "min_similarity: 1.5", 1), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "min_similarity"):
+                load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
+
 
 
 if __name__ == "__main__":

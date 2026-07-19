@@ -144,3 +144,26 @@ Operator verification: CI was manually verified as passing for commit `7cad93683
 Prompt hashes remained unchanged: semantic compiler `9CA92643B2550410743D494FC82E3AE67C718C8F7867D72E43DDB49925E28F4B`; frontier synthesis `FDAC281E48E765AF09578BE02E53AD65A443D49914FAC53D017ADE5391A18776`. YAML remained `B0B2AA1F0EF45D1CADC52156DD79AB3E9E7379D3E626F541BBB5768065ABFBA4` before and after.
 
 Seam 4B is complete. Remaining open seams are Seam 4C vector identity/threshold/diversity, Seam 5 general fusion/selection, Seam 6A temporal substrate, Seam 7 persisted inventory, Seam 8 compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness. The next planned seam is Seam 4C; no Seam 4C implementation was started here.
+## Seam 4C vector identity, thresholds, and diversity UAT (2026-07-19)
+
+Seam 4C is complete. Vector rows now persist canonical provider/model/dimensions/normalization/encoding identity and an identity hash; changed or incompatible rows are re-embedded, and malformed, stale, or mixed rows are diagnosed. YAML owns `min_similarity: 0.5`, `per_query_max_candidates: 50`, `max_chunks_per_note: 4`, and `max_candidates: 200`. Each accepted query executes independently, with canonical query ordering, per-query score provenance, and deterministic round-robin allocation. This is executor behavior, not Seam 5 fusion.
+
+Corpus calibration at `.2/.35/.5/.65` was recorded before selecting `.5` as a bounded tradeoff: `semantic geometry` produced `7251/2256/1350/46`, `autobiographical chronology journal development` `4918/1059/24/0`, `conceptual precursor influence` `6969/1443/7/0`, and an unrelated control `735/1/0/0`. The selected value removes the unrelated control while retaining positive signals; it is not corpus-specific ranking logic.
+
+The disposable configured corpus contained 1,078 notes and 14,577 chunks. Ingest produced 14,577 compatible vectors. Identity was homogeneous: provider `sentence_transformers`, model `all-MiniLM-L6-v2`, dimensions 384, normalized vectors, encoding `chunk_embedding_text_v1`; missing, orphan, malformed, numeric, empty, zero-norm, dimension, identity, and mixed counts were all zero. Final threshold-0.5 probes returned:
+
+| Probe | Status | Returned | Unique notes | Max chunks/note |
+| --- | --- | ---: | ---: | ---: |
+| `semantic geometry` | completed_with_candidates | 8 | 2 | 4 |
+| `autobiographical chronology journal development` | completed_with_candidates | 14 | 11 | 4 |
+| `conceptual precursor influence` | completed_with_candidates | 4 | 1 | 4 |
+| unrelated control | completed_no_candidates | 0 | 0 | 0 |
+| two-query combination | completed_with_candidates | 22 | 13 | 4 |
+
+The two-query packet was 29,867 bytes. Both queries contributed, and reversing query input order produced identical status, counts, diagnostics, candidate ordering, and packet ordering. The per-query chronology result was 24 candidates before its cap and the semantic-geometry result was 1,350 before its cap; the final combined selection represented both query surfaces after duplicate reconciliation. Focused vector/ingest/config tests passed (33); the complete local Python suite passed (133); compileall and `git diff --check` passed. Fixture evidence covered identity reuse, model invalidation, malformed rows, threshold inclusivity, per-query/per-note caps, deterministic ordering, and score provenance surviving a lexical merge.
+
+Operator-supplied visual evidence for the preceding Seam 4B gate: GitHub Actions run title `complete seam 4b fts freshness and atomic ingest`, `tests #93`, commit `e4087f1`, branch `codex/big-refactor-07.18.26`, passed, approximately 1m46s. No run/job ID was available in this session, so no GitHub status was independently claimed.
+
+Open seams remain Seam 5 fusion/selection, Seam 6A temporal substrate, Seam 7 persisted inventory, Seam 8 compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness. No prompt, compiler, temporal, inventory, or plugin surface changed in this seam. Before starting Seam 5, create or update its ADR to define how executor provenance and bounded diversity are reconciled with selection policy.
+
+Final hashes: semantic compiler `9ca92643b2550410743d494fc82e3ae67c718c8f7867d72e43ddb49925e28f4b`; frontier synthesis `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`; YAML before `b0b2aa1f0ef45d1cadc52156dd79ab3e9e7379d3e626f541bbb5768065abfba4`, after `2178698b9086aed79747618ca792eddc2e885732d8a952750850e45a7f029743`.

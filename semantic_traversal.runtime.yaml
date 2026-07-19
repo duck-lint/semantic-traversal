@@ -18,6 +18,9 @@ retrieval:
     default_mode: any_tokens
   vector:
     max_candidates: 200
+    min_similarity: 0.5
+    per_query_max_candidates: 50
+    max_chunks_per_note: 4
   graph:
     default_depth: 1
     max_depth: 2
@@ -95,6 +98,7 @@ semantic_compiler:
 embeddings:
   provider: "sentence_transformers"
   model: "sentence-transformers/all-MiniLM-L6-v2"
+  dimensions: null
   base_url: null
   batch_size: 32
   normalize_embeddings: true

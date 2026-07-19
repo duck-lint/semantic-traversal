@@ -37,6 +37,9 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         },
         "vector": {
             "max_candidates": int,
+            "min_similarity": (int, float),
+            "per_query_max_candidates": int,
+            "max_chunks_per_note": int,
         },
         "graph": {
             "default_depth": int,
@@ -112,6 +115,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     "embeddings": {
         "provider": str,
         "model": str,
+        "dimensions": (int, type(None)),
         "base_url": (str, type(None)),
         "batch_size": int,
         "normalize_embeddings": bool,
@@ -212,6 +216,18 @@ class RuntimeConfig:
     @property
     def retrieval_vector_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["vector"]["max_candidates"])
+
+    @property
+    def retrieval_vector_min_similarity(self) -> float:
+        return float(self.raw["retrieval"]["vector"]["min_similarity"])
+
+    @property
+    def retrieval_vector_per_query_max_candidates(self) -> int:
+        return int(self.raw["retrieval"]["vector"]["per_query_max_candidates"])
+
+    @property
+    def retrieval_vector_max_chunks_per_note(self) -> int:
+        return int(self.raw["retrieval"]["vector"]["max_chunks_per_note"])
 
     @property
     def retrieval_graph_default_depth(self) -> int:
@@ -340,6 +356,11 @@ class RuntimeConfig:
     @property
     def embedding_model(self) -> str:
         return str(self.raw["embeddings"]["model"])
+
+    @property
+    def embedding_dimensions(self) -> int | None:
+        value = self.raw["embeddings"].get("dimensions")
+        return int(value) if value is not None else None
 
     @property
     def embedding_provider(self) -> str:
@@ -614,6 +635,8 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         "exact.context_chars",
         "lexical.max_candidates",
         "vector.max_candidates",
+        "vector.per_query_max_candidates",
+        "vector.max_chunks_per_note",
         "graph.default_depth",
         "graph.max_depth",
         "graph.max_candidates",
@@ -623,6 +646,12 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             current = current[part]
         if int(current) < 0:
             raise ConfigError(f"Runtime config field retrieval.{field} must be non-negative")
+    min_similarity = float(parsed["retrieval"]["vector"]["min_similarity"])
+    if not 0.0 <= min_similarity <= 1.0:
+        raise ConfigError("Runtime config field retrieval.vector.min_similarity must be between 0.0 and 1.0")
+    configured_dimensions = parsed["embeddings"]["dimensions"]
+    if configured_dimensions is not None and int(configured_dimensions) <= 0:
+        raise ConfigError("Runtime config field embeddings.dimensions must be positive when provided")
     for field in ("exact_request_mode", "semantic_request_mode"):
         if str(parsed["retrieval"]["scope_policy"][field]).strip().lower() not in {"hard", "preferred"}:
             raise ConfigError(f"Runtime config field retrieval.scope_policy.{field} must be hard or preferred")
