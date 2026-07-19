@@ -47,6 +47,12 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "max_depth": int,
             "max_candidates": int,
         },
+        "temporal": {
+            "enabled": bool,
+            "date_field_precedence": [str],
+            "ordering": str,
+            "missing_date_order": str,
+        },
         "planner_defaults": {
             "exact_limit": int,
             "exact_return_total_count": bool,
@@ -243,6 +249,22 @@ class RuntimeConfig:
     @property
     def retrieval_graph_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["graph"]["max_candidates"])
+
+    @property
+    def retrieval_temporal_enabled(self) -> bool:
+        return bool(self.raw["retrieval"]["temporal"]["enabled"])
+
+    @property
+    def retrieval_temporal_date_field_precedence(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.raw["retrieval"]["temporal"]["date_field_precedence"] if str(value).strip())
+
+    @property
+    def retrieval_temporal_ordering(self) -> str:
+        return str(self.raw["retrieval"]["temporal"]["ordering"])
+
+    @property
+    def retrieval_temporal_missing_date_order(self) -> str:
+        return str(self.raw["retrieval"]["temporal"]["missing_date_order"])
 
     @property
     def retrieval_scope_aliases(self) -> dict[str, dict[str, tuple[str, ...] | str | None]]:
@@ -667,6 +689,13 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             raise ConfigError(f"Runtime config field retrieval.scope_policy.{field} must be hard or preferred")
     if str(parsed["retrieval"]["lexical"]["default_mode"]) not in {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}:
         raise ConfigError("Runtime config field retrieval.lexical.default_mode must be a supported FTS5 mode")
+    temporal = parsed["retrieval"]["temporal"]
+    if not temporal["date_field_precedence"]:
+        raise ConfigError("Runtime config field retrieval.temporal.date_field_precedence must not be empty")
+    if str(temporal["ordering"]) not in {"ascending", "descending"}:
+        raise ConfigError("Runtime config field retrieval.temporal.ordering must be ascending or descending")
+    if str(temporal["missing_date_order"]) not in {"first", "last"}:
+        raise ConfigError("Runtime config field retrieval.temporal.missing_date_order must be first or last")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",

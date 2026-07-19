@@ -30,7 +30,18 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIn("DOI", config.chunking_low_signal_apparatus_prefixes)
         self.assertIn("all rights reserved", config.chunking_low_signal_apparatus_contains)
         self.assertEqual(config.chunking_low_signal_apparatus_short_all_caps_max_chars, 80)
+        self.assertFalse(config.retrieval_temporal_enabled)
+        self.assertEqual(config.retrieval_temporal_date_field_precedence[0], "journal_entry_date")
+        self.assertEqual(config.retrieval_temporal_ordering, "ascending")
+        self.assertEqual(config.retrieval_temporal_missing_date_order, "last")
 
+    def test_invalid_temporal_ordering_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "invalid-temporal.yaml"
+            source = (REPO_ROOT / "semantic_traversal.runtime.yaml").read_text(encoding="utf-8")
+            path.write_text(source.replace("ordering: ascending", "ordering: nearest"), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "retrieval.temporal.ordering"):
+                load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
     def test_relative_data_root_resolves_under_vault_root(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
         self.assertEqual(config.data_root, config.vault_root / ".semantic-traversal")

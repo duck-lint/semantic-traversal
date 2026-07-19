@@ -607,7 +607,82 @@ def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         FROM chunks
         """
     ).fetchall()
-    return [dict(row) for row in rows]
+    loaded: list[dict[str, Any]] = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        try:
+            semantics = json.loads(str(row.get("frontmatter_semantics_json") or "{}"))
+        except json.JSONDecodeError:
+            semantics = {}
+        temporal = semantics.get("temporal") if isinstance(semantics, dict) else None
+        if not isinstance(temporal, dict):
+            temporal = {"status": "missing", "source_field": None, "value": None, "precision": None, "reason": "temporal metadata unavailable"}
+        row["temporal_status"] = str(temporal.get("status") or "missing")
+        row["temporal_date"] = temporal.get("value")
+        row["temporal_date_source"] = temporal.get("source_field")
+        row["temporal_precision"] = temporal.get("precision")
+        row["temporal_diagnostic"] = temporal.get("reason")
+        loaded.append(row)
+    return loaded
+
+
+def _temporal_sort_key(candidate: dict[str, Any], *, config: RuntimeConfig) -> tuple[int, float]:
+    value = str(candidate.get("temporal_date") or "").strip()
+    missing_rank = 0 if config.retrieval_temporal_missing_date_order == "first" else 1
+    present_rank = 1 - missing_rank
+    if not value:
+        return missing_rank, 0.0
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        parsed = datetime.fromisoformat(normalized)
+        timestamp = parsed.timestamp()
+    except (TypeError, ValueError, OSError):
+        return missing_rank, 0.0
+    direction = 1.0 if config.retrieval_temporal_ordering == "ascending" else -1.0
+    return present_rank, timestamp * direction
+
+
+def _temporal_manifest(
+    *,
+    chunk_rows: list[dict[str, Any]],
+    selected_candidates: list[dict[str, Any]],
+    config: RuntimeConfig,
+) -> dict[str, Any]:
+    status_counts = Counter(str(row.get("temporal_status") or "missing") for row in chunk_rows)
+    selected_status_counts = Counter(str(row.get("temporal_status") or "missing") for row in selected_candidates)
+    selected_dates = [
+        str(row.get("temporal_date"))
+        for row in selected_candidates
+        if str(row.get("temporal_date") or "").strip()
+    ]
+    return {
+        "enabled": config.retrieval_temporal_enabled,
+        "date_field_precedence": list(config.retrieval_temporal_date_field_precedence),
+        "ordering": config.retrieval_temporal_ordering,
+        "missing_date_order": config.retrieval_temporal_missing_date_order,
+        "substrate_status_counts": dict(sorted(status_counts.items())),
+        "selected_status_counts": dict(sorted(selected_status_counts.items())),
+        "dated_chunk_count": len([row for row in chunk_rows if str(row.get("temporal_date") or "").strip()]),
+        "selected_dated_chunk_count": len(selected_dates),
+        "selected_temporal_dates": selected_dates,
+        "ordering_applied": bool(config.retrieval_temporal_enabled),
+    }
+
+
+def _order_selected_temporally(
+    selected_candidates: list[dict[str, Any]],
+    *,
+    config: RuntimeConfig,
+) -> list[dict[str, Any]]:
+    if not config.retrieval_temporal_enabled:
+        return selected_candidates
+    return sorted(
+        selected_candidates,
+        key=lambda candidate: (
+            _temporal_sort_key(candidate, config=config),
+            str(candidate.get("chunk_id") or ""),
+        ),
+    )
 
 
 def _layer_limit(layer: dict[str, Any] | None, fallback: int) -> int:
@@ -1888,6 +1963,7 @@ def _merge_candidates(
         merged.values(),
         key=lambda candidate: (
             bool(candidate.get("_retrieval_demoted")),
+            _temporal_sort_key(candidate, config=config) if config.retrieval_temporal_enabled else (0, 0.0),
             -float(candidate.get("ordinal_fusion_score") or 0.0),
             not bool(candidate.get("preferred_scope_match")),
             int(candidate.get("best_surface_rank") or 10**9),
@@ -2369,6 +2445,7 @@ def _semantic_traversal(
         required_sources=required_sources,
         selection_diagnostics=selection_diagnostics,
     )
+    selected_candidates = _order_selected_temporally(selected_candidates, config=config)
     selected_counts = _count_selected_by_layer(selected_candidates)
     for source, manifest in (("lexical", layer_manifests.get("lexical")), ("vector", layer_manifests.get("vector")), ("graph", layer_manifests.get("graph"))):
         if not isinstance(manifest, dict):
@@ -2510,6 +2587,7 @@ def _semantic_traversal(
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
+        "temporal": _temporal_manifest(chunk_rows=chunk_rows, selected_candidates=selected_candidates, config=config),
         "scope_resolution": {
             "hard": scope_filters,
             "preferred": preferred_scope_filters,
@@ -2545,6 +2623,10 @@ def _semantic_traversal(
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
                 "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
+                "temporal_date": candidate.get("temporal_date"),
+                "temporal_date_source": candidate.get("temporal_date_source"),
+                "temporal_precision": candidate.get("temporal_precision"),
+                "temporal_status": candidate.get("temporal_status"),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
             }
             for candidate in selected_candidates

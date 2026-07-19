@@ -182,6 +182,16 @@ Final experiment verification is local, not a claim about registered CI: focused
 
 Final hashes for this experiment: rendered compiler fixture `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`; frontier instructions `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`; YAML `070f4a528d845e2a8d31a7c174062a7444caca66b2325e682079f5f8432c8bd6`. The source UAT's generated compiler prompt hash `9ca92643b2550410743d494fc82e3ae67c718c8f7867d72e43ddb49925e28f4b` remains recorded unchanged.
 
+## Seam 6A temporal substrate and retrieval UAT (2026-07-19)
+
+Temporal metadata is now configured by `retrieval.temporal` and does not alter compiler prompts or schema. The precedence list is `journal_entry_date`, `date`, `created_at`, `created`, `modified_at`, `modified`; the first present field owns the result. Supported dates/datetimes are canonicalized, timezone-aware values normalize to UTC, and missing/invalid results remain structured diagnostics. Temporal ordering is opt-in, deterministic, and YAML-owned; missing dates are placed last in the tested configuration.
+
+Fixture evidence covers precedence, explicit invalidity without fallback, timezone normalization, manifest/packet temporal fields, ascending ordering, and missing-date diagnostics. The first corpus probe exposed that merged-pool ordering alone was insufficient because Seam 5 breadth selection could interleave later rounds. After applying temporal ordering to the bounded selected set, the corrected corpus probe was deterministic.
+
+Disposable configured-vault evidence: `1,083` notes, `14,608` chunks, `2,569` valid dated chunks, and `12,039` missing-date chunks. The semantic-geometry lexical probe selected 24 undated chunks; it therefore did not establish chronology. A controlled metadata-bearing `2025` lexical probe selected 24 dated chunks, all using `journal_entry_date`, ordered from `2025-02-06` to `2025-07-13`. Two repeated runs produced identical selected packet identity/date hash `e5cb9004d6101ef9b39d687a2dad760c316ec270e93cc1e409f9df68099440cd`. The active index was not mutated, and synthesis was not used to infer historical causation.
+
+Seam 6A is complete for the bounded temporal substrate and ordering contract. Open limitations: no filesystem-mtime inference, no compiler temporal operator, no temporal relevance model, and no causal chronology claim. The next planned seam is Seam 7 persisted inventory.
+
 ## Seam 5 normalization and closeout (2026-07-19)
 
 The accepted experiment commit `3dd1579de29a5b960489a3b4f1bb6eba05f40f73` descended directly from `b5883fbce243d1cc61c28fe06a19f4d5eda7181f` and was fast-forwarded into `codex/big-refactor-07.18.26`. Both worktrees were clean before normalization; no conflict or independent target divergence was found. Seam 5 is complete for the bounded ordinal-fusion experiment only. The broader weighted-RRF/hybrid ADR remains proposed and unapproved.

@@ -638,7 +638,72 @@ def _extract_semantic_frontmatter(frontmatter: dict[str, Any], *, config: Runtim
     for key in config.chunking_semantic_frontmatter_fields:
         if key in frontmatter:
             semantics[key] = _normalize_semantic_frontmatter_value(frontmatter[key])
+    semantics["temporal"] = _extract_temporal_metadata(frontmatter, config=config)
     return semantics
+
+
+def _extract_temporal_metadata(frontmatter: dict[str, Any], *, config: RuntimeConfig) -> dict[str, Any]:
+    """Resolve one canonical date without guessing across configured fields.
+
+    The first configured field that is present owns the result. An invalid
+    higher-precedence value is therefore explicit invalid evidence, rather
+    than silently falling through to a less authoritative field.
+    """
+    precedence = config.retrieval_temporal_date_field_precedence
+    for field in precedence:
+        if field not in frontmatter or frontmatter.get(field) in (None, ""):
+            continue
+        raw_value = frontmatter.get(field)
+        canonical, precision = _canonical_temporal_value(raw_value)
+        if canonical is None:
+            return {
+                "status": "invalid",
+                "source_field": field,
+                "value": None,
+                "precision": None,
+                "reason": "configured temporal field is not a supported ISO date or datetime",
+            }
+        return {
+            "status": "valid",
+            "source_field": field,
+            "value": canonical,
+            "precision": precision,
+            "reason": None,
+        }
+    return {
+        "status": "missing",
+        "source_field": None,
+        "value": None,
+        "precision": None,
+        "reason": "no configured temporal field is present",
+    }
+
+
+def _canonical_temporal_value(value: Any) -> tuple[str | None, str | None]:
+    if isinstance(value, datetime):
+        had_timezone = value.tzinfo is not None
+        if had_timezone:
+            value = value.astimezone(UTC).replace(tzinfo=None)
+        return value.isoformat(timespec="seconds") + ("Z" if had_timezone else ""), "second"
+    if isinstance(value, date):
+        return value.isoformat(), "day"
+    if not isinstance(value, str):
+        return None, None
+    text = value.strip()
+    try:
+        parsed_date = date.fromisoformat(text)
+        return parsed_date.isoformat(), "day"
+    except ValueError:
+        pass
+    try:
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        parsed_datetime = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None, None
+    if parsed_datetime.tzinfo is not None:
+        parsed_datetime = parsed_datetime.astimezone(UTC).replace(tzinfo=None)
+        return parsed_datetime.isoformat(timespec="seconds") + "Z", "second"
+    return parsed_datetime.isoformat(timespec="seconds"), "second"
 
 
 def _normalize_semantic_frontmatter_value(value: Any) -> Any:

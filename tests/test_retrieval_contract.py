@@ -8,7 +8,7 @@ from pathlib import Path
 
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, embedding_identity_hash
-from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _select_retrieval_chunks, _vector_candidates
+from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _order_selected_temporally, _select_retrieval_chunks, _temporal_manifest, _vector_candidates
 from semantic_traversal.retrieval_resolver import bind_retrieval_plan
 
 
@@ -35,6 +35,22 @@ class _PartialEmbeddingBackend:
 
 
 class RetrievalContractTests(unittest.TestCase):
+    def test_temporal_ordering_is_yaml_owned_and_missing_dates_are_diagnosed(self) -> None:
+        self.addCleanup(lambda: self.config.raw["retrieval"]["temporal"].__setitem__("enabled", False))
+        self.config.raw["retrieval"]["temporal"]["enabled"] = True
+        candidates = [
+            {"chunk_id": "later", "note_id": "n1", "chunk_hash": "later", "selection_source": "lexical", "source_layers": ["lexical"], "score": 3.0, "temporal_date": "2025-01-01", "temporal_status": "valid"},
+            {"chunk_id": "earlier", "note_id": "n2", "chunk_hash": "earlier", "selection_source": "lexical", "source_layers": ["lexical"], "score": 1.0, "temporal_date": "2024-01-01", "temporal_status": "valid"},
+            {"chunk_id": "undated", "note_id": "n3", "chunk_hash": "undated", "selection_source": "lexical", "source_layers": ["lexical"], "score": 100.0, "temporal_date": None, "temporal_status": "missing"},
+        ]
+        merged = _merge_candidates(candidates, [], [], config=self.config)
+        self.assertEqual([item["chunk_id"] for item in merged], ["earlier", "later", "undated"])
+        selected = _order_selected_temporally([merged[1], merged[0], merged[2]], config=self.config)
+        self.assertEqual([item["chunk_id"] for item in selected], ["earlier", "later", "undated"])
+        manifest = _temporal_manifest(chunk_rows=candidates, selected_candidates=merged[:2], config=self.config)
+        self.assertEqual(manifest["selected_temporal_dates"], ["2024-01-01", "2025-01-01"])
+        self.assertEqual(manifest["substrate_status_counts"], {"missing": 1, "valid": 2})
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.config = load_runtime_config(repo_root=Path(__file__).resolve().parents[1])
