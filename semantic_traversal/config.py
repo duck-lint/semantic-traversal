@@ -85,7 +85,6 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "vector_bonus": (int, float),
         "graph_bonus": (int, float),
         "demotion_penalty": (int, float),
-        "source_priority": dict,
     },
     "graph_traversal": {
         "enabled": bool,

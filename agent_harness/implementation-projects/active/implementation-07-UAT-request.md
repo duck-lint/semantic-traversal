@@ -184,7 +184,7 @@ Final hashes for this experiment: rendered compiler fixture `21e89d824fa2bf13515
 
 ## Seam 5 normalization and closeout (2026-07-19)
 
-The accepted experiment commit `3dd1579de29a5b960489a3b4f1bb6eba05f40f73` descended directly from `b5883fbce243d1cc61c28fe06a19f4d5eda7181f` and was fast-forwarded into `codex/big-refactor-07.18.26`. Both worktrees were clean before normalization; no conflict or independent target divergence was found. Seam 5 is complete for the bounded ordinal-fusion experiment only. The broader weighted-RRF/hybrid ADR remains proposed and unapproved.
+The accepted experiment commit `3dd1579de29a5b960489a3b4f1bb6eba05f40f73` descended directly from `b5883fbce243d1cc61c28fe06a19f4d5eda7181f` and was fast-forwarded into `codex/big-refactor-07.18.26`. Both worktrees were clean before normalization; no conflict or independent target divergence was found. Seam 5 is complete for the bounded ordinal-fusion experiment only. The broader weighted-RRF/hybrid ADR is superseded historical analysis and unapproved.
 
 The next planned seam is Seam 6A: temporal substrate and temporal retrieval. Its implementation must preserve the accepted fusion contract, use runtime/YAML authority for temporal policy and bounds, and keep prompts, compiler schema, packet field compatibility, and final historical-causation claims outside scope.
 
@@ -196,8 +196,34 @@ The supplied corpus genealogy run is recorded as the principal Seam 5 counterexa
 
 The current selector merges by chunk ID, retains `source_layers`, chooses `selection_source` from the highest raw score with source-priority tie-breaking, ranks by demotion, preferred-scope match, source priority, raw score, and chunk ID, reserves required evidence, performs source-layer budget passes, then globally fills the remaining packet without enforcing those budgets. Current budgets are therefore ambiguous reservation targets rather than hard caps. Preferred scope is annotated after executor truncation, final selection has no note cap, and near-duplicate text can consume multiple slots. Four characterization tests now freeze these current behaviors and are explicitly expected to change only after approval: budget overflow, one-note concentration, unlike-score ordering, and preferred-scope loss after lexical truncation.
 
-The ADR is [implementation-07-seam-5-fusion-ADR.md](implementation-07-seam-5-fusion-ADR.md). It is proposed, not approved. Its recommendation is a bounded hybrid centered on weighted reciprocal-rank fusion, required-evidence reservations, bounded preferred-scope reservoirs, hard note/source/byte ceilings, deterministic normalized-text redundancy checks, and sparse early stopping. It does not implement any of those behaviors. Explicit approval is required before production ranking changes.
+The original analysis is retained at [implementation-07-seam-5-fusion-ADR.md](implementation-07-seam-5-fusion-ADR.md), now superseded and unapproved. The accepted bounded decision is [implementation-07-seam-5-accepted-ADR.md](implementation-07-seam-5-accepted-ADR.md): unweighted ordinal fusion, required reservations, retired ordinary layer budgets, breadth-before-depth by note ID, and deterministic diagnostics. The full hybrid is historical analysis, not routine planned Seam 5 work.
 
 Operator-supplied visual GitHub Actions evidence for Seam 4C: run title `complete seam 4c vector identity and diversity`, tests/run identifier `tests #94`, commit `ac4516f`, branch `codex/big-refactor-07.18.26`, passed, approximately 1m49s. No run/job ID was independently available, so this is recorded as operator-supplied visual evidence only.
 
 Design-slice verification after adding the characterization tests: focused characterization suite `4` passed; complete local Python suite `137` passed; compileall and `git diff --check` passed. Prompt and YAML hashes remained unchanged, and no production ranking or packet surface appeared in the diff.
+
+## Recovery and governance correction (2026-07-19)
+
+Pushed commit `0b039ad0d0bfe7adc974ad1ed1fee81c853697d8` was normally reverted
+as `d6c770a`. It was a narrower temporal annotation/order prototype: it did
+not implement typed temporal anchors, temporal retrieval operations, recovery
+outside ordinary fusion, or chronology in UAT. It remains historical Git
+evidence only. Seam 6A is reopened/proposed; Seam 7 has not begun.
+
+The accepted Seam 5 operator UAT aggregates are bounded as follows. The
+genealogy run produced the strongest conceptual-development reconstruction
+observed so far, but did not establish historical chronology or causal
+influence. This supports fusion functioning while showing temporal retrieval
+is a distinct epistemic requirement. The direct sister/family-relation run
+preserved sister/full/half-sister distinctions and refused stronger inference
+than indexed evidence licensed; broad lexical material filled the configured
+maximum. That is a max-fill observation, not a demonstrated reasoning failure.
+No private family-note text is recorded.
+
+Deferred live-UAT findings remain open: preferred evidence may be removed by
+executor-local truncation before fusion admission; no reservoir is introduced
+until genuine temporal retrieval exists. The selector may fill the configured
+`selection_policy.max_chunks` when enough admissible candidates remain; no
+sparse stopping is introduced, and the configured value is not inherently 24.
+Reassess only if later UAT shows noise, reasoning degradation, or material
+context cost.

@@ -58,11 +58,6 @@ retrieval_scoring:
   vector_bonus: 1.0
   graph_bonus: 1.5
   demotion_penalty: 10.0
-  source_priority:
-    exact: 4
-    lexical: 3
-    vector: 2
-    graph: 1
 
 graph_traversal:
   enabled: true

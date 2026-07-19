@@ -1,9 +1,9 @@
 # ADR: Seam 5 Fusion, Deterministic Selection, and Bounded Packets
 
-- Status: accepted for bounded ordinal-fusion experiment; full hybrid remains proposed
+- Status: superseded; historical analysis only; full hybrid unapproved
 - Date: 2026-07-19
 - Scope: the bounded ordinal-fusion experiment is accepted; the broader hybrid remains design-only
-- Approval: the bounded experiment is accepted; explicit approval is still required before implementing the broader hybrid
+- Approval: superseded by `implementation-07-seam-5-accepted-ADR.md`; no approval exists for the full hybrid
 
 ## Context
 
@@ -235,8 +235,8 @@ The following remain deferred and unapproved: preferred-scope reservoirs, fuzzy 
 
 Success requires truthful same-candidate-pool replay of the recorded genealogy failure, more than four selected notes, lower than thirteen maximum note concentration, no reduction in preferred selected evidence, retained vector/graph provenance, deterministic output, required-evidence preservation, representative-query regressions remaining green, and unchanged prompts. Failure must be reported as the narrowest demonstrated gap; it must not trigger automatic implementation of the full hybrid.
 
-Rollback boundary: revert the experiment branch to `b5883fb`; no ingest or index migration is required. The original full-hybrid decision above remains proposed and unapproved.
+Rollback boundary: revert the experiment branch to `b5883fb`; no ingest or index migration is required. The original full-hybrid decision above is superseded historical analysis and unapproved.
 
 The experiment passed its bounded gate on the reconstructed live candidate pool. The baseline pool was exact 0, lexical 50, vector 8, graph 24, merged 77; the baseline selector produced 24 selected chunks from 4 notes with maximum concentration 13. The ordinal selector used the same 77 merged candidates and produced 24 selected chunks from 11 notes with maximum concentration 4. Repeated runs produced identical selected IDs and fusion diagnostics. Vector provenance retained both semantic-query streams, and graph support represented four notes rather than collapsing to the seed note. Preferred selected evidence did not decrease in the same-pool replay, but preferred-scope admission before executor truncation remains unresolved and is intentionally not claimed as fixed. The original near-duplicate journal chunks also remain because redundancy suppression was deferred.
 
-The implementation changed runtime selector behavior and the explicit runtime/YAML budget-binding seam; therefore the earlier migration statement that this phase changes only records and characterization tests applies only to the preceding design-only phase, not to this approved experiment branch. The full ADR decision remains proposed; this addendum authorizes only the bounded experiment described above.
+The implementation changed runtime selector behavior and the explicit runtime/YAML budget-binding seam; therefore the earlier migration statement that this phase changes only records and characterization tests applies only to the preceding design-only phase, not to this approved experiment branch. This superseded ADR authorizes nothing; the accepted bounded experiment is defined by `implementation-07-seam-5-accepted-ADR.md`.
