@@ -25,6 +25,7 @@ from .embeddings import (
 )
 from .hashing import sha256_json, sha256_text
 from .text_filters import is_low_signal_apparatus_text
+from .temporal import TemporalAnchor, build_temporal_anchors, temporal_diagnostics
 
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -290,6 +291,7 @@ def run_ingest(
     candidate_database_cleaned = False
     lexical_index: dict[str, Any] | None = None
     vector_index: dict[str, Any] | None = None
+    temporal_index: dict[str, Any] | None = None
     try:
         _clone_active_database(
             active_database_path=active_database_path,
@@ -325,6 +327,11 @@ def run_ingest(
                 raise RuntimeError(
                     f"candidate vector index validation failed: {vector_index.get('failure_reason', 'invalid vector index')}"
                 )
+            temporal_index = _validate_temporal_index(connection=connection, config=resolved_config)
+            if temporal_index.get("status") != "valid":
+                raise RuntimeError(
+                    f"candidate temporal index validation failed: {temporal_index.get('failure_reason', 'invalid temporal index')}"
+                )
         finally:
             connection.close()
 
@@ -344,6 +351,7 @@ def run_ingest(
             skipped_sources=skipped_sources,
             lexical_index=lexical_index or {},
             vector_index=vector_index or {},
+            temporal_index=temporal_index or {},
         )
         manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
         _write_success_artifact(ingest_paths=ingest_paths, manifest_path=manifest_path, manifest=manifest)
@@ -1184,6 +1192,31 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         CREATE INDEX IF NOT EXISTS idx_chunks_note_id ON chunks(note_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_source_root_label ON chunks(source_root_label);
 
+        CREATE TABLE IF NOT EXISTS temporal_anchors (
+            anchor_id TEXT PRIMARY KEY,
+            note_id TEXT NOT NULL,
+            chunk_id TEXT,
+            anchor_type TEXT NOT NULL,
+            canonical_start TEXT,
+            canonical_end TEXT,
+            precision TEXT,
+            source_field TEXT NOT NULL,
+            original_source_value TEXT NOT NULL,
+            authority TEXT NOT NULL,
+            parsing_status TEXT NOT NULL,
+            conflict_group TEXT,
+            unresolved INTEGER NOT NULL,
+            diagnostic_reason TEXT,
+            ingest_run_id TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_note_id ON temporal_anchors(note_id);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_chunk_id ON temporal_anchors(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_type ON temporal_anchors(anchor_type);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_start ON temporal_anchors(canonical_start);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_end ON temporal_anchors(canonical_end);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_authority ON temporal_anchors(authority);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_status ON temporal_anchors(parsing_status);
+
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
             chunk_id UNINDEXED,
             paragraph_text,
@@ -1250,7 +1283,7 @@ def _materialize_records(
     generated_at: str,
     config: RuntimeConfig,
     embedding_backend: EmbeddingBackend | None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     counts = {
         "inserted_chunks": 0,
         "updated_chunks": 0,
@@ -1277,6 +1310,12 @@ def _materialize_records(
         connection=connection,
         source_root_labels=source_root_labels,
         processed_note_ids=processed_note_ids,
+    )
+    counts["temporal_index"] = _refresh_temporal_index(
+        connection=connection,
+        note_records=note_records,
+        run_id=run_id,
+        config=config,
     )
     _rebuild_graph_layer(
         connection=connection,
@@ -1328,6 +1367,96 @@ def _materialize_records(
     )
     connection.commit()
     return counts
+
+
+def _refresh_temporal_index(
+    *, connection: sqlite3.Connection, note_records: tuple[NoteRecord, ...], run_id: str, config: RuntimeConfig
+) -> dict[str, Any]:
+    connection.execute("DELETE FROM temporal_anchors")
+    all_anchors: list[TemporalAnchor] = []
+    issues: list[dict[str, Any]] = []
+    for note_record in note_records:
+        anchors, note_issues = build_temporal_anchors(
+            note_id=note_record.note_id,
+            frontmatter=note_record.frontmatter,
+            mappings=config.retrieval_temporal_field_mappings,
+            ingest_run_id=run_id,
+        )
+        all_anchors.extend(anchors)
+        issues.extend(note_issues)
+    connection.executemany(
+        """
+        INSERT INTO temporal_anchors (
+            anchor_id, note_id, chunk_id, anchor_type, canonical_start,
+            canonical_end, precision, source_field, original_source_value,
+            authority, parsing_status, conflict_group, unresolved,
+            diagnostic_reason, ingest_run_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                anchor.anchor_id, anchor.note_id, anchor.chunk_id, anchor.anchor_type,
+                anchor.canonical_start, anchor.canonical_end, anchor.precision,
+                anchor.source_field, anchor.original_source_value, anchor.authority,
+                anchor.parsing_status, anchor.conflict_group, int(anchor.unresolved),
+                anchor.diagnostic_reason, anchor.ingest_run_id,
+            )
+            for anchor in all_anchors
+        ],
+    )
+    return temporal_diagnostics(all_anchors, issues)
+
+
+def _validate_temporal_index(*, connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
+    result: dict[str, Any] = {"status": "invalid", "table": "temporal_anchors"}
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'temporal_anchors'").fetchone()
+    if table is None:
+        result["failure_reason"] = "temporal_anchors table is missing"
+        return result
+    rows = connection.execute("SELECT * FROM temporal_anchors ORDER BY anchor_id").fetchall()
+    note_ids = {str(row[0]) for row in connection.execute("SELECT note_id FROM notes")}
+    chunk_ids = {str(row[0]) for row in connection.execute("SELECT chunk_id FROM chunks")}
+    ids = [str(row["anchor_id"]) for row in rows]
+    errors: list[str] = []
+    for row in rows:
+        if str(row["note_id"]) not in note_ids:
+            errors.append("orphan note reference")
+        if row["chunk_id"] is not None and str(row["chunk_id"]) not in chunk_ids:
+            errors.append("orphan chunk reference")
+        if row["parsing_status"] == "valid":
+            if not row["canonical_start"] or not row["canonical_end"] or str(row["canonical_start"]) > str(row["canonical_end"]):
+                errors.append("invalid canonical interval")
+            if str(row["precision"] or "") not in {"year", "month", "day", "datetime"}:
+                errors.append("unknown precision")
+        if str(row["anchor_type"]) not in {"journal_entry", "authored", "created", "modified", "encountered_or_read", "publication", "event"}:
+            errors.append("unknown anchor type")
+        if str(row["authority"]) not in {"explicit_primary", "explicit_secondary", "operational_low"}:
+            errors.append("unknown authority")
+        if row["conflict_group"] is None and bool(row["unresolved"]) and row["parsing_status"] == "valid":
+            errors.append("unresolved anchor missing conflict group")
+    if len(ids) != len(set(ids)):
+        errors.append("duplicate anchor IDs")
+    valid_rows = [row for row in rows if str(row["parsing_status"]) == "valid"]
+    result.update({
+        "anchor_count": len(rows),
+        "total_anchor_count": len(rows),
+        "anchored_note_count": len({str(row["note_id"]) for row in valid_rows}),
+        "anchored_chunk_count": len({str(row["chunk_id"]) for row in valid_rows if row["chunk_id"] is not None}),
+        "valid_count": len(valid_rows),
+        "invalid_count": sum(str(row["parsing_status"]) == "invalid" for row in rows),
+        "ambiguous_count": sum(str(row["parsing_status"]) == "ambiguous" for row in rows),
+        "conflict_count": len({str(row["conflict_group"]) for row in rows if row["conflict_group"]}),
+        "counts_by_anchor_type": dict(sorted(Counter(str(row["anchor_type"]) for row in valid_rows).items())),
+        "counts_by_authority": dict(sorted(Counter(str(row["authority"]) for row in valid_rows).items())),
+        "counts_by_precision": dict(sorted(Counter(str(row["precision"]) for row in valid_rows).items())),
+        "error_count": len(errors),
+        "error_samples": sorted(set(errors))[:10],
+    })
+    if errors:
+        result["failure_reason"] = "; ".join(sorted(set(errors)))
+        return result
+    result["status"] = "valid"
+    return result
 
 
 def _validate_lexical_index(*, connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
@@ -2150,6 +2279,7 @@ def _build_manifest(
     skipped_sources: list[dict[str, Any]],
     lexical_index: dict[str, Any],
     vector_index: dict[str, Any],
+    temporal_index: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "status": "success",
@@ -2172,6 +2302,7 @@ def _build_manifest(
         "skipped_sources": skipped_sources,
         "lexical_index": lexical_index,
         "vector_index": vector_index,
+        "temporal_index": temporal_index,
         "notes": [
             {
                 "note_id": note_record.note_id,

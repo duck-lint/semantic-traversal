@@ -47,6 +47,16 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "max_depth": int,
             "max_candidates": int,
         },
+        "temporal": {
+            "enabled": bool,
+            "max_candidates": int,
+            "default_limit": int,
+            "allowed_modes": [str],
+            "default_anchor_types": [str],
+            "allowed_authorities": [str],
+            "include_conflicted_by_default": bool,
+            "field_mappings": dict,
+        },
         "planner_defaults": {
             "exact_limit": int,
             "exact_return_total_count": bool,
@@ -242,6 +252,50 @@ class RuntimeConfig:
     @property
     def retrieval_graph_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["graph"]["max_candidates"])
+
+    @property
+    def retrieval_temporal(self) -> dict[str, Any]:
+        return self.raw["retrieval"]["temporal"]
+
+    @property
+    def retrieval_temporal_enabled(self) -> bool:
+        return bool(self.retrieval_temporal["enabled"])
+
+    @property
+    def retrieval_temporal_max_candidates(self) -> int:
+        return int(self.retrieval_temporal["max_candidates"])
+
+    @property
+    def retrieval_temporal_default_limit(self) -> int:
+        return int(self.retrieval_temporal["default_limit"])
+
+    @property
+    def retrieval_temporal_allowed_modes(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.retrieval_temporal["allowed_modes"])
+
+    @property
+    def retrieval_temporal_default_anchor_types(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.retrieval_temporal["default_anchor_types"])
+
+    @property
+    def retrieval_temporal_allowed_authorities(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.retrieval_temporal["allowed_authorities"])
+
+    @property
+    def retrieval_temporal_include_conflicted_by_default(self) -> bool:
+        return bool(self.retrieval_temporal["include_conflicted_by_default"])
+
+    @property
+    def retrieval_temporal_field_mappings(self) -> dict[str, dict[str, str]]:
+        mappings = self.retrieval_temporal.get("field_mappings", {})
+        return {
+            str(field): {
+                "anchor_type": str(value.get("anchor_type") or ""),
+                "authority": str(value.get("authority") or ""),
+            }
+            for field, value in mappings.items()
+            if isinstance(value, dict)
+        }
 
     @property
     def retrieval_scope_aliases(self) -> dict[str, dict[str, tuple[str, ...] | str | None]]:

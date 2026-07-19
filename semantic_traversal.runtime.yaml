@@ -25,6 +25,27 @@ retrieval:
     default_depth: 1
     max_depth: 2
     max_candidates: 24
+  temporal:
+    enabled: true
+    max_candidates: 100
+    default_limit: 24
+    allowed_modes:
+      - earliest
+      - latest
+      - before
+      - after
+      - between
+      - ordered
+    default_anchor_types:
+      - journal_entry
+    allowed_authorities:
+      - explicit_primary
+      - explicit_secondary
+    include_conflicted_by_default: false
+    field_mappings:
+      journal_entry_date:
+        anchor_type: journal_entry
+        authority: explicit_primary
   planner_defaults:
     exact_limit: 200
     exact_return_total_count: true
