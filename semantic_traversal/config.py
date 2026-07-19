@@ -273,7 +273,6 @@ class RuntimeConfig:
         return str(self.raw["graph_traversal"]["direction"])
 
     @property
-    @property
     def graph_traversal_max_candidates(self) -> int:
         return int(self.raw["graph_traversal"]["max_candidates"])
 

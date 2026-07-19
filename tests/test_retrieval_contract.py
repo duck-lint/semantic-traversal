@@ -6,7 +6,9 @@ from copy import deepcopy
 from pathlib import Path
 
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
+from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend
 from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _select_retrieval_chunks, _vector_candidates
+from semantic_traversal.retrieval_resolver import bind_retrieval_plan
 
 
 class _FakeEmbeddingBackend:
@@ -20,6 +22,15 @@ class _FakeEmbeddingBackend:
 
         vector = self.vectors.get(text)
         return EmbeddingResponse(vectors=[vector] if vector else None, metadata={}, status="embedded" if vector else "failed")
+
+
+class _PartialEmbeddingBackend:
+    mode_name = "test"
+
+    def embed_query_text(self, text: str):
+        if text == "good query":
+            return EmbeddingResponse(vectors=[[1.0, 0.0]], metadata={}, status="embedded")
+        return EmbeddingResponse(vectors=None, metadata={}, status="failed")
 
 
 class RetrievalContractTests(unittest.TestCase):
@@ -157,6 +168,74 @@ class RetrievalContractTests(unittest.TestCase):
             scope_filters={}, limit=10,
         )
         self.assertEqual(candidates[0]["semantic_query_provenance"], ["first query", "second query"])
+
+    def test_lexical_manifest_statuses_distinguish_input_mode_and_index(self) -> None:
+        rows = [{"chunk_id": "c1", "note_id": "n1", "source_root_label": "vault", "source_root_path": "", "relative_path": "idea.md", "note_title": "Idea", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "h"}]
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata)")
+        connection.execute("INSERT INTO chunks_fts VALUES ('c1','alpha','Idea','Body','idea.md','{}')")
+        _, _, completed = _lexical_candidates(rows, ["alpha"], connection=connection, limit=5, config=self.config, mode="any_tokens", return_diagnostics=True)
+        _, _, empty = _lexical_candidates(rows, [], connection=connection, limit=5, config=self.config, mode="any_tokens", return_diagnostics=True)
+        _, _, unsupported = _lexical_candidates(rows, ["alpha"], connection=connection, limit=5, config=self.config, mode="not_a_mode", return_diagnostics=True)
+        missing_connection = sqlite3.connect(":memory:")
+        _, _, unavailable = _lexical_candidates(rows, ["alpha"], connection=missing_connection, limit=5, config=self.config, mode="any_tokens", return_diagnostics=True)
+        self.assertEqual(completed["status"], "completed_with_candidates")
+        self.assertEqual(empty["status"], "skipped_no_input")
+        self.assertEqual(unsupported["status"], "unsupported")
+        self.assertEqual(unavailable["status"], "unavailable")
+
+    def test_vector_manifest_statuses_distinguish_unavailable_no_input_and_partial_failure(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE chunk_vectors (chunk_id TEXT, vector_json TEXT)")
+        connection.execute("CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT)")
+        _, _, unavailable = _vector_candidates(connection=connection, config=self.config, embedding_backend=UnavailableEmbeddingBackend(reason="test"), vector_query="q", vector_queries=["q"], limit=5, return_diagnostics=True)
+        _, _, empty = _vector_candidates(connection=connection, config=self.config, embedding_backend=_PartialEmbeddingBackend(), vector_query="", vector_queries=[], limit=5, return_diagnostics=True)
+        _, _, partial = _vector_candidates(connection=connection, config=self.config, embedding_backend=_PartialEmbeddingBackend(), vector_query="good query", vector_queries=["good query", "bad query"], limit=5, return_diagnostics=True)
+        self.assertEqual(unavailable["status"], "unavailable")
+        self.assertEqual(empty["status"], "skipped_no_input")
+        self.assertEqual(partial["status"], "partial_failure")
+        self.assertEqual([item["query"] for item in partial["query_results"]], ["good query", "bad query"])
+
+    def test_required_layer_reservation_uses_source_layers_and_respects_zero_budget(self) -> None:
+        candidates = [
+            {"chunk_id": "lex", "chunk_hash": "lex", "selection_source": "lexical", "source_layers": ["lexical"], "score": 5},
+            {"chunk_id": "multi", "chunk_hash": "multi", "selection_source": "lexical", "source_layers": ["lexical", "vector", "graph"], "score": 4},
+        ]
+        diagnostics: dict[str, object] = {}
+        selected = _select_retrieval_chunks(
+            merged_candidates=candidates, max_chunks=2,
+            selection_policy={"preserve_required_layers": True, "budgets": {"exact": 0, "lexical": 2, "vector": 1, "graph": 1}},
+            required_sources={"lexical", "vector", "graph"}, selection_diagnostics=diagnostics,
+        )
+        self.assertEqual([item["chunk_id"] for item in selected], ["multi", "lex"])
+        self.assertEqual(diagnostics["preserved_sources"], ["graph", "lexical", "vector"])
+        zero_diagnostics: dict[str, object] = {}
+        zero_selected = _select_retrieval_chunks(
+            merged_candidates=candidates, max_chunks=2,
+            selection_policy={"preserve_required_layers": True, "budgets": {"exact": 0, "lexical": 2, "vector": 0, "graph": 0}},
+            required_sources={"vector"}, selection_diagnostics=zero_diagnostics,
+        )
+        self.assertEqual([item["chunk_id"] for item in zero_selected], ["lex", "multi"])
+        self.assertTrue(any(item["reason"] == "source budget is zero" for item in zero_diagnostics["inadequacies"]))
+
+    def test_runtime_resolver_replaces_compiler_selection_and_claim_policy(self) -> None:
+        plan = {
+            "intent_type": "semantic_traversal", "scope_requests": [], "concepts": ["alpha"], "literal_terms": [],
+            "semantic_queries": ["alpha"], "lexical_queries": ["alpha"], "graph_seeds": [],
+            "retrieval_layers": [{"operator": "lexical_chunk_search", "required": False, "limit": 999}],
+            "selection_policy": {"max_chunks": 999, "preserve_required_layers": False, "budgets": {"lexical": 0, "vector": 0, "graph": 0, "exact": 0}},
+            "claim_policy": {"coverage_claims_allowed": True, "negative_claims_require_exact_layer": False},
+        }
+        bound, adjustments, _ = bind_retrieval_plan(planner_retrieval_plan=plan, inventory_summary={"frontmatter_facets": {"note_type": []}, "observed_source_labels": [], "path_topology": {"top_level": [], "second_level": []}}, config=self.config, raw_user_input="alpha")
+        self.assertEqual(bound["selection_policy"]["max_chunks"], 24)
+        self.assertTrue(bound["selection_policy"]["preserve_required_layers"])
+        self.assertEqual(bound["selection_policy"]["budgets"], {"exact": 12, "lexical": 6, "vector": 6, "graph": 4})
+        self.assertTrue(bound["claim_policy"]["negative_claims_require_exact_layer"])
+        self.assertEqual(bound["retrieval_layers"][0]["effective_limit"], self.config.retrieval_lexical_max_candidates)
+        self.assertEqual(bound["retrieval_layers"][0]["limit_adjustment"], "clamped_to_max")
+        self.assertTrue(any(item["action"] == "runtime_policy_override" for item in adjustments))
 
     def test_required_exact_layer_blocks_when_terms_were_skipped(self) -> None:
         packet = {

@@ -613,6 +613,34 @@ def _layer_limit(layer: dict[str, Any] | None, fallback: int) -> int:
         return fallback
 
 
+def _non_exact_layer_manifest(
+    *,
+    operator: str,
+    layer: dict[str, Any] | None,
+    status: str,
+    candidate_count: int,
+    diagnostics: dict[str, Any] | None = None,
+    selected_contribution_count: int = 0,
+    selected_chunk_ids: list[str] | None = None,
+    adequate_contribution: bool = False,
+) -> dict[str, Any]:
+    layer = layer if isinstance(layer, dict) else {}
+    return {
+        "operator": operator,
+        "requested": bool(layer),
+        "required": bool(layer.get("required")),
+        "status": status,
+        "requested_limit": layer.get("requested_limit"),
+        "default_limit": layer.get("default_limit"),
+        "maximum_limit": layer.get("maximum_limit"),
+        "effective_limit": layer.get("effective_limit", layer.get("limit")),
+        "limit_adjustment": layer.get("limit_adjustment", "none"),
+        "candidate_count": int(candidate_count),
+        "selected_contribution_count": int(selected_contribution_count),
+        "selected_chunk_ids": list(selected_chunk_ids or []),
+        "adequate_contribution": bool(adequate_contribution),
+        "diagnostics": diagnostics or [],
+    }
 def _scope_values(scope_filters: dict[str, Any], key: str) -> list[str]:
     return [str(value).strip().lower() for value in _coerce_string_list(scope_filters.get(key)) if str(value).strip()]
 
@@ -961,15 +989,34 @@ def _lexical_candidates(
     limit: int | None = None,
     config: RuntimeConfig,
     mode: str | None = None,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    return_diagnostics: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     notes: list[str] = []
+    diagnostics: dict[str, Any] = {
+        "requested_queries": list(query_terms),
+        "effective_query": None,
+        "requested_mode": mode,
+        "effective_mode": None,
+        "fts_available": None,
+        "candidate_count": 0,
+    }
+    def finish() -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+        diagnostics["candidate_count"] = len(candidates)
+        return (candidates, notes, diagnostics) if return_diagnostics else (candidates, notes)
+
+    # Kept as a keyword-only compatibility escape hatch for runtime manifests.
+    # Existing focused executor tests retain the historical two-value return.
     if not query_terms:
-        return candidates, notes
+        diagnostics["status"] = "skipped_no_input"
+        return finish()
     selected_mode = str(mode or config.retrieval_lexical_default_mode).strip()
+    diagnostics["effective_mode"] = selected_mode
     supported_modes = {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}
     if selected_mode not in supported_modes:
-        return [], [f"lexical search unavailable: unsupported mode {selected_mode}"]
+        diagnostics["status"] = "unsupported"
+        message = [f"lexical search unavailable: unsupported mode {selected_mode}"]
+        return ([], message, diagnostics) if return_diagnostics else ([], message)
     terms = [str(term).strip() for term in query_terms if str(term).strip()]
     if selected_mode == "exact_phrase":
         fts_query = '"' + " ".join(terms).replace('"', '""') + '"'
@@ -980,14 +1027,20 @@ def _lexical_candidates(
         joiner = " AND " if selected_mode == "all_tokens" else " OR "
         fts_query = joiner.join(tokens)
     if not fts_query:
-        return [], ["lexical search skipped: no query tokens"]
+        diagnostics["status"] = "skipped_no_input"
+        return finish()
+    diagnostics["effective_query"] = fts_query
     try:
         match_rows = connection.execute(
             "SELECT chunk_id, bm25(chunks_fts) AS fts_rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY fts_rank ASC, chunk_id ASC",
             (fts_query,),
         ).fetchall()
     except sqlite3.OperationalError as exc:
-        return [], [f"lexical search unavailable: FTS5 index error: {exc}"]
+        diagnostics["status"] = "unavailable" if "no such table" in str(exc).lower() else "failed"
+        diagnostics["fts_available"] = False
+        message = [f"lexical search unavailable: FTS5 index error: {exc}"]
+        return ([], message, diagnostics) if return_diagnostics else ([], message)
+    diagnostics["fts_available"] = True
     rows_by_id = {str(row.get("chunk_id")): row for row in _scoped_chunk_rows(chunk_rows, scope_filters or {})}
     for match_row in match_rows:
         row = rows_by_id.get(str(match_row["chunk_id"]))
@@ -1008,7 +1061,8 @@ def _lexical_candidates(
         notes.append(f"lexical FTS5 search mode={selected_mode} matched {len(candidates)} chunk(s)")
     else:
         notes.append("lexical search produced no matches")
-    return candidates, notes
+    diagnostics["status"] = "completed_with_candidates" if candidates else "completed_no_candidates"
+    return finish()
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -1031,13 +1085,28 @@ def _vector_candidates(
     vector_queries: list[str] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    return_diagnostics: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
+    diagnostics: dict[str, Any] = {
+        "requested_queries": [],
+        "query_results": [],
+        "candidate_count": 0,
+    }
+    def finish() -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+        diagnostics["candidate_count"] = len(candidates)
+        return (candidates, notes, diagnostics) if return_diagnostics else (candidates, notes)
+
     queries = [str(query).strip() for query in (vector_queries or [vector_query]) if str(query).strip()]
+    diagnostics["requested_queries"] = list(queries)
     if not queries:
-        return [], ["vector search skipped: empty query"]
+        diagnostics["status"] = "skipped_no_input"
+        candidates: list[dict[str, Any]] = []
+        return finish()
     if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
-        return [], ["vector search unavailable"]
+        diagnostics["status"] = "unavailable"
+        candidates = []
+        return finish()
 
     query_vectors: list[tuple[str, list[float]]] = []
     query_failures: list[str] = []
@@ -1045,18 +1114,31 @@ def _vector_candidates(
         response = embedding_backend.embed_query_text(query)
         if response.status == "embedded" and response.vectors:
             query_vectors.append((query, response.vectors[0]))
+            diagnostics["query_results"].append({"query": query, "backend_status": response.status, "embedding_succeeded": True, "candidate_count_before_merge": 0})
         else:
             query_failures.append(f"{query}: {response.status}")
+            diagnostics["query_results"].append({"query": query, "backend_status": response.status, "embedding_succeeded": False, "candidate_count_before_merge": 0, "diagnostic": "embedding failed"})
     if not query_vectors:
-        return [], [f"vector search unavailable: {'; '.join(query_failures)}"]
-    rows = connection.execute(
-        f"SELECT chunk_id, vector_json FROM {config.vector_table}"
-    ).fetchall()
+        diagnostics["status"] = "failed" if query_failures else "unavailable"
+        candidates = []
+        return ([], [f"vector search unavailable: {'; '.join(query_failures)}"], diagnostics) if return_diagnostics else ([], [f"vector search unavailable: {'; '.join(query_failures)}"])
+    try:
+        rows = connection.execute(
+            f"SELECT chunk_id, vector_json FROM {config.vector_table}"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        diagnostics["status"] = "unavailable"
+        candidates = []
+        message = [f"vector search unavailable: {exc}"]
+        return ([], message, diagnostics) if return_diagnostics else ([], message)
     if not rows:
-        return [], ["vector search found no indexed vectors"]
+        diagnostics["status"] = "partial_failure" if query_failures else "completed_no_candidates"
+        candidates = []
+        return finish()
 
     chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
     candidates: list[dict[str, Any]] = []
+    query_hit_counts = {query: 0 for query, _ in query_vectors}
     for row in rows:
         chunk_id = str(row["chunk_id"])
         chunk_row = chunk_rows.get(chunk_id)
@@ -1076,6 +1158,8 @@ def _vector_candidates(
         if similarity <= 0.0:
             continue
         matching_queries = [query_name for query_name, score in similarities if score > 0.0]
+        for query_name in matching_queries:
+            query_hit_counts[query_name] += 1
         candidates.append(
             {
                 **chunk_row,
@@ -1095,7 +1179,10 @@ def _vector_candidates(
         notes.append("vector search produced no matches")
     if query_failures:
         notes.append(f"vector queries failed: {'; '.join(query_failures)}")
-    return candidates, notes
+    for result in diagnostics["query_results"]:
+        result["candidate_count_before_merge"] = query_hit_counts.get(result["query"], 0)
+    diagnostics["status"] = "partial_failure" if query_failures else ("completed_with_candidates" if candidates else "completed_no_candidates")
+    return finish()
 
 
 def _graph_candidates(
@@ -1111,6 +1198,7 @@ def _graph_candidates(
     notes: list[str] = []
     if not config.graph_traversal_enabled:
         return [], ["graph traversal disabled"], {
+            "status": "disabled",
             "enabled": False,
             "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
@@ -1129,6 +1217,7 @@ def _graph_candidates(
         ).fetchall()
     except sqlite3.OperationalError:
         return [], ["graph search unavailable"], {
+            "status": "unavailable",
             "enabled": config.graph_traversal_enabled,
             "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
@@ -1150,6 +1239,7 @@ def _graph_candidates(
     )
     if not seed_values:
         return [], ["graph search skipped: no graph seeds"], {
+            "status": "skipped_no_input",
             "enabled": config.graph_traversal_enabled,
             "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
@@ -1306,6 +1396,7 @@ def _graph_candidates(
         f"graph traversal enabled={config.graph_traversal_enabled}, effective_depth={int((graph_depth or {}).get('effective_depth', 0))}, matched_seed_count={matched_seed_count}, expanded_note_count={expanded_note_count}"
     )
     return candidates, notes, {
+        "status": "completed_with_candidates" if candidates else "completed_no_candidates",
         "enabled": config.graph_traversal_enabled,
         "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
         **(graph_depth or {}),
@@ -1490,6 +1581,8 @@ def _select_retrieval_chunks(
     max_chunks: int,
     selection_policy: dict[str, Any] | None = None,
     required_exact_terms: set[str] | None = None,
+    required_sources: set[str] | None = None,
+    selection_diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     seen_content_hashes: set[str] = set()
@@ -1516,6 +1609,7 @@ def _select_retrieval_chunks(
         return True
 
     budgets = selection_policy.get("budgets") if isinstance(selection_policy, dict) else None
+    preserve_required_layers = bool(selection_policy.get("preserve_required_layers")) if isinstance(selection_policy, dict) else False
     # Reserve exact-backed representatives only for required terms with
     # positive matches. The configured exact budget and overall packet limit
     # remain hard bounds; inability to reserve is diagnosed after selection.
@@ -1537,13 +1631,69 @@ def _select_retrieval_chunks(
             if absorb(candidate):
                 reserved_terms.update(candidate_terms.intersection(required_exact_terms))
 
+    required_sources = set(required_sources or set())
+    reservation_diagnostics = selection_diagnostics if selection_diagnostics is not None else {}
+    reservation_diagnostics.setdefault("required_sources", sorted(required_sources))
+    reservation_diagnostics.setdefault("preserved_sources", [])
+    reservation_diagnostics.setdefault("inadequacies", [])
+    if preserve_required_layers and required_sources:
+        def source_budget_available(candidate: dict[str, Any]) -> bool:
+            if not isinstance(budgets, dict):
+                return True
+            selected_source_counts = {
+                source: sum(source in _candidate_source_layers(item) for item in selected)
+                for source in required_sources
+            }
+            for source in required_sources.intersection(_candidate_source_layers(candidate)):
+                try:
+                    budget = max(0, int(budgets.get(source, 0)))
+                except (TypeError, ValueError):
+                    budget = 0
+                if selected_source_counts.get(source, 0) >= budget:
+                    return False
+            return True
+
+        while True:
+            satisfied = {
+                source for source in required_sources
+                if any(source in _candidate_source_layers(item) for item in selected)
+            }
+            unsatisfied = required_sources - satisfied
+            if not unsatisfied:
+                break
+            eligible = [
+                candidate for candidate in merged_candidates
+                if set(_candidate_source_layers(candidate)).intersection(unsatisfied)
+                and source_budget_available(candidate)
+            ]
+            if not eligible:
+                for source in sorted(unsatisfied):
+                    reason = "no candidate survived executor limits"
+                    if isinstance(budgets, dict) and int(budgets.get(source, 0) or 0) <= 0:
+                        reason = "source budget is zero"
+                    elif len(selected) >= max(0, max_chunks):
+                        reason = "packet maximum is exhausted"
+                    reservation_diagnostics["inadequacies"].append({"source": source, "reason": reason})
+                break
+            best = max(
+                eligible,
+                key=lambda candidate: len(set(_candidate_source_layers(candidate)).intersection(unsatisfied)),
+            )
+            if not absorb(best):
+                reason = "packet maximum is exhausted" if len(selected) >= max(0, max_chunks) else "deduplication removed the only representative"
+                reservation_diagnostics["inadequacies"].append({"source": sorted(unsatisfied)[0], "reason": reason})
+                break
+            reservation_diagnostics["preserved_sources"] = sorted(
+                set(reservation_diagnostics["preserved_sources"]).union(_candidate_source_layers(best))
+            )
+
     if isinstance(budgets, dict):
         for source in ("exact", "lexical", "vector", "graph"):
             try:
                 budget = max(0, int(budgets.get(source, 0)))
             except (TypeError, ValueError):
                 budget = 0
-            taken = 0
+            taken = sum(source in _candidate_source_layers(item) for item in selected)
             for candidate in merged_candidates:
                 if taken >= budget:
                     break
@@ -1599,6 +1749,18 @@ def _semantic_traversal(
     chunk_rows = _load_chunk_rows(connection)
     layer_manifests: dict[str, Any] = {}
     execution = {"layers_executed": [], "layers_skipped": []}
+    unsupported_layer_requests: list[dict[str, Any]] = []
+    supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand"}
+    for layer in bound_retrieval_plan.get("retrieval_layers", []):
+        if not isinstance(layer, dict) or str(layer.get("operator") or "") in supported_operators:
+            continue
+        unsupported_layer_requests.append({
+            "operator": str(layer.get("operator") or ""),
+            "required": bool(layer.get("required")),
+            "supplied_fields": dict(layer),
+            "reason": "retrieval operator is not supported by this runtime seam",
+        })
+        execution["layers_skipped"].append({"layer": str(layer.get("operator") or ""), "reason": "unsupported operator"})
 
     exact_candidates: list[dict[str, Any]] = []
     exact_notes: list[str] = []
@@ -1635,9 +1797,10 @@ def _semantic_traversal(
 
     lexical_candidates: list[dict[str, Any]] = []
     lexical_notes: list[str] = []
+    lexical_diagnostics: dict[str, Any] = {}
     if lexical_layer is not None:
         execution["layers_executed"].append("lexical_chunk_search")
-        lexical_candidates, lexical_notes = _lexical_candidates(
+        lexical_candidates, lexical_notes, lexical_diagnostics = _lexical_candidates(
             chunk_rows,
             lexical_queries,
             connection=connection,
@@ -1645,27 +1808,32 @@ def _semantic_traversal(
             limit=_layer_limit(lexical_layer, config.retrieval_lexical_max_candidates),
             config=config,
             mode=str(lexical_layer.get("mode") or config.retrieval_lexical_default_mode),
+            return_diagnostics=True,
         )
     else:
         execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by bound retrieval plan"})
         lexical_notes = ["lexical search skipped: not requested by bound retrieval plan"]
+        lexical_diagnostics = {"status": "not_requested", "requested_queries": [], "candidate_count": 0}
 
     vector_candidates: list[dict[str, Any]] = []
     vector_notes: list[str] = []
+    vector_diagnostics: dict[str, Any] = {}
     if vector_layer is not None:
         execution["layers_executed"].append("vector_search")
-        vector_candidates, vector_notes = _vector_candidates(
+        vector_candidates, vector_notes, vector_diagnostics = _vector_candidates(
             connection=connection,
             config=config,
             embedding_backend=embedding_backend,
-            vector_query=semantic_queries[0] if semantic_queries else (lexical_queries[0] if lexical_queries else str(bound_retrieval_plan.get("intent_type") or "")),
+            vector_query=semantic_queries[0] if semantic_queries else "",
             vector_queries=semantic_queries,
             scope_filters=scope_filters,
             limit=_layer_limit(vector_layer, config.retrieval_vector_max_candidates),
+            return_diagnostics=True,
         )
     else:
         execution["layers_skipped"].append({"layer": "vector_search", "reason": "not requested by bound retrieval plan"})
         vector_notes = ["vector search skipped: not requested by bound retrieval plan"]
+        vector_diagnostics = {"status": "not_requested", "requested_queries": [], "query_results": [], "candidate_count": 0}
 
     graph_candidates: list[dict[str, Any]] = []
     graph_notes: list[str] = []
@@ -1684,6 +1852,7 @@ def _semantic_traversal(
     else:
         execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by bound retrieval plan"})
         graph_candidates, graph_notes, graph_traversal_info = [], ["graph search skipped: not requested by bound retrieval plan"], {
+            "status": "not_requested",
             "enabled": config.graph_traversal_enabled,
             "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
@@ -1720,6 +1889,29 @@ def _semantic_traversal(
         hard_scope_filters=scope_filters,
         preferred_scope_filters=preferred_scope_filters,
     )
+
+    layer_manifests["lexical"] = _non_exact_layer_manifest(
+        operator="lexical_chunk_search",
+        layer=lexical_layer,
+        status=str(lexical_diagnostics.get("status") or ("completed_with_candidates" if lexical_candidates else "completed_no_candidates")),
+        candidate_count=len(lexical_candidates),
+        diagnostics=lexical_diagnostics,
+    )
+    layer_manifests["vector"] = _non_exact_layer_manifest(
+        operator="vector_search",
+        layer=vector_layer,
+        status=str(vector_diagnostics.get("status") or ("completed_with_candidates" if vector_candidates else "completed_no_candidates")),
+        candidate_count=len(vector_candidates),
+        diagnostics=vector_diagnostics,
+    )
+    graph_status = str(graph_traversal_info.get("status") or ("completed_with_candidates" if graph_candidates else "completed_no_candidates"))
+    layer_manifests["graph"] = _non_exact_layer_manifest(
+        operator="graph_expand",
+        layer=graph_layer,
+        status=graph_status,
+        candidate_count=len(graph_candidates),
+        diagnostics=graph_traversal_info,
+    )
     lexical_candidates = _annotate_scope_matches(
         lexical_candidates,
         hard_scope_filters=scope_filters,
@@ -1742,13 +1934,37 @@ def _semantic_traversal(
         for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
         if isinstance(result, dict) and bool(result.get("required")) and result.get("status") == "completed_with_matches"
     }
+    required_sources = {
+        LAYER_TO_SOURCE.get(str(layer.get("operator") or ""))
+        for layer in bound_retrieval_plan.get("retrieval_layers", [])
+        if isinstance(layer, dict) and bool(layer.get("required")) and LAYER_TO_SOURCE.get(str(layer.get("operator") or ""))
+    }
+    selection_diagnostics: dict[str, Any] = {}
+    effective_max_chunks = bound_retrieval_plan.get("selection_policy", {}).get("max_chunks")
+    if effective_max_chunks is None:
+        effective_max_chunks = config.max_retrieval_chunks
     selected_candidates = _select_retrieval_chunks(
         merged_candidates=merged_candidates,
-        max_chunks=int(bound_retrieval_plan.get("selection_policy", {}).get("max_chunks") or config.max_retrieval_chunks),
+        max_chunks=int(effective_max_chunks),
         selection_policy=bound_retrieval_plan.get("selection_policy") if isinstance(bound_retrieval_plan.get("selection_policy"), dict) else None,
         required_exact_terms=required_exact_terms,
+        required_sources=required_sources,
+        selection_diagnostics=selection_diagnostics,
     )
     selected_counts = _count_selected_by_layer(selected_candidates)
+    for source, manifest in (("lexical", layer_manifests.get("lexical")), ("vector", layer_manifests.get("vector")), ("graph", layer_manifests.get("graph"))):
+        if not isinstance(manifest, dict):
+            continue
+        selected_for_source = [candidate for candidate in selected_candidates if source in _candidate_source_layers(candidate)]
+        manifest["selected_contribution_count"] = len(selected_for_source)
+        manifest["selected_chunk_ids"] = [str(candidate.get("chunk_id") or "") for candidate in selected_for_source]
+        manifest["adequate_contribution"] = manifest.get("status") == "completed_with_candidates" and bool(selected_for_source)
+        if bool(manifest.get("required")) and not manifest["adequate_contribution"]:
+            manifest["inadequacy_reason"] = (
+                "required layer did not produce candidates"
+                if manifest.get("status") != "completed_with_candidates"
+                else "required layer produced candidates but no selected chunk retained its provenance"
+            )
     exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
     exact_search_performed = exact_layer is not None
     total_exact_matches = exact_info.get("total_match_count")
@@ -1783,6 +1999,51 @@ def _semantic_traversal(
         and all_terms_completed
         and not any(result.get("status") == "completed_with_matches" for result in exact_info.get("term_results", []) if isinstance(result, dict))
     )
+    required_layer_results: list[dict[str, Any]] = []
+    for layer in bound_retrieval_plan.get("retrieval_layers", []):
+        if not isinstance(layer, dict) or not bool(layer.get("required")):
+            continue
+        operator = str(layer.get("operator") or "")
+        source = LAYER_TO_SOURCE.get(operator)
+        if source is None:
+            required_layer_results.append({
+                "operator": operator,
+                "source": None,
+                "status": "unsupported",
+                "candidate_count": 0,
+                "selected_contribution_count": 0,
+                "adequate_contribution": False,
+                "blocking_reason": "required retrieval operator is unsupported",
+            })
+            continue
+        manifest = exact_info if source == "exact" else layer_manifests.get(source, {})
+        status = str(manifest.get("status") or "not_requested")
+        if source == "exact":
+            adequate = status in {"completed_no_matches", "completed_with_matches"} and not any(
+                isinstance(result, dict)
+                and bool(result.get("required"))
+                and result.get("status") == "completed_with_matches"
+                and not result.get("adequate_contribution")
+                for result in exact_info.get("term_results", [])
+            )
+            selected_contribution = sum(
+                1 for candidate in selected_candidates if "exact" in _candidate_source_layers(candidate)
+            )
+        else:
+            adequate = bool(manifest.get("adequate_contribution"))
+            selected_contribution = int(manifest.get("selected_contribution_count") or 0)
+        result = {
+            "operator": operator,
+            "source": source,
+            "status": status,
+            "candidate_count": int(manifest.get("candidate_count") or len({"exact": exact_candidates, "lexical": lexical_candidates, "vector": vector_candidates, "graph": graph_candidates}.get(source, []))),
+            "selected_contribution_count": selected_contribution,
+            "adequate_contribution": adequate,
+            "blocking_reason": None,
+        }
+        if not adequate:
+            result["blocking_reason"] = str(manifest.get("inadequacy_reason") or f"required {source} layer is {status}")
+        required_layer_results.append(result)
     coverage = {
         "exact_search_performed": exact_search_performed,
         "exact_status": str(exact_info.get("status") or ("completed_with_matches" if total_exact_matches else "completed_no_matches" if exact_search_performed else "not_requested")),
@@ -1801,6 +2062,8 @@ def _semantic_traversal(
             str(result.get("term")) for result in exact_info.get("term_results", [])
             if isinstance(result, dict) and bool(result.get("required")) and result.get("status") == "completed_with_matches" and not result.get("adequate_contribution")
         ),
+        "required_layer_results": required_layer_results,
+        "selection_reservation": selection_diagnostics,
     }
     limits: list[str] = [f"Only {config.max_retrieval_chunks} chunk(s) may be selected for frontier synthesis."]
     if exact_search_performed and exact_info.get("return_total_count_requested"):
@@ -1825,6 +2088,7 @@ def _semantic_traversal(
         "selected_counts": selected_counts,
         "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
         "layer_manifests": layer_manifests,
+        "unsupported_layer_requests": unsupported_layer_requests,
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
@@ -1892,17 +2156,25 @@ def _coverage_report(
     layer_manifests = traversal_manifest.get("layer_manifests") if isinstance(traversal_manifest.get("layer_manifests"), dict) else {}
     candidate_counts = traversal_manifest.get("candidate_counts") if isinstance(traversal_manifest.get("candidate_counts"), dict) else {}
     required_layer_failures: list[str] = []
-    for layer in bound_plan.get("retrieval_layers") or []:
-        if not isinstance(layer, dict) or not bool(layer.get("required")):
-            continue
-        operator = str(layer.get("operator") or "")
-        source = LAYER_TO_SOURCE.get(operator)
-        if source == "exact":
-            exact_status = str((layer_manifests.get("exact") or {}).get("status") or "not_requested")
-            if exact_status not in {"completed_no_matches", "completed_with_matches"}:
-                required_layer_failures.append(f"required exact layer is {exact_status}")
-        elif source and int(candidate_counts.get(source) or 0) == 0:
-            required_layer_failures.append(f"required {source} layer produced no candidates")
+    structured_required_results = traversal_manifest.get("coverage", {}).get("required_layer_results") if isinstance(traversal_manifest.get("coverage"), dict) else None
+    if isinstance(structured_required_results, list):
+        for result in structured_required_results:
+            if isinstance(result, dict) and not bool(result.get("adequate_contribution")):
+                required_layer_failures.append(
+                    f"required {result.get('source') or result.get('operator')} layer is inadequate: {result.get('blocking_reason') or result.get('status')}"
+                )
+    else:
+        for layer in bound_plan.get("retrieval_layers") or []:
+            if not isinstance(layer, dict) or not bool(layer.get("required")):
+                continue
+            operator = str(layer.get("operator") or "")
+            source = LAYER_TO_SOURCE.get(operator)
+            if source == "exact":
+                exact_status = str((layer_manifests.get("exact") or {}).get("status") or "not_requested")
+                if exact_status not in {"completed_no_matches", "completed_with_matches"}:
+                    required_layer_failures.append(f"required exact layer is {exact_status}")
+            elif source and int(candidate_counts.get(source) or 0) == 0:
+                required_layer_failures.append(f"required {source} layer produced no candidates")
     exact_manifest = layer_manifests.get("exact") if isinstance(layer_manifests.get("exact"), dict) else {}
     for term_result in exact_manifest.get("term_results", []) if isinstance(exact_manifest.get("term_results"), list) else []:
         if not isinstance(term_result, dict) or not bool(term_result.get("required")):

@@ -437,7 +437,6 @@ def _coerce_literal_terms(value: Any, fallback: list[dict[str, Any]]) -> list[di
 
 
 def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    allowed = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand"}
     if not isinstance(value, list):
         return list(fallback)
     layers: list[dict[str, Any]] = []
@@ -445,14 +444,16 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
         if not isinstance(entry, dict):
             continue
         operator = str(entry.get("operator") or "").strip()
-        if operator not in allowed:
+        if not operator:
             continue
         layer: dict[str, Any] = {"operator": operator, "required": bool(entry.get("required"))}
         if "limit" in entry:
             try:
-                layer["limit"] = max(0, int(entry["limit"]))
+                layer["limit"] = int(entry["limit"])
             except (TypeError, ValueError):
-                pass
+                # Preserve invalid accepted input for runtime-owned
+                # defaulting diagnostics instead of silently dropping it.
+                layer["limit"] = entry.get("limit")
         if "depth" in entry:
             try:
                 layer["depth"] = max(0, int(entry["depth"]))

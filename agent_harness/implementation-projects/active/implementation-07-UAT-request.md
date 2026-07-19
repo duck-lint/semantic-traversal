@@ -24,7 +24,7 @@ The current automated suite proves contracts on isolated fixtures, but cannot es
 
 ## Current implementation status
 
-Automated regression after the serialization, Seam 2A, and Seam 2B changes: 104 tests passing; compileall and diff check passing. Python production changes are uncommitted. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
+Seam 3 is complete. Automated regression after the runtime authority and non-exact required-layer changes: 112 tests passing; compileall and diff check passing. The Python changes are now committed and pushed on the implementation branch. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
 
 The configured vault index was copied to a disposable workspace index before UAT. The active index was not mutated.
 
@@ -72,4 +72,22 @@ The configured 229 MB SQLite index was copied to a disposable workspace index; t
 - Match mode: case-sensitive lower-case phrase produced 3 chunks/3 occurrences; case-insensitive produced 77 chunks/100 occurrences, demonstrating the requested mode was executed rather than coerced.
 - Exact provenance: selected chunks retained `selection_source` separately from canonical `source_layers`; exact evidence survived merge/selection fixture tests. The selected packet serializer now explicitly includes `selection_source` alongside `source_layers`.
 
-Seam 2B is complete. Remaining open seams are non-exact requiredness (Seam 3), compiler/schema emission of preferred scope, inbound/both graph corpus UAT, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness. The preferred-scope ranking introduced in Seam 2A remains a narrow runtime behavior to reconcile later with Seam 5; compiler emission of preferred scope remains open for Seam 8.
+Seam 2B is complete. At that point, the remaining open seams were non-exact requiredness (later completed as Seam 3), compiler/schema emission of preferred scope, inbound/both graph corpus UAT, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness. The preferred-scope ranking introduced in Seam 2A remains a narrow runtime behavior to reconcile later with Seam 5; compiler emission of preferred scope remains open for Seam 8.
+
+## Seam 3 runtime authority and non-exact required-layer UAT (2026-07-18)
+
+The remaining Seam 3 gaps were caused by accepted compiler fields being normalized without preserving invalid or unsupported requests for diagnosis, executor outcomes being represented as ad hoc booleans rather than structured layer statuses, and final selection checking only candidate presence rather than selected provenance contribution. Runtime selection policy, claim policy, budgets, and candidate limits are now bound from YAML; compiler values are retained only as requested inputs and produce explicit override diagnostics when they diverge. Unknown operators and invalid limits are retained and block when required rather than being silently discarded.
+
+Structured manifests now distinguish `not_requested`, `skipped_no_input`, `disabled`, `unsupported`, `unavailable`, `failed`, `partial_failure`, `completed_no_candidates`, and `completed_with_candidates`. Required lexical, vector, and graph layers must execute successfully, produce candidates, and retain at least one selected chunk with the layer in `source_layers`. With YAML `preserve_required_layers` enabled, deterministic preselection reserves required non-exact sources within configured budgets and packet bounds; post-selection adequacy remains authoritative and reports bounded conflicts without expanding limits. This is a narrow required-layer rule, not a general Seam 5 fusion redesign.
+
+The configured 229 MB SQLite index was copied to a disposable workspace index; the active index was not mutated. Controlled compiler packets were used to isolate runtime behavior, with synthesis disabled. `LLM backend unavailable` therefore represents the intentionally disabled synthesis boundary, not retrieval failure.
+
+- Required lexical success: `completed_with_candidates`, requested/effective limit `5/5`, candidate count `5`, selected contribution `5`, adequate `true`; compiler selection and claim-policy divergence emitted runtime override diagnostics.
+- Required vector success: `completed_with_candidates`, requested/effective limit `5/5`, candidate count `5`, selected contribution `5`, adequate `true`; the semantic query embedded successfully and returned five bounded candidates after a full backend search.
+- Required lexical no-candidate: `completed_no_candidates`, coverage blocked with an explicit no-candidate/inadequate-contribution reason, and negative permission remained false.
+- Required vector unavailable: `unavailable`, coverage blocked, and negative permission remained false.
+- Required graph fixture: structured graph execution status and selected graph contribution were recorded; existing graph depth, provenance, and round-robin fixture coverage remained green. Inbound/`both` corpus validation remains open for Seam 4A.
+
+Prompt hashes remained unchanged: semantic compiler `9CA92643B2550410743D494FC82E3AE67C718C8F7867D72E43DDB49925E28F4B`; frontier synthesis `FDAC281E48E765AF09578BE02E53AD65A443D49914FAC53D017ADE5391A18776`. YAML remained unchanged from the prior Seam 2B baseline: `B0B2AA1F0EF45D1CADC52156DD79AB3E9E7379D3E626F541BBB5768065ABFBA4`.
+
+Seam 3 is complete. Remaining open seams are compiler/schema emission of preferred scope, graph inbound/`both` corpus UAT, FTS full-ingest freshness, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness. Seam 4A is next; Seam 3 does not generalize requiredness to all future operators beyond the implemented lexical/vector/graph contract.

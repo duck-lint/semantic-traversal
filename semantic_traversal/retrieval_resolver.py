@@ -225,7 +225,52 @@ def bind_retrieval_plan(
     canonical_layers: list[dict[str, Any]] = []
     for raw_layer in retrieval_layers:
         layer = dict(raw_layer)
-        if str(layer.get("operator") or "") == "graph_expand":
+        operator = str(layer.get("operator") or "")
+        if operator in {"lexical_chunk_search", "vector_search", "graph_expand"}:
+            if operator == "lexical_chunk_search":
+                default_limit = config.retrieval_planner_defaults["lexical_limit"]
+                maximum_limit = config.retrieval_lexical_max_candidates
+            elif operator == "vector_search":
+                default_limit = config.retrieval_planner_defaults["vector_limit"]
+                maximum_limit = config.retrieval_vector_max_candidates
+            else:
+                default_limit = config.retrieval_graph_max_candidates
+                maximum_limit = config.retrieval_graph_max_candidates
+            raw_limit = layer.get("limit") if "limit" in layer else None
+            requested_limit: int | None
+            limit_adjustment = "none"
+            try:
+                requested_limit = int(raw_limit) if raw_limit is not None else None
+            except (TypeError, ValueError):
+                requested_limit = None
+                limit_adjustment = "defaulted_invalid"
+            if requested_limit is None:
+                effective_limit = max(0, int(default_limit))
+                if limit_adjustment == "none":
+                    limit_adjustment = "defaulted"
+            else:
+                effective_limit = max(0, requested_limit)
+                if effective_limit != requested_limit:
+                    limit_adjustment = "sanitized"
+                if effective_limit > int(maximum_limit):
+                    effective_limit = int(maximum_limit)
+                    limit_adjustment = "clamped_to_max"
+            layer["limit"] = effective_limit
+            layer["requested_limit"] = requested_limit
+            layer["default_limit"] = int(default_limit)
+            layer["maximum_limit"] = int(maximum_limit)
+            layer["effective_limit"] = effective_limit
+            layer["limit_adjustment"] = limit_adjustment
+            adjustments.append(
+                {
+                    "field": f"retrieval_layers.{operator}.limit",
+                    "requested": requested_limit,
+                    "effective": effective_limit,
+                    "action": limit_adjustment,
+                    "reason": "runtime-owned executor default/max bounds",
+                }
+            )
+        if operator == "graph_expand":
             requested_depth: int | None
             adjustment = "none"
             raw_depth = layer.get("depth")
@@ -262,10 +307,47 @@ def bind_retrieval_plan(
             )
         canonical_layers.append(layer)
     retrieval_layers = canonical_layers
-    selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})
-    if "max_chunks" not in selection_policy:
-        selection_policy["max_chunks"] = config.max_retrieval_chunks
-    claim_policy = dict(planner_retrieval_plan.get("claim_policy") or {})
+    requested_selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})
+    runtime_selection_policy = config.retrieval_planner_defaults["selection_policy"]
+    runtime_budgets = {
+        source: max(0, int(runtime_selection_policy["budgets"].get(source, 0)))
+        for source in ("exact", "lexical", "vector", "graph")
+    }
+    runtime_max_chunks = min(
+        max(0, int(runtime_selection_policy["max_chunks"])),
+        max(0, int(config.max_retrieval_chunks)),
+    )
+    selection_policy = {
+        "max_chunks": runtime_max_chunks,
+        "preserve_required_layers": bool(runtime_selection_policy["preserve_required_layers"]),
+        "budgets": runtime_budgets,
+    }
+    if requested_selection_policy != selection_policy:
+        adjustments.append(
+            {
+                "field": "selection_policy",
+                "requested": requested_selection_policy,
+                "effective": selection_policy,
+                "action": "runtime_policy_override",
+                "reason": "compiler selection policy is non-authoritative; YAML/runtime policy applies",
+            }
+        )
+    runtime_claim_policy = config.retrieval_planner_defaults["claim_policy"]
+    requested_claim_policy = dict(planner_retrieval_plan.get("claim_policy") or {})
+    claim_policy = {
+        "negative_claims_require_exact_layer": bool(runtime_claim_policy["negative_claims_require_exact_layer"]),
+        "coverage_claims_allowed": False,
+    }
+    if requested_claim_policy != claim_policy:
+        adjustments.append(
+            {
+                "field": "claim_policy",
+                "requested": requested_claim_policy,
+                "effective": claim_policy,
+                "action": "runtime_policy_override",
+                "reason": "compiler claim policy is non-authoritative; runtime derives coverage permission",
+            }
+        )
 
     bound_plan = {
         "intent_type": str(planner_retrieval_plan.get("intent_type") or "semantic_traversal"),

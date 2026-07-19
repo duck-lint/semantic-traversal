@@ -374,6 +374,39 @@ def _graph_compiler_payload(
     }
 
 
+def _controlled_layer_payload(
+    raw_user_input: str,
+    *,
+    layers: list[dict[str, Any]],
+    semantic_queries: list[str] | None = None,
+    lexical_queries: list[str] | None = None,
+    graph_seeds: list[str] | None = None,
+    selection_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "raw_user_input": raw_user_input,
+        "intent": "controlled required-layer fixture",
+        "query": raw_user_input,
+        "entities": [],
+        "relations": [],
+        "resolved_referents": [],
+        "planner_retrieval_plan": {
+            "intent_type": "semantic_traversal",
+            "scope_requests": [],
+            "concepts": [],
+            "resolved_referents": [],
+            "literal_terms": [],
+            "semantic_queries": list(semantic_queries or []),
+            "lexical_queries": list(lexical_queries or []),
+            "graph_seeds": list(graph_seeds or []),
+            "retrieval_layers": layers,
+            "selection_policy": selection_policy or {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+            "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+        },
+        "limitations": [],
+    }
+
+
 def _prepare_multi_chunk_inventory_data_root() -> Path:
     data_root = _register_temp_data_root()
     source_root = data_root / "multi-chunk-fixture"
@@ -2243,6 +2276,77 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertIn(field, chunk)
         self.assertIsInstance(chunk["source_layers"], list)
         self.assertIsInstance(chunk["selection_source"], str)
+
+    def test_required_lexical_layer_uses_structured_status_and_selected_contribution(self) -> None:
+        data_root = _prepare_data_root()
+        payload = _controlled_layer_payload(
+            "alpha",
+            layers=[{"operator": "lexical_chunk_search", "required": True, "limit": 50}],
+            lexical_queries=["candy"],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="alpha",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        manifest = result.semantic_traversal_manifest["layer_manifests"]["lexical"]
+        self.assertEqual(manifest["status"], "completed_with_candidates")
+        self.assertGreater(manifest["candidate_count"], 0)
+        self.assertGreater(manifest["selected_contribution_count"], 0)
+        self.assertTrue(manifest["adequate_contribution"])
+        self.assertEqual(result.semantic_traversal_manifest["coverage"]["required_layer_results"][0]["adequate_contribution"], True)
+
+    def test_required_lexical_no_candidates_blocks_without_absence_permission(self) -> None:
+        data_root = _prepare_data_root()
+        payload = _controlled_layer_payload(
+            "absent",
+            layers=[{"operator": "lexical_chunk_search", "required": True, "limit": 50}],
+            lexical_queries=["qxvplmno"],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="absent",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        manifest = result.semantic_traversal_manifest["layer_manifests"]["lexical"]
+        self.assertEqual(manifest["status"], "completed_no_candidates")
+        self.assertFalse(manifest["adequate_contribution"])
+        self.assertEqual(result.coverage_report["decision"], "blocked")
+        self.assertFalse(result.semantic_traversal_manifest["coverage"]["negative_claims_allowed"])
+
+    def test_required_vector_and_graph_manifests_record_selected_surface_contribution(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        payload = _controlled_layer_payload(
+            "A",
+            layers=[
+                {"operator": "vector_search", "required": True, "limit": 24},
+                {"operator": "graph_expand", "required": True, "limit": 24, "depth": 1},
+            ],
+            semantic_queries=["A"], graph_seeds=["A"],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="A",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=FakeEmbeddingBackend(),
+        )
+        vector = result.semantic_traversal_manifest["layer_manifests"]["vector"]
+        graph = result.semantic_traversal_manifest["layer_manifests"]["graph"]
+        self.assertIn(vector["status"], {"completed_with_candidates", "completed_no_candidates"})
+        self.assertEqual(graph["status"], "completed_with_candidates")
+        self.assertTrue(graph["adequate_contribution"])
+        self.assertTrue(any("graph" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
+
+    def test_required_unknown_operator_is_preserved_and_blocks(self) -> None:
+        data_root = _prepare_data_root()
+        payload = _controlled_layer_payload(
+            "unknown",
+            layers=[{"operator": "future_surface", "required": True, "limit": 5}],
+            lexical_queries=[], semantic_queries=[],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="unknown",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(result.semantic_traversal_manifest["unsupported_layer_requests"][0]["operator"], "future_surface")
+        self.assertEqual(result.coverage_report["decision"], "blocked")
+        self.assertIn("unsupported", " ".join(result.coverage_report["blocking_reasons"]))
 
     def test_approved_coverage_calls_llm(self) -> None:
         data_root = _prepare_data_root()
