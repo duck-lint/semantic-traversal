@@ -15,7 +15,7 @@ from semantic_traversal.cli import build_ingest_parser, build_turn_parser
 from semantic_traversal.config import load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.hashing import sha256_json
-from semantic_traversal.ingest import IngestFrontmatterError, IngestSourceRoot, _extract_temporal_metadata, run_ingest
+from semantic_traversal.ingest import IngestFrontmatterError, IngestSourceRoot, run_ingest
 from semantic_traversal.llm import LLMResponse
 from semantic_traversal.runtime import (
     _apply_retrieval_candidate_hygiene,
@@ -536,38 +536,6 @@ def _prepare_apparatus_graph_fixture_data_root() -> Path:
 
 
 class ThesisRuntimeTests(unittest.TestCase):
-    def test_temporal_metadata_uses_configured_precedence_and_explicit_invalidity(self) -> None:
-        config = load_runtime_config(repo_root=REPO_ROOT)
-        valid = _extract_temporal_metadata(
-            {"date": "2024-01-02", "journal_entry_date": "2025-09-01"},
-            config=config,
-        )
-        self.assertEqual(valid, {
-            "status": "valid",
-            "source_field": "journal_entry_date",
-            "value": "2025-09-01",
-            "precision": "day",
-            "reason": None,
-        })
-        invalid = _extract_temporal_metadata(
-            {"journal_entry_date": "not-a-date", "date": "2024-01-02"},
-            config=config,
-        )
-        self.assertEqual(invalid["status"], "invalid")
-        self.assertEqual(invalid["source_field"], "journal_entry_date")
-        missing = _extract_temporal_metadata({}, config=config)
-        self.assertEqual(missing["status"], "missing")
-
-    def test_temporal_metadata_normalizes_timezone_datetime(self) -> None:
-        config = load_runtime_config(repo_root=REPO_ROOT)
-        metadata = _extract_temporal_metadata(
-            {"created_at": "2025-01-02T03:04:05-07:00"},
-            config=config,
-        )
-        self.assertEqual(metadata["status"], "valid")
-        self.assertEqual(metadata["value"], "2025-01-02T10:04:05Z")
-        self.assertEqual(metadata["precision"], "second")
-
     def test_cli_runtime_control_is_config_only(self) -> None:
         ingest_options = {action.dest for action in build_ingest_parser()._actions}
         turn_options = {action.dest for action in build_turn_parser()._actions}
@@ -2488,40 +2456,14 @@ class ThesisRuntimeTests(unittest.TestCase):
             "source_layers",
             "selection_source",
             "selection_reason",
-            "temporal_date",
-            "temporal_date_source",
-            "temporal_precision",
-            "temporal_status",
         ):
             self.assertIn(field, chunk)
         self.assertIsInstance(chunk["source_layers"], list)
         self.assertIsInstance(chunk["selection_source"], str)
-        self.assertIn("valid", result.semantic_traversal_manifest["temporal"]["substrate_status_counts"])
-        self.assertFalse(result.semantic_traversal_manifest["temporal"]["enabled"])
         vector_chunks = [item for item in result.retrieval_packet["selected_chunks"] if "vector" in item["source_layers"]]
         if vector_chunks:
             self.assertIn("vector_query_scores", vector_chunks[0])
             self.assertIn("vector_best_query", vector_chunks[0])
-
-    def test_temporal_ordering_is_visible_in_manifest_and_packet(self) -> None:
-        data_root = _prepare_data_root()
-        config = load_runtime_config(repo_root=REPO_ROOT)
-        config.raw["retrieval"]["temporal"]["enabled"] = True
-        result = run_thread_turn(
-            repo_root=REPO_ROOT,
-            data_root=data_root,
-            user_input="Please retrieve the candy snack food before bed note.",
-            llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=TestSemanticCompilerBackend(),
-            embedding_backend=FakeEmbeddingBackend(),
-            config=config,
-        )
-        temporal = result.semantic_traversal_manifest["temporal"]
-        self.assertTrue(temporal["enabled"])
-        self.assertTrue(temporal["ordering_applied"])
-        self.assertGreater(temporal["dated_chunk_count"], 0)
-        selected_dates = [chunk["temporal_date"] for chunk in result.retrieval_packet["selected_chunks"] if chunk["temporal_date"]]
-        self.assertEqual(selected_dates, sorted(selected_dates))
 
     def test_required_lexical_layer_uses_structured_status_and_selected_contribution(self) -> None:
         data_root = _prepare_data_root()

@@ -25,17 +25,6 @@ retrieval:
     default_depth: 1
     max_depth: 2
     max_candidates: 24
-  temporal:
-    enabled: false
-    date_field_precedence:
-      - journal_entry_date
-      - date
-      - created_at
-      - created
-      - modified_at
-      - modified
-    ordering: ascending
-    missing_date_order: last
   planner_defaults:
     exact_limit: 200
     exact_return_total_count: true
