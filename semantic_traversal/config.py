@@ -59,6 +59,10 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             },
         },
         "scope_aliases": dict,
+        "scope_policy": {
+            "exact_request_mode": str,
+            "semantic_request_mode": str,
+        },
     },
     "runtime_conversation": {
         "stop_words": [str],
@@ -240,6 +244,13 @@ class RuntimeConfig:
                 else (),
             }
         return aliases
+
+    @property
+    def retrieval_scope_policy(self) -> dict[str, str]:
+        policy = self.raw["retrieval"].get("scope_policy", {})
+        if not isinstance(policy, dict):
+            return {}
+        return {str(key): str(value) for key, value in policy.items()}
 
     @property
     def runtime_conversation(self) -> dict[str, Any]:
@@ -613,6 +624,9 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             current = current[part]
         if int(current) < 0:
             raise ConfigError(f"Runtime config field retrieval.{field} must be non-negative")
+    for field in ("exact_request_mode", "semantic_request_mode"):
+        if str(parsed["retrieval"]["scope_policy"][field]).strip().lower() not in {"hard", "preferred"}:
+            raise ConfigError(f"Runtime config field retrieval.scope_policy.{field} must be hard or preferred")
     if str(parsed["retrieval"]["lexical"]["default_mode"]) not in {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}:
         raise ConfigError("Runtime config field retrieval.lexical.default_mode must be a supported FTS5 mode")
     _validate_prompt_text(

@@ -260,6 +260,54 @@ def _prepare_graph_fixture_data_root() -> Path:
     return data_root
 
 
+def _prepare_preferred_scope_graph_data_root() -> Path:
+    data_root = _register_temp_data_root()
+    source_root = data_root / "preferred-scope-graph-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    _write_markdown_note(
+        source_root,
+        "Journal.md",
+        """
+        # Journal
+
+        The idea developed through an early geometry insight.
+
+        Links to [[Concept]].
+        """,
+        uuid_value="11111111-1111-4111-8111-111111111111",
+        frontmatter={"note_type": "journal_entry"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Concept.md",
+        """
+        # Concept
+
+        A conceptual precursor describes relational structure.
+        """,
+        uuid_value="22222222-2222-4222-8222-222222222222",
+        frontmatter={"note_type": "concept"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Reading.md",
+        """
+        # Reading
+
+        A later reading reinforced the same structural analogy.
+        """,
+        uuid_value="33333333-3333-4333-8333-333333333333",
+        frontmatter={"note_type": "reading_notes"},
+    )
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="scope-fixture", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+    )
+    return data_root
+
+
 def _turn_artifact(path: Path) -> dict[str, Any]:
     return load_json(path) or {}
 
@@ -287,7 +335,14 @@ def _write_markdown_note(
     return path
 
 
-def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str], graph_depth: int | None = 1) -> dict[str, Any]:
+def _graph_compiler_payload(
+    raw_user_input: str,
+    *,
+    graph_seeds: list[str],
+    graph_depth: int | None = 1,
+    scope_requests: list[str] | None = None,
+    intent_type: str = "semantic_traversal",
+) -> dict[str, Any]:
     graph_layer = {"operator": "graph_expand", "required": False}
     if graph_depth is not None:
         graph_layer["depth"] = graph_depth
@@ -299,8 +354,8 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str], grap
         "relations": [],
         "resolved_referents": [],
         "planner_retrieval_plan": {
-            "intent_type": "semantic_traversal",
-            "scope_requests": [],
+            "intent_type": intent_type,
+            "scope_requests": list(scope_requests or []),
             "concepts": [],
             "resolved_referents": [],
             "literal_terms": [],
@@ -1463,6 +1518,73 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(graph["effective_depth"], graph["default_depth"])
         self.assertEqual(graph["depth_adjustment"], "defaulted")
 
+    def test_preferred_scope_keeps_nonjournal_graph_evidence_and_ranks_journal(self) -> None:
+        data_root = _prepare_preferred_scope_graph_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Journal",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(
+                _graph_compiler_payload(
+                    "Journal",
+                    graph_seeds=["Journal"],
+                    scope_requests=["journal"],
+                )
+            ),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        bound = result.semantic_traversal_manifest["bound_retrieval_plan"]
+        self.assertEqual(bound["scope_filters"]["note_type"], [])
+        self.assertIn("journal_entry", bound["preferred_scope_filters"]["note_type"])
+        self.assertIn("journal", bound["scope_resolution"]["preferred"])
+        selected = result.retrieval_packet["selected_chunks"]
+        self.assertTrue(any(chunk["note_title"] == "Journal" and chunk["preferred_scope_match"] for chunk in selected))
+        self.assertTrue(any(chunk["note_title"] == "Concept" for chunk in selected))
+        self.assertEqual(selected[0]["note_title"], "Journal")
+        self.assertIn("preferred_scope_match", selected[0])
+        self.assertIn("scope_resolution", result.semantic_traversal_manifest)
+
+    def test_hard_scope_still_excludes_nonjournal_graph_candidates(self) -> None:
+        data_root = _prepare_preferred_scope_graph_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search Journal",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(
+                _graph_compiler_payload(
+                    "Journal",
+                    graph_seeds=["Journal"],
+                    scope_requests=["journal"],
+                    intent_type="scoped_exact_search",
+                )
+            ),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        bound = result.semantic_traversal_manifest["bound_retrieval_plan"]
+        self.assertIn("journal_entry", bound["scope_filters"]["note_type"])
+        self.assertEqual(bound["preferred_scope_filters"]["note_type"], [])
+        self.assertTrue(all(chunk["note_title"] == "Journal" for chunk in result.retrieval_packet["selected_chunks"]))
+        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["graph"], 2)
+
+    def test_preferred_scope_order_is_deterministic(self) -> None:
+        orders = []
+        for _ in range(2):
+            data_root = _prepare_preferred_scope_graph_data_root()
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="Journal",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(
+                    _graph_compiler_payload("Journal", graph_seeds=["Journal"], scope_requests=["journal"])
+                ),
+                embedding_backend=UnavailableEmbeddingBackend(),
+            )
+            orders.append([chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]])
+        self.assertEqual(orders[0], orders[1])
+
     def test_template_boilerplate_is_demoted_for_non_template_queries(self) -> None:
         semantic_compiler_packet = {
             "raw_user_input": "I want journal anecdotes and isomorphic bridges for the 4-Fold Root video.",
@@ -2114,6 +2236,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             "section_label",
             "paragraph_text",
             "chunk_hash",
+            "selection_source",
             "selection_reason",
         ):
             self.assertIn(field, chunk)

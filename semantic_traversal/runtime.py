@@ -657,6 +657,31 @@ def _scoped_chunk_rows(chunk_rows: list[dict[str, Any]], scope_filters: dict[str
     return [row for row in chunk_rows if _chunk_matches_scope(row, scope_filters)]
 
 
+def _annotate_scope_matches(
+    candidates: list[dict[str, Any]],
+    *,
+    hard_scope_filters: dict[str, Any],
+    preferred_scope_filters: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Expose scope evidence without turning preferred scope into admission."""
+    annotated: list[dict[str, Any]] = []
+    preferred_scope_active = bool(
+        str(preferred_scope_filters.get("source_label") or "").strip()
+        or _scope_values(preferred_scope_filters, "note_type")
+        or _scope_values(preferred_scope_filters, "path_contains")
+    )
+    for candidate in candidates:
+        next_candidate = dict(candidate)
+        if "scope_match" not in next_candidate:
+            next_candidate["scope_match"] = hard_scope_filters
+        next_candidate["preferred_scope_match"] = (
+            preferred_scope_active
+            and _chunk_matches_scope(next_candidate, preferred_scope_filters)
+        )
+        annotated.append(next_candidate)
+    return annotated
+
+
 def _candidate_source_layers(candidate: dict[str, Any]) -> list[str]:
     # `source_layers` is materialized before merge-only fields are removed. It
     # is the durable provenance surface; `sources` is only the merge scratch
@@ -1338,6 +1363,7 @@ def _merge_candidates(
         merged.values(),
         key=lambda candidate: (
             bool(candidate.get("_retrieval_demoted")),
+            not bool(candidate.get("preferred_scope_match")),
             -source_priority.get(str((candidate.get("selection_source") or "lexical")), 0),
             -float(candidate.get("score") or 0.0),
             str(candidate["chunk_id"]),
@@ -1551,6 +1577,28 @@ def _semantic_traversal(
         config=config,
     )
 
+    preferred_scope_filters = bound_retrieval_plan.get("preferred_scope_filters") if isinstance(bound_retrieval_plan.get("preferred_scope_filters"), dict) else {}
+    exact_candidates = _annotate_scope_matches(
+        exact_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+    lexical_candidates = _annotate_scope_matches(
+        lexical_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+    vector_candidates = _annotate_scope_matches(
+        vector_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+    graph_candidates = _annotate_scope_matches(
+        graph_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+
     merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates)
     selected_candidates = _select_retrieval_chunks(
         merged_candidates=merged_candidates,
@@ -1597,6 +1645,11 @@ def _semantic_traversal(
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
+        "scope_resolution": {
+            "hard": scope_filters,
+            "preferred": preferred_scope_filters,
+            "bound_requests": bound_retrieval_plan.get("scope_resolution", {}),
+        },
         "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes],
     }
 
@@ -1615,11 +1668,13 @@ def _semantic_traversal(
                 "paragraph_text": str(candidate["paragraph_text"]),
                 "chunk_hash": str(candidate["chunk_hash"]),
                 "source_layers": _candidate_source_layers(candidate),
+                "selection_source": str(candidate.get("selection_source") or ""),
                 "semantic_query_provenance": _coerce_string_list(candidate.get("semantic_query_provenance")),
                 "graph_direction": candidate.get("graph_direction"),
                 "graph_provenance": candidate.get("graph_provenance", []),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
+                "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
             }
             for candidate in selected_candidates

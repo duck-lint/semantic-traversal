@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import RuntimeConfig
-from .retrieval_plan import coerce_string_list
+from .retrieval_plan import coerce_string_list, is_search_intent
 
 
 def _merge_unique(existing: list[str], new_values: list[str]) -> list[str]:
@@ -122,6 +122,8 @@ def bind_retrieval_plan(
     observed_source_labels = _observed_strings(inventory_summary, "observed_source_labels", "label")
     observed_paths = _observed_strings(inventory_summary, "path_topology")
     scope_filters: dict[str, Any] = {"source_label": None, "note_type": [], "path_contains": []}
+    preferred_scope_filters: dict[str, Any] = {"source_label": None, "note_type": [], "path_contains": []}
+    scope_resolution: dict[str, Any] = {"hard": [], "preferred": [], "unsupported": []}
     adjustments: list[dict[str, Any]] = []
 
     concepts = coerce_string_list(planner_retrieval_plan.get("concepts"))
@@ -130,16 +132,33 @@ def bind_retrieval_plan(
     for scope_request in coerce_string_list(planner_retrieval_plan.get("scope_requests")):
         alias_filters = _alias_filters_for_request(scope_request, scope_aliases)
         if alias_filters is not None:
+            intent_type = str(planner_retrieval_plan.get("intent_type") or "semantic_traversal")
+            exact_request = "exact" in intent_type or is_search_intent(str(raw_user_input or ""))
+            mode_key = "exact_request_mode" if exact_request else "semantic_request_mode"
+            mode = str(config.retrieval_scope_policy.get(mode_key) or "").strip().lower()
+            target = scope_filters if mode == "hard" else preferred_scope_filters if mode == "preferred" else None
+            if target is None:
+                scope_resolution["unsupported"].append(scope_request)
+                adjustments.append(
+                    {
+                        "field": "scope_requests",
+                        "value": scope_request,
+                        "action": "unsupported_scope_mode",
+                        "reason": f"runtime scope policy {mode_key} must resolve to hard or preferred",
+                    }
+                )
+                continue
             if alias_filters["source_label"]:
-                scope_filters["source_label"] = str(alias_filters["source_label"])
-            scope_filters["note_type"] = _merge_unique(scope_filters["note_type"], list(alias_filters["note_type"]))
-            scope_filters["path_contains"] = _merge_unique(scope_filters["path_contains"], list(alias_filters["path_contains"]))
+                target["source_label"] = str(alias_filters["source_label"])
+            target["note_type"] = _merge_unique(target["note_type"], list(alias_filters["note_type"]))
+            target["path_contains"] = _merge_unique(target["path_contains"], list(alias_filters["path_contains"]))
+            scope_resolution[mode].append(scope_request)
             adjustments.append(
                 {
                     "field": "scope_requests",
                     "value": scope_request,
-                    "action": "bound_to_alias",
-                    "reason": "configured scope alias",
+                    "action": "bound_to_alias" if mode == "hard" else "bound_to_preferred_scope",
+                    "reason": "configured scope alias with runtime-owned scope mode",
                 }
             )
             adjustments.extend(
@@ -251,6 +270,8 @@ def bind_retrieval_plan(
     bound_plan = {
         "intent_type": str(planner_retrieval_plan.get("intent_type") or "semantic_traversal"),
         "scope_filters": scope_filters,
+        "preferred_scope_filters": preferred_scope_filters,
+        "scope_resolution": scope_resolution,
         "literal_terms": literal_terms,
         "semantic_queries": semantic_queries,
         "lexical_queries": coerce_string_list(planner_retrieval_plan.get("lexical_queries")) or concepts,

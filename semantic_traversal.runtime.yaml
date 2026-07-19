@@ -7,6 +7,9 @@ retrieval:
     personal_reflection:
       note_type:
         - journal_entry
+  scope_policy:
+    exact_request_mode: hard
+    semantic_request_mode: preferred
   exact:
     max_matches: 200
     context_chars: 240
