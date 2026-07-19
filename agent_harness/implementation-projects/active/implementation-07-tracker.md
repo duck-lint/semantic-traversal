@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 6A temporal retrieval contract (reopened/proposed).
-- Next action: define typed temporal anchors and retrieval operations before production implementation; do not advance to Seam 7.
+- Current work: Seam 7 persisted resource inventory (next seam; unopened).
+- Next action: define and verify persisted inventory reuse without beginning Seam 7 until the Seam 6A repair evidence is committed and pushed.
 
 ## Completed Repair Status
 
@@ -46,7 +46,7 @@
 | Seam 4B: lexical FTS5 executor | Coordinator | complete | 5 FTS5 mode coverage; freshness/update/rename/delete/unchanged lifecycle tests; corruption validator; initial/refresh/schema/validation/activation failure preservation tests; full suite 126 pass; compileall and diff check pass; disposable full configured-vault ingest and deterministic packet-scale lexical UAT | Candidate activation is atomic at the database-file boundary; FTS projection alignment and bounded lexical attrition are manifest-visible. |
 | Seam 4C: vector executor | Coordinator | complete | Identity reuse/invalidation, malformed-index diagnostics, threshold/per-query/per-note caps, deterministic multi-query round-robin, score provenance, complete configured-corpus ingest, repeated corpus probes; full suite 133 pass; compileall and diff check pass | Canonical vector identity and bounded diversity are manifest-visible. General fusion/selection remains open. |
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
-| Seam 6A: temporal substrate | Coordinator | reopened/proposed | `0b039ad` reverted; no temporal retrieval contract accepted | Define typed temporal anchors and retrieval operations; production implementation is not started |
+| Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; normal compiler temporal activation remains Seam 8 |
 | Seam 7: persisted inventory | Coordinator | proposed | pending | Depends on retrieval executors and 6A |
 | Seam 8: compiler/schema contract | Coordinator | proposed | pending | Depends on runtime support |
 | Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Depends on all behavioural seams |
@@ -200,3 +200,34 @@ The YAML hash before Seam 6A was
 final Seam 6A hash is
 `854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`.
 No temporal production surface from reverted `0b039ad` remains.
+
+## Seam 6A completion repair (2026-07-19)
+
+The repair commit is `77645ae` (`fix(seam6a): enforce mode-correct anchors and
+relation ranking`). The earlier temporal implementation selected the chronologically
+first qualifying anchor for every mode and sorted `before`, `after`, and
+`between` by temporal position before internal relevance. The repair adds an
+explicit `temporal_governing_anchor_id`, selects that anchor by mode, retains
+all qualifying anchor IDs and provenance, and applies the accepted tuples:
+temporal position then descending ordinal relevance for earliest/latest/
+ordered; relation admission, descending ordinal relevance, then the
+mode-specific temporal tie-break for before/after/between.
+
+The accepted ADR clarification records: before uses later qualifying ends
+first, after uses earlier qualifying starts first, and between uses ascending
+start then end, always after relevance. No raw lexical/vector scores, weights,
+RRF offset, global date sort, preferred reservoir, or sparse stopping was
+introduced. Selected packet serialization already includes `selection_source`
+and canonical `source_layers`; the repair preserves temporal governing-anchor
+provenance when lexical or another surface wins selection.
+
+Focused temporal, merge/provenance, requiredness, and ingest/runtime tests
+pass, including a synthetic multi-anchor fixture and relation-ordering
+fixture. The complete local suite, compileall, and diff check pass after the
+repair. The disposable staged corpus remains 1,083 notes and 14,608 chunks
+with 506 valid anchors; repeated IDs remain deterministic and the active index
+was not mutated. A complete representative multi-anchor fixture demonstrates
+different earliest/latest governing anchors and relevance-first relation
+ordering; the configured corpus has one journal anchor per note and therefore
+cannot prove the multi-anchor distinction itself. Seam 6A is complete for the
+accepted bounded contract. Seam 7 is next but unopened.

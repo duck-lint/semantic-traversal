@@ -1,6 +1,8 @@
 # Implementation 07 UAT Gate
 
-The implementation is not marked complete. The next evidence required is operator UAT against a disposable ingest of the configured corpus or an explicitly complete representative corpus.
+The bounded Seam 6A implementation is complete after its governing-anchor and
+relation-ordering repair. Seam 7 is next but remains unopened. The historical
+UAT requirements below remain the evidence record for the earlier gates.
 
 ## Why UAT is required now
 
@@ -276,3 +278,54 @@ frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.
 YAML changed from `09d7d5ea139d66b98ce56e17a469b70fbdbbbd3c4bd4258ea5f9217eb6c15052`
 to `854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`.
 No private corpus text was committed.
+
+## Seam 6A completion repair UAT (2026-07-19)
+
+The repair corrected two bounded defects without changing the typed temporal
+anchor index or retrieval surface. A complete synthetic multi-anchor fixture
+used one note with qualifying 2020 and 2025 intervals. `earliest` and ordered
+ascending selected the 2020 governing anchor; `latest` and ordered descending
+selected the 2025 governing anchor; `before` selected the later qualifying
+interval; `after` selected the earlier qualifying interval; and `between`
+selected the earliest interval. Both anchor IDs and both provenance records
+remained visible in every result, and `relation_status` came from the selected
+governing anchor. A merge fixture confirmed that temporal provenance and the
+governing ID survive when lexical supplies `selection_source`.
+
+The representative relation-ordering fixture used synthetic candidates with
+different internal ordinal relevance. In `before`, `after`, and `between`, the
+higher-relevance candidate remained first regardless of temporal position.
+Equal-relevance output followed deterministic temporal tie-breaks and stable
+chunk identity. No global ordinary-fusion or final-packet date sort was added.
+
+The disposable staged-corpus regression remains the accepted 1,083-note /
+14,608-chunk run with 506 valid journal-entry anchors. Projection validation
+and atomic activation passed; full-projection temporal admission recovered
+24 candidates from 19 notes beyond the ordinary lexical top-50, repeated IDs
+were deterministic with hash
+`f9a0c656fdb14ceda7dd2cb8c9e26f02837f77b3c577a0cc04feb848ce12ec71`, and the
+active index was not mutated. The configured corpus has one journal anchor per
+note, so the multi-anchor behavior is proven by the complete representative
+fixture rather than claimed from corpus scale. No causal claim was made.
+
+The operator-supplied live thread `thread-9472357bec4f` is recorded as a
+successful normal Seam 5 result: the genealogy question received lexical,
+vector, and graph layers only; temporal was not requested; the packet had 24
+selected chunks, 12 selected notes, and maximum concentration 4. The answer
+was epistemically cautious and explicitly described chronology as suggestive,
+not demonstrated, because no temporal traversal or exact search ran. This is
+not a Seam 6A failure; it confirms that normal compiler temporal activation
+remains Seam 8.
+
+Repair verification is committed as `77645ae` (`fix(seam6a): enforce
+mode-correct anchors and relation ranking`). Focused temporal tests run 8 and
+the focused temporal/retrieval/runtime regression set runs green; the complete
+local suite runs 150 tests with zero failures or errors;
+compileall and `git diff --check` pass. Prompt hashes remain:
+compiler `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`
+and frontier
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`; YAML
+remains
+`854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`. No
+compiler/frontier prompt, preferred reservoir, sparse stopping, global date
+sort, or private corpus material changed.
