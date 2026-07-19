@@ -92,9 +92,40 @@ scores remain provenance only.
 
 For `earliest`, `latest`, and `ordered`, the ordering tuple is temporal
 position, internal ordinal relevance, stable anchor identity, then chunk ID.
-For `before`, `after`, and `between`, relation admission is primary, followed
-by internal ordinal relevance, temporal value, and stable identity. Exact
+For `before`, `after`, and `between`, relation admission is a filter; among
+admitted candidates the ordering tuple is internal ordinal relevance
+(descending), temporal value, stable anchor identity, then chunk ID. Exact
 interval comparisons never become string sorting.
+
+### Relation-specific temporal tie-break clarification
+
+The temporal value is deliberately secondary to internal ordinal relevance.
+Its direction is fixed and mode-specific so that equal-relevance results are
+stable without making date outrank relevance:
+
+- `before`: later qualifying intervals first, using descending canonical end
+  (the interval closest to a supplied upper boundary); if an end is not
+  available, use descending canonical start.
+- `after`: earlier qualifying intervals first, using ascending canonical start
+  (the interval closest to a supplied lower boundary); if a start is not
+  available, use ascending canonical end.
+- `between`: ascending canonical start, then ascending canonical end.
+
+The complete runtime tuples are therefore:
+
+- `earliest`: `(canonical_start, -internal_ordinal_relevance, stable_id)`.
+- `latest`: `(-canonical_start, -internal_ordinal_relevance, stable_id)`.
+- `ordered ascending`: `(canonical_start, -internal_ordinal_relevance, stable_id)`.
+- `ordered descending`: `(-canonical_start, -internal_ordinal_relevance, stable_id)`.
+- `before`: `(-internal_ordinal_relevance, -canonical_end_or_start, stable_id)`.
+- `after`: `(-internal_ordinal_relevance, canonical_start_or_end, stable_id)`.
+- `between`: `(-internal_ordinal_relevance, canonical_start, canonical_end,
+  stable_id)`.
+
+The implementation uses stable deterministic sorting rather than comparing raw
+lexical, vector, or temporal scores across surfaces. A candidate's governing
+anchor supplies the tuple's temporal fields; all other qualifying anchors stay
+visible in temporal provenance.
 
 ## Seam 5 integration and provenance
 
