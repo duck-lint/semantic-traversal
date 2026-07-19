@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from semantic_traversal.config import load_runtime_config
-from semantic_traversal.embeddings import UnavailableEmbeddingBackend
+from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, canonical_embedding_identity, embedding_identity_hash
 from semantic_traversal.ingest import IngestSourceRoot, run_ingest
 from semantic_traversal.runtime import _temporal_candidates
 from semantic_traversal.temporal import build_temporal_anchors, parse_temporal_value
@@ -18,6 +18,14 @@ class _UnavailableEmbedding:
 
     def embed_query_text(self, query: str):  # pragma: no cover - temporal lexical tests do not call it
         raise AssertionError(query)
+
+
+class _VectorEmbedding:
+    mode_name = "test"
+    identity_metadata = {"backend_mode": "test", "model": "test-model", "dimensions": 2, "normalize_embeddings": True, "encoding_strategy": "chunk_embedding_text_v1"}
+
+    def embed_query_text(self, query: str) -> EmbeddingResponse:
+        return EmbeddingResponse(vectors=[[1.0, 0.0]], metadata=self.identity_metadata, status="embedded")
 
 
 class TemporalTests(unittest.TestCase):
@@ -112,3 +120,29 @@ class TemporalTests(unittest.TestCase):
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["temporal_index"]["valid_count"], 1)
             self.assertEqual(manifest["temporal_index"]["counts_by_precision"], {"month": 1})
+
+    def test_temporal_vector_admission_preserves_identity_and_relevance_provenance(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata);
+            CREATE TABLE chunk_vectors (chunk_id TEXT PRIMARY KEY, vector_json TEXT, vector_dimensions INTEGER, embedding_provider TEXT, embedding_model TEXT, embedding_identity_json TEXT, embedding_identity_hash TEXT, content_hash TEXT, last_indexed_run_id TEXT, updated_at TEXT);
+            CREATE TABLE temporal_anchors (anchor_id TEXT, note_id TEXT, chunk_id TEXT, anchor_type TEXT, canonical_start TEXT, canonical_end TEXT, precision TEXT, source_field TEXT, original_source_value TEXT, authority TEXT, parsing_status TEXT, conflict_group TEXT, unresolved INTEGER, diagnostic_reason TEXT);
+            """
+        )
+        row = {"chunk_id": "c-vector", "note_id": "n-vector", "source_root_label": "vault", "source_root_path": "", "relative_path": "vector.md", "note_title": "Vector", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "", "chunk_hash": "h-vector"}
+        connection.execute("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", row)
+        identity = canonical_embedding_identity(provider="test", model="test-model", dimensions=2, normalize_embeddings=True)
+        connection.execute("INSERT INTO chunk_vectors VALUES (?,?,?,?,?,?,?,?,?,?)", ("c-vector", "[1.0, 0.0]", 2, "test", "test-model", json.dumps(identity), embedding_identity_hash(identity), "h-vector", "run", "now"))
+        connection.execute("INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("a-vector", "n-vector", None, "journal_entry", "2025-01-01T00:00:00Z", "2025-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2025", "explicit_primary", "valid", None, 0, None))
+        candidates, _, diagnostics = _temporal_candidates(
+            connection=connection, config=self.config, chunk_rows=[row],
+            layer={"mode": "latest", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 5},
+            lexical_queries=[], semantic_queries=["semantic"], literal_terms=[], scope_filters={}, embedding_backend=_VectorEmbedding(),
+        )
+        self.assertEqual([item["chunk_id"] for item in candidates], ["c-vector"])
+        self.assertEqual(candidates[0]["internal_vector_rank"], 1)
+        self.assertEqual(diagnostics["internal_surface_counts"]["vector"], 1)
+        connection.close()
