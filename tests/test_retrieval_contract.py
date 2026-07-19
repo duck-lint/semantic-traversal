@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
-from semantic_traversal.config import load_runtime_config
-from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _vector_candidates
+from semantic_traversal.config import RuntimeConfig, load_runtime_config
+from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _select_retrieval_chunks, _vector_candidates
 
 
 class _FakeEmbeddingBackend:
@@ -54,6 +55,93 @@ class RetrievalContractTests(unittest.TestCase):
         )
         self.assertEqual(info["status"], "completed_no_matches")
         self.assertEqual(candidates, [])
+
+    def test_exact_counts_are_independent_from_returned_candidate_limit(self) -> None:
+        rows = [
+            {"chunk_id": f"c{i}", "note_id": f"n{i // 2}", "note_title": "Idea", "section_label": "Body", "relative_path": "idea.md", "paragraph_text": "alpha alpha"}
+            for i in range(4)
+        ]
+        candidates, _, info = _exact_candidates(
+            rows, [{"term": "alpha", "required": True, "match": "case_sensitive_substring"}],
+            scope_filters={}, limit=1, return_total_count=True, config=self.config,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(info["total_match_count"], 4)
+        self.assertEqual(info["count_unit"], "matching_chunks")
+        self.assertEqual(info["total_occurrence_count"], 8)
+        self.assertEqual(info["matching_note_count"], 2)
+        self.assertEqual(info["term_results"][0]["returned_candidate_count"], 1)
+
+    def test_exact_count_reporting_false_is_explicitly_bounded(self) -> None:
+        rows = [{"chunk_id": "c1", "note_id": "n1", "note_title": "Idea", "section_label": "Body", "relative_path": "idea.md", "paragraph_text": "alpha"}]
+        _, _, info = _exact_candidates(rows, [{"term": "alpha"}], scope_filters={}, limit=1, return_total_count=False, config=self.config)
+        self.assertTrue(info["search_exhaustive"])
+        self.assertFalse(info["return_total_count_requested"])
+        self.assertEqual(info["count_status"], "not_requested")
+        self.assertIsNone(info["total_match_count"])
+        self.assertEqual(info["returned_candidate_count"], 1)
+
+    def test_exact_context_is_bounded_and_metadata_matches_use_their_field(self) -> None:
+        row = {"chunk_id": "c1", "note_id": "n1", "note_title": "prefix alpha suffix", "section_label": "Body", "relative_path": "idea.md", "paragraph_text": "body"}
+        candidates, _, info = _exact_candidates(row and [row], [{"term": "alpha", "match": "case_sensitive_substring"}], scope_filters={}, limit=1, return_total_count=True, config=self.config)
+        self.assertEqual(info["term_results"][0]["total_occurrence_count"], 1)
+        evidence = candidates[0]["exact_match_evidence"][0]
+        self.assertEqual(evidence["matched_fields"], ["note_title"])
+        self.assertEqual(evidence["representative_context"]["field"], "note_title")
+        self.assertEqual(evidence["representative_context"]["excerpt"], "prefix alpha suffix")
+
+    def test_exact_context_zero_is_deterministic(self) -> None:
+        raw = deepcopy(self.config.raw)
+        raw["retrieval"]["exact"]["context_chars"] = 0
+        config = RuntimeConfig(repo_root=self.config.repo_root, config_path=self.config.config_path, raw=raw)
+        rows = [{"chunk_id": "c1", "note_id": "n1", "note_title": "Idea", "section_label": "Body", "relative_path": "idea.md", "paragraph_text": "before alpha after"}]
+        candidates, _, _ = _exact_candidates(rows, [{"term": "alpha"}], scope_filters={}, limit=1, return_total_count=True, config=config)
+        self.assertEqual(candidates[0]["exact_match_evidence"][0]["representative_context"]["excerpt"], "alpha")
+
+    def test_exact_context_offsets_remain_in_original_unicode_field(self) -> None:
+        rows = [{"chunk_id": "c1", "note_id": "n1", "note_title": "Idea", "section_label": "Body", "relative_path": "idea.md", "paragraph_text": "naïve αlpha"}]
+        candidates, _, _ = _exact_candidates(rows, [{"term": "ΑLPHA", "match": "case_insensitive_substring"}], scope_filters={}, limit=1, return_total_count=True, config=self.config)
+        context = candidates[0]["exact_match_evidence"][0]["representative_context"]
+        self.assertEqual(context["match_start"], rows[0]["paragraph_text"].index("αlpha"))
+        matched = rows[0]["paragraph_text"][context["match_start"]:context["match_end"]]
+        self.assertEqual(matched.casefold(), "αlpha".casefold())
+
+    def test_required_exact_term_preserves_exact_provenance_through_merge_and_selection(self) -> None:
+        exact = [{"chunk_id": "shared", "chunk_hash": "h", "selection_source": "exact", "source_layers": ["exact"], "score": 5, "exact_term_provenance": ["alpha"], "exact_match_evidence": [{"term": "alpha"}]}]
+        lexical = [{"chunk_id": "shared", "chunk_hash": "h", "selection_source": "lexical", "score": 6}]
+        merged = _merge_candidates(lexical, [], [], config=self.config, exact_candidates=exact)
+        selected = _select_retrieval_chunks(merged_candidates=merged, max_chunks=1, required_exact_terms={"alpha"})
+        self.assertEqual(selected[0]["selection_source"], "lexical")
+        self.assertEqual(selected[0]["source_layers"], ["exact", "lexical"])
+        self.assertEqual(selected[0]["exact_term_provenance"], ["alpha"])
+        self.assertEqual(selected[0]["exact_match_evidence"], [{"term": "alpha"}])
+
+    def test_required_absent_exact_term_is_completed_without_positive_evidence_requirement(self) -> None:
+        rows = [{"chunk_id": "c1", "note_id": "n1", "note_title": "Idea", "section_label": "Body", "relative_path": "idea.md", "paragraph_text": "other"}]
+        _, _, info = _exact_candidates(rows, [{"term": "missing", "required": True}], scope_filters={}, limit=1, return_total_count=True, config=self.config)
+        self.assertEqual(info["status"], "completed_no_matches")
+        self.assertTrue(info["term_results"][0]["adequate_contribution"])
+
+    def test_required_positive_term_lost_to_selection_blocks_with_inadequate_diagnostic(self) -> None:
+        manifest = {
+            "bound_retrieval_plan": {
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+                "semantic_queries": ["alpha"], "graph_seeds": [],
+            },
+            "layer_manifests": {"exact": {"status": "completed_with_matches", "term_results": [{
+                "term": "alpha", "required": True, "status": "completed_with_matches", "adequate_contribution": False,
+            }]}},
+            "candidate_counts": {"exact": 1, "lexical": 0, "vector": 0, "graph": 0},
+            "selection_notes": [],
+            "coverage": {"exact_status": "completed_with_matches", "negative_claims_allowed": False},
+        }
+        report = _coverage_report(
+            semantic_compiler_packet={"raw_user_input": "alpha", "intent": "search", "query": "alpha", "entities": [], "relations": [], "resolved_referents": [], "planner_retrieval_plan": {}, "limitations": []},
+            semantic_compiler_status="parsed", semantic_compiler_diagnostic={}, traversal_manifest=manifest,
+            retrieval_packet={"matched_chunk_count": 1},
+        )
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn("inadequate selected contribution", " ".join(report["blocking_reasons"]))
 
     def test_vector_surface_executes_each_semantic_query_and_retains_provenance(self) -> None:
         connection = sqlite3.connect(":memory:")

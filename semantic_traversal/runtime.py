@@ -713,76 +713,165 @@ def _exact_candidates(
     *,
     scope_filters: dict[str, Any],
     limit: int,
+    return_total_count: bool = False,
     config: RuntimeConfig,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    fields = ("note_title", "section_label", "relative_path", "paragraph_text")
     notes: list[str] = []
-    term_entries = [
-        {
-            "term": str(entry.get("term") or "").strip(),
-            "match": str(entry.get("match") or "case_insensitive_substring").strip(),
-        }
-        for entry in literal_terms
-        if isinstance(entry, dict) and str(entry.get("term") or "").strip()
-    ]
+    term_entries = []
+    for entry in literal_terms:
+        if not isinstance(entry, dict):
+            continue
+        term = str(entry.get("term") or "").strip()
+        if term:
+            term_entries.append({
+                "term": term,
+                "match": str(entry.get("match") or "case_insensitive_substring").strip(),
+                "required": bool(entry.get("required")),
+            })
     terms = [entry["term"] for entry in term_entries]
+    base_info = {
+        "operator": "exact_chunk_search",
+        "literal_terms": terms,
+        "scope": scope_filters,
+        "search_exhaustive": False,
+        "return_total_count_requested": bool(return_total_count),
+        "count_status": "not_requested" if not return_total_count else "completed",
+        "count_unit": "matching_chunks",
+        "total_match_count": None if not return_total_count else 0,
+        "total_occurrence_count": None if not return_total_count else 0,
+        "matching_note_count": None if not return_total_count else 0,
+        "returned_candidate_count": 0,
+        "returned_count": 0,
+        "term_results": [],
+    }
     if not terms:
-        return [], ["exact search skipped: no literal terms"], {
-            "operator": "exact_chunk_search",
-            "status": "skipped_no_terms",
-            "literal_terms": [],
-            "scope": scope_filters,
-            "total_match_count": 0,
-            "matching_note_count": 0,
-            "returned_count": 0,
+        base_info.update(status="skipped_no_terms", search_exhaustive=False, count_status="not_applicable")
+        return [], ["exact search skipped: no literal terms"], base_info
+
+    def occurrences(value: str, term: str, match_mode: str) -> list[tuple[int, int]]:
+        if match_mode not in {"case_sensitive_substring", "case_insensitive_substring"}:
+            return []
+        if not term:
+            return []
+        if match_mode == "case_sensitive_substring":
+            matcher = re.compile(re.escape(term))
+        else:
+            # Search the original text so regex offsets remain offsets into
+            # the canonical field even when Unicode case handling expands a
+            # code point during comparison.
+            matcher = re.compile(re.escape(term), re.IGNORECASE)
+        found: list[tuple[int, int]] = []
+        # Count deterministic non-overlapping occurrences. This mirrors the
+        # first-match context contract and avoids double-counting overlaps.
+        for match in matcher.finditer(value):
+            found.append((match.start(), match.end()))
+        return found
+
+    def context(value: str, start: int, end: int) -> dict[str, Any]:
+        radius = max(0, int(config.retrieval_exact_context_chars))
+        return {
+            "field": "",
+            "match_start": start,
+            "match_end": end,
+            "excerpt": value[max(0, start - radius): min(len(value), end + radius)],
         }
 
     scoped_rows = _scoped_chunk_rows(chunk_rows, scope_filters)
     candidates: list[dict[str, Any]] = []
+    per_term: dict[str, dict[str, Any]] = {
+        entry["term"]: {
+            "term": entry["term"], "required": entry["required"], "match": entry["match"],
+            "status": "failed" if entry["match"] not in {"case_sensitive_substring", "case_insensitive_substring"} else "completed_no_matches",
+            "matching_chunk_count": 0, "matching_note_count": 0, "total_occurrence_count": 0,
+            "returned_candidate_count": 0, "selected_exact_chunk_count": 0, "selected_chunk_ids": [],
+            "adequate_contribution": not entry["required"],
+        }
+        for entry in term_entries
+    }
     matching_note_ids: set[str] = set()
     total_match_count = 0
+    total_occurrence_count = 0
     for row in scoped_rows:
-        haystack = "\n".join(
-            str(row.get(field) or "")
-            for field in ("note_title", "section_label", "relative_path", "paragraph_text")
-        )
-        matched_terms = [
-            entry["term"]
-            for entry in term_entries
-            if (
-                entry["term"] in haystack
-                if entry["match"] == "case_sensitive_substring"
-                else entry["term"].lower() in haystack.lower()
-            )
-        ]
+        evidence: list[dict[str, Any]] = []
+        matched_terms: list[str] = []
+        for entry in term_entries:
+            term = entry["term"]
+            term_occurrences: list[tuple[str, int, int]] = []
+            for field in fields:
+                value = str(row.get(field) or "")
+                for start, end in occurrences(value, term, entry["match"]):
+                    term_occurrences.append((field, start, end))
+            if not term_occurrences:
+                continue
+            matched_terms.append(term)
+            result = per_term[term]
+            result["status"] = "completed_with_matches"
+            result["matching_chunk_count"] += 1
+            result["matching_note_count"] = None
+            result["total_occurrence_count"] += len(term_occurrences)
+            total_occurrence_count += len(term_occurrences)
+            for field, start, end in term_occurrences:
+                representative = context(str(row.get(field) or ""), start, end)
+                representative["field"] = field
+                evidence.append({
+                    "term": term,
+                    "match": entry["match"],
+                    "matched_fields": [field],
+                    "occurrence_count_in_chunk": len([item for item in term_occurrences if item[0] == field]),
+                    "representative_context": representative,
+                })
+                break
         if not matched_terms:
             continue
         total_match_count += 1
         matching_note_ids.add(str(row.get("note_id") or ""))
-        if len(candidates) >= limit:
-            continue
-        candidates.append(
-            {
+        for term in matched_terms:
+            per_term[term]["matching_note_count"] = None
+        if len(candidates) < max(0, limit):
+            candidates.append({
                 **row,
                 "selection_reason": f"exact literal match: {', '.join(matched_terms)}",
                 "score": len(matched_terms) + float(config.retrieval_scoring["exact_bonus"]),
                 "selection_source": "exact",
                 "match_reason": f"literal term {', '.join(matched_terms)}",
                 "scope_match": scope_filters,
-            }
-        )
-    if candidates:
-        notes.append(f"exact search matched {total_match_count} chunk(s); returned {len(candidates)}")
-    else:
-        notes.append("exact search produced no matches")
-    return candidates, notes, {
-        "operator": "exact_chunk_search",
-        "status": "completed_with_matches" if total_match_count else "completed_no_matches",
-        "literal_terms": terms,
-        "scope": scope_filters,
-        "total_match_count": total_match_count,
-        "matching_note_count": len([note_id for note_id in matching_note_ids if note_id]),
+                "exact_term_provenance": list(matched_terms),
+                "exact_match_evidence": evidence,
+            })
+            for term in matched_terms:
+                per_term[term]["returned_candidate_count"] += 1
+
+    for term, result in per_term.items():
+        result["matching_note_count"] = len({str(row.get("note_id") or "") for row in scoped_rows if any(
+            occurrences(str(row.get(field) or ""), term, next(entry["match"] for entry in term_entries if entry["term"] == term))
+            for field in fields
+        )})
+    for result in per_term.values():
+        if result["status"] == "completed_no_matches":
+            result["adequate_contribution"] = True
+        if not return_total_count:
+            # Status still comes from the exhaustive scan, but exhaustive
+            # count reporting was not requested and must not leak as a total.
+            result["matching_chunk_count"] = None
+            result["matching_note_count"] = None
+            result["total_occurrence_count"] = None
+    base_info.update({
+        "status": "failed" if any(result["status"] == "failed" for result in per_term.values()) else ("completed_with_matches" if total_match_count else "completed_no_matches"),
+        "search_exhaustive": True,
+        "count_status": "completed" if return_total_count else "not_requested",
+        "total_match_count": total_match_count if return_total_count else None,
+        "total_occurrence_count": total_occurrence_count if return_total_count else None,
+        "matching_note_count": len([note_id for note_id in matching_note_ids if note_id]) if return_total_count else None,
+        "returned_candidate_count": len(candidates),
         "returned_count": len(candidates),
-    }
+        "term_results": list(per_term.values()),
+    })
+    notes.append(
+        f"exact search matched {total_match_count} chunk(s); returned {len(candidates)}"
+        if total_match_count else "exact search produced no matches"
+    )
+    return candidates, notes, base_info
 
 
 def _graph_seed_values(
@@ -1314,6 +1403,15 @@ def _merge_candidates(
     merged: dict[str, dict[str, Any]] = {}
     source_priority = {str(key): int(value) for key, value in config.retrieval_scoring["source_priority"].items()}
 
+    def merge_list(existing: dict[str, Any], candidate: dict[str, Any], field: str) -> None:
+        values = [*existing.get(field, []), *candidate.get(field, [])]
+        if values:
+            unique: list[Any] = []
+            for value in values:
+                if value not in unique:
+                    unique.append(value)
+            existing[field] = unique
+
     def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
         existing = merged.get(chunk_id)
@@ -1324,6 +1422,7 @@ def _merge_candidates(
             merged[chunk_id]["sources"] = list(candidate_layers)
             merged[chunk_id]["source_layers"] = list(candidate_layers)
             merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys(_coerce_string_list(candidate.get("semantic_query_provenance"))))
+            merged[chunk_id]["exact_term_provenance"] = list(dict.fromkeys(_coerce_string_list(candidate.get("exact_term_provenance"))))
             return
         existing_queries = _coerce_string_list(existing.get("semantic_query_provenance"))
         candidate_queries = _coerce_string_list(candidate.get("semantic_query_provenance"))
@@ -1332,6 +1431,8 @@ def _merge_candidates(
         existing["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
         existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
         existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
+        merge_list(existing, candidate, "exact_term_provenance")
+        merge_list(existing, candidate, "exact_match_evidence")
         if existing_graph_provenance or candidate_graph_provenance:
             existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
         if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
@@ -1349,6 +1450,12 @@ def _merge_candidates(
             merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
             merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
             merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
+            merged[chunk_id]["exact_term_provenance"] = list(dict.fromkeys([*_coerce_string_list(existing.get("exact_term_provenance")), *_coerce_string_list(candidate.get("exact_term_provenance"))]))
+            evidence = [*existing.get("exact_match_evidence", []), *candidate.get("exact_match_evidence", [])]
+            merged[chunk_id]["exact_match_evidence"] = []
+            for item in evidence:
+                if item not in merged[chunk_id]["exact_match_evidence"]:
+                    merged[chunk_id]["exact_match_evidence"].append(item)
         else:
             existing["score"] = max(existing_score, candidate_score)
             existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
@@ -1382,6 +1489,7 @@ def _select_retrieval_chunks(
     merged_candidates: list[dict[str, Any]],
     max_chunks: int,
     selection_policy: dict[str, Any] | None = None,
+    required_exact_terms: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     seen_content_hashes: set[str] = set()
@@ -1408,6 +1516,27 @@ def _select_retrieval_chunks(
         return True
 
     budgets = selection_policy.get("budgets") if isinstance(selection_policy, dict) else None
+    # Reserve exact-backed representatives only for required terms with
+    # positive matches. The configured exact budget and overall packet limit
+    # remain hard bounds; inability to reserve is diagnosed after selection.
+    required_exact_terms = set(required_exact_terms or set())
+    exact_budget = None
+    if isinstance(budgets, dict):
+        try:
+            exact_budget = max(0, int(budgets.get("exact", 0)))
+        except (TypeError, ValueError):
+            exact_budget = 0
+    reserved_terms: set[str] = set()
+    if required_exact_terms and (exact_budget is None or exact_budget > 0):
+        for candidate in merged_candidates:
+            candidate_terms = set(_coerce_string_list(candidate.get("exact_term_provenance")))
+            if "exact" not in _candidate_source_layers(candidate) or not candidate_terms.intersection(required_exact_terms - reserved_terms):
+                continue
+            if exact_budget is not None and sum("exact" in _candidate_source_layers(item) for item in selected) >= exact_budget:
+                break
+            if absorb(candidate):
+                reserved_terms.update(candidate_terms.intersection(required_exact_terms))
+
     if isinstance(budgets, dict):
         for source in ("exact", "lexical", "vector", "graph"):
             try:
@@ -1478,9 +1607,16 @@ def _semantic_traversal(
         "status": "not_requested",
         "literal_terms": [],
         "scope": scope_filters,
-        "total_match_count": 0,
-        "matching_note_count": 0,
+        "search_exhaustive": False,
+        "return_total_count_requested": False,
+        "count_status": "not_requested",
+        "count_unit": "matching_chunks",
+        "total_match_count": None,
+        "total_occurrence_count": None,
+        "matching_note_count": None,
+        "returned_candidate_count": 0,
         "returned_count": 0,
+        "term_results": [],
     }
     if exact_layer is not None:
         execution["layers_executed"].append("exact_chunk_search")
@@ -1489,6 +1625,7 @@ def _semantic_traversal(
             literal_terms,
             scope_filters=scope_filters,
             limit=_layer_limit(exact_layer, config.retrieval_exact_max_matches),
+            return_total_count=bool(exact_layer.get("return_total_count")),
             config=config,
         )
     else:
@@ -1600,17 +1737,52 @@ def _semantic_traversal(
     )
 
     merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates)
+    required_exact_terms = {
+        str(result.get("term"))
+        for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
+        if isinstance(result, dict) and bool(result.get("required")) and result.get("status") == "completed_with_matches"
+    }
     selected_candidates = _select_retrieval_chunks(
         merged_candidates=merged_candidates,
         max_chunks=int(bound_retrieval_plan.get("selection_policy", {}).get("max_chunks") or config.max_retrieval_chunks),
         selection_policy=bound_retrieval_plan.get("selection_policy") if isinstance(bound_retrieval_plan.get("selection_policy"), dict) else None,
+        required_exact_terms=required_exact_terms,
     )
     selected_counts = _count_selected_by_layer(selected_candidates)
     exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
     exact_search_performed = exact_layer is not None
-    total_exact_matches = int(exact_info.get("total_match_count") or 0)
-    matching_note_count = int(exact_info.get("matching_note_count") or 0)
-    claim_policy = bound_retrieval_plan.get("claim_policy") if isinstance(bound_retrieval_plan.get("claim_policy"), dict) else {}
+    total_exact_matches = exact_info.get("total_match_count")
+    matching_note_count = exact_info.get("matching_note_count")
+    for term_result in exact_info.get("term_results", []) if isinstance(exact_info.get("term_results"), list) else []:
+        if not isinstance(term_result, dict):
+            continue
+        selected_for_term = [
+            candidate for candidate in selected_candidates
+            if "exact" in _candidate_source_layers(candidate)
+            and str(term_result.get("term")) in _coerce_string_list(candidate.get("exact_term_provenance"))
+        ]
+        term_result["selected_exact_chunk_count"] = len(selected_for_term)
+        term_result["selected_chunk_ids"] = [str(candidate.get("chunk_id") or "") for candidate in selected_for_term]
+        term_result["adequate_contribution"] = (
+            term_result.get("status") == "completed_no_matches"
+            or not bool(term_result.get("required"))
+            or len(selected_for_term) > 0
+        )
+    runtime_claim_policy = config.retrieval_planner_defaults.get("claim_policy", {})
+    negative_policy_requires_exact = runtime_claim_policy.get("negative_claims_require_exact_layer")
+    negative_policy_supported = isinstance(negative_policy_requires_exact, bool) and negative_policy_requires_exact
+    all_terms_completed = all(
+        isinstance(result, dict) and result.get("status") in {"completed_no_matches", "completed_with_matches"}
+        for result in exact_info.get("term_results", [])
+    ) if exact_info.get("term_results") else False
+    no_matches = exact_info.get("status") == "completed_no_matches"
+    negative_allowed = bool(
+        negative_policy_supported
+        and no_matches
+        and bool(exact_info.get("search_exhaustive"))
+        and all_terms_completed
+        and not any(result.get("status") == "completed_with_matches" for result in exact_info.get("term_results", []) if isinstance(result, dict))
+    )
     coverage = {
         "exact_search_performed": exact_search_performed,
         "exact_status": str(exact_info.get("status") or ("completed_with_matches" if total_exact_matches else "completed_no_matches" if exact_search_performed else "not_requested")),
@@ -1618,12 +1790,23 @@ def _semantic_traversal(
         "literal_terms": [str(entry.get("term") or "") for entry in literal_terms if str(entry.get("term") or "")],
         "total_exact_matches": total_exact_matches,
         "matching_note_count": matching_note_count,
-        "coverage_claims_allowed": bool(claim_policy.get("coverage_claims_allowed")) and exact_info.get("status") in {"completed_no_matches", "completed_with_matches"},
-        "negative_claims_allowed": exact_info.get("status") == "completed_no_matches",
+        "total_occurrence_count": exact_info.get("total_occurrence_count"),
+        "count_status": exact_info.get("count_status"),
+        "coverage_claims_allowed": bool(exact_info.get("search_exhaustive")) and exact_info.get("status") in {"completed_no_matches", "completed_with_matches"},
+        "negative_claims_allowed": negative_allowed,
+        "negative_claims_require_exact_layer": negative_policy_requires_exact,
+        "negative_claim_policy_diagnostic": None if negative_policy_supported else "runtime YAML negative-claim policy is unsupported or unavailable; permission remains false",
+        "required_exact_terms": sorted(required_exact_terms),
+        "inadequate_required_exact_terms": sorted(
+            str(result.get("term")) for result in exact_info.get("term_results", [])
+            if isinstance(result, dict) and bool(result.get("required")) and result.get("status") == "completed_with_matches" and not result.get("adequate_contribution")
+        ),
     }
     limits: list[str] = [f"Only {config.max_retrieval_chunks} chunk(s) may be selected for frontier synthesis."]
-    if exact_search_performed:
-        limits.append(f"Exact layer found {total_exact_matches} match(es) across {matching_note_count} note(s); synthesis uses a representative subset.")
+    if exact_search_performed and exact_info.get("return_total_count_requested"):
+        limits.append(f"Exact layer found {total_exact_matches} matching chunk(s) across {matching_note_count} note(s); synthesis uses a representative subset.")
+    elif exact_search_performed:
+        limits.append(f"Exact layer returned {exact_info.get('returned_candidate_count', 0)} candidate(s); exhaustive total reporting was not requested.")
     if not exact_search_performed:
         limits.append("No corpus-wide positive or negative exact-match claim is allowed because exact search did not run.")
 
@@ -1669,6 +1852,7 @@ def _semantic_traversal(
                 "chunk_hash": str(candidate["chunk_hash"]),
                 "source_layers": _candidate_source_layers(candidate),
                 "selection_source": str(candidate.get("selection_source") or ""),
+                "exact_match_evidence": candidate.get("exact_match_evidence", []),
                 "semantic_query_provenance": _coerce_string_list(candidate.get("semantic_query_provenance")),
                 "graph_direction": candidate.get("graph_direction"),
                 "graph_provenance": candidate.get("graph_provenance", []),
@@ -1719,8 +1903,26 @@ def _coverage_report(
                 required_layer_failures.append(f"required exact layer is {exact_status}")
         elif source and int(candidate_counts.get(source) or 0) == 0:
             required_layer_failures.append(f"required {source} layer produced no candidates")
+    exact_manifest = layer_manifests.get("exact") if isinstance(layer_manifests.get("exact"), dict) else {}
+    for term_result in exact_manifest.get("term_results", []) if isinstance(exact_manifest.get("term_results"), list) else []:
+        if not isinstance(term_result, dict) or not bool(term_result.get("required")):
+            continue
+        status = str(term_result.get("status") or "failed")
+        if status not in {"completed_no_matches", "completed_with_matches"}:
+            required_layer_failures.append(f"required exact literal term {term_result.get('term')!r} was not executed adequately: {status}")
+        elif status == "completed_with_matches" and not bool(term_result.get("adequate_contribution")):
+            required_layer_failures.append(f"required exact literal term {term_result.get('term')!r} has inadequate selected contribution")
     blocking_reasons.extend(required_layer_failures)
-    if selected_count == 0 and (semantic_queries or graph_seeds):
+    exact_absence_is_valid = bool(
+        isinstance(traversal_manifest.get("coverage"), dict)
+        and traversal_manifest["coverage"].get("exact_status") == "completed_no_matches"
+        and traversal_manifest["coverage"].get("negative_claims_allowed") is not None
+        and all(
+            isinstance(result, dict) and result.get("status") == "completed_no_matches"
+            for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
+        )
+    )
+    if selected_count == 0 and (semantic_queries or graph_seeds) and not exact_absence_is_valid:
         blocking_reasons.append("retrieval required but no chunks were selected")
     selection_notes = traversal_manifest.get("selection_notes") if isinstance(traversal_manifest, dict) else []
     if isinstance(selection_notes, list) and any("ingestion database unavailable" in str(note).lower() for note in selection_notes):

@@ -423,8 +423,9 @@ def _coerce_literal_terms(value: Any, fallback: list[dict[str, Any]]) -> list[di
         if isinstance(entry, dict):
             term = str(entry.get("term") or entry.get("value") or "").strip()
             match = str(entry.get("match") or "case_insensitive_substring").strip() or "case_insensitive_substring"
-            if match not in {"case_insensitive_substring", "case_sensitive_substring"}:
-                match = "case_insensitive_substring"
+            # Preserve unsupported modes for runtime diagnostics. Coercing an
+            # accepted field here would make the compiler request look
+            # executed when the requested behavior was never run.
             required = bool(entry.get("required"))
         else:
             term = str(entry).strip()

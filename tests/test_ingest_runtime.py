@@ -2236,10 +2236,13 @@ class ThesisRuntimeTests(unittest.TestCase):
             "section_label",
             "paragraph_text",
             "chunk_hash",
+            "source_layers",
             "selection_source",
             "selection_reason",
         ):
             self.assertIn(field, chunk)
+        self.assertIsInstance(chunk["source_layers"], list)
+        self.assertIsInstance(chunk["selection_source"], str)
 
     def test_approved_coverage_calls_llm(self) -> None:
         data_root = _prepare_data_root()

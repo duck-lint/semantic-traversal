@@ -24,7 +24,7 @@ The current automated suite proves contracts on isolated fixtures, but cannot es
 
 ## Current implementation status
 
-Automated regression after the serialization and Seam 2A changes: 96 tests passing; compileall and diff check passing. Python production changes are uncommitted. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
+Automated regression after the serialization, Seam 2A, and Seam 2B changes: 104 tests passing; compileall and diff check passing. Python production changes are uncommitted. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
 
 The configured vault index was copied to a disposable workspace index before UAT. The active index was not mutated.
 
@@ -58,3 +58,18 @@ The three prior repairs are now corpus-demonstrated: provenance and graph depth 
 ## UAT decision
 
 Do not archive implementation-07 until these checks either pass with artifacts or produce explicit bounded follow-up seams.
+
+## Seam 2B exact-search UAT (2026-07-18)
+
+Root causes were bounded to the exact seam: the executor treated the candidate cap as the total-count boundary, flattened all terms into one chunk-level match count, discarded the requested literal `required` flag during adequacy checks, had no field-aware context materialization, and derived absence permission from aggregate status rather than exhaustive execution plus runtime policy. Required exact evidence also had no reservation/adequacy check after bounded selection.
+
+The configured 229 MB SQLite index was copied to a disposable workspace index; the active index was not modified. Controlled compiler packets were used so exact runtime behavior was isolated from compiler and synthesis behavior. Synthesis was intentionally disabled; resulting `LLM backend unavailable` blocking is not a retrieval failure.
+
+- Positive `semantic geometry`, case-insensitive, exhaustive count requested: `completed_with_matches`; 77 matching chunks, 16 matching notes, 100 non-overlapping substring occurrences, 5 returned exact candidates, and 5 selected exact-backed chunks for the required term. Context evidence retained the actual matching field, including paragraph, section-label, and relative-path matches. Repeated runs had identical status, selected IDs, evidence, and ordering.
+- Negative unique phrase: `completed_no_matches`; exhaustive scoped scan, zero chunks/notes/occurrences/candidates, no selected evidence required, and `negative_claims_allowed: true` under the runtime YAML exact-layer policy.
+- Mixed required terms (one present, one absent): independent per-term `completed_with_matches` and `completed_no_matches` results; the present term had adequate selected contribution, the absent term had valid absence evidence, and global negative permission remained false.
+- Count control: `return_total_count: true` exposed exhaustive totals independently of a five-candidate return bound. `false` exposed `count_status: not_requested` and null exhaustive totals while retaining returned-candidate diagnostics.
+- Match mode: case-sensitive lower-case phrase produced 3 chunks/3 occurrences; case-insensitive produced 77 chunks/100 occurrences, demonstrating the requested mode was executed rather than coerced.
+- Exact provenance: selected chunks retained `selection_source` separately from canonical `source_layers`; exact evidence survived merge/selection fixture tests. The selected packet serializer now explicitly includes `selection_source` alongside `source_layers`.
+
+Seam 2B is complete. Remaining open seams are non-exact requiredness (Seam 3), compiler/schema emission of preferred scope, inbound/both graph corpus UAT, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness. The preferred-scope ranking introduced in Seam 2A remains a narrow runtime behavior to reconcile later with Seam 5; compiler emission of preferred scope remains open for Seam 8.

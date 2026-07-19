@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 2A hard/preferred scope contract and corpus UAT evidence
-- Next action: operator UAT against a complete disposable corpus or explicitly bounded representative corpus
+- Current work: Seam 2B exact-search status and coverage contract.
+- Next action: finish and verify the remaining exact-search count, context, and literal-term requiredness behavior.
 
 ## Completed Repair Status
 
@@ -23,6 +23,7 @@
 | 2026-07-18 | Coordinator | Added parsed scope algebra, required exact blocking, YAML-owned FTS5 modes/index, and configurable graph direction/provenance | Full suite passes with 86 tests; compileall and diff check pass; prompts unchanged; YAML hash changed for lexical mode and graph direction | Request corpus-level UAT |
 | 2026-07-18 | Coordinator | Repaired selected multi-surface provenance, runtime-owned compiler graph depth, and fair graph candidate materialization; removed duplicate `graph_traversal.hop_limit` YAML authority | Changed `semantic_traversal/runtime.py`, `semantic_traversal/retrieval_resolver.py`, `semantic_traversal/config.py`, `semantic_traversal.runtime.yaml`, `tests/test_ingest_runtime.py`, and `tests/test_runtime_config.py`; 93-test suite, compileall, and diff check pass; prompt hashes unchanged | Keep Seam 5 fusion/selection open; corpus UAT not run against active index |
 | 2026-07-18 | Coordinator | Added explicit hard-versus-preferred scope binding and deterministic preferred-scope ordering; added selected-packet `selection_source` serialization | Runtime/YAML scope policy distinguishes exact hard scope from semantic preferred scope; 96-test suite and disposable corpus UAT pass; prompt text unchanged | Actual compiler genealogy run emitted concept-like scope requests but no journal preference; keep compiler/schema seam open |
+| 2026-07-18 | Coordinator | Completed Seam 2B exact contract and retained `selection_source` in selected packet serialization | Required literal-term coverage, independent total counts, bounded YAML context evidence, Unicode-safe per-term diagnostics, exact evidence preservation, and runtime-owned absence permission; 104-test suite, compileall, diff check, and disposable corpus UAT pass; prompt/YAML hashes preserved | Advance to Seam 3 only; keep compiler preferred-scope emission and general fusion open |
 
 ## Work Status
 
@@ -32,7 +33,7 @@
 | Seam 1A: ingest/index integrity | Coordinator | proposed | pending | Depends on Seam 0 |
 | Seam 1B: plugin/tooling hygiene | Coordinator | proposed | pending | Independent, only if reproducible |
 | Seam 2A: scope model | Coordinator | reviewing | Hard/preferred fixture tests, deterministic repeated run, disposable corpus controlled-scope UAT; full suite 96 pass | Runtime contract is implemented; compiler emission of a journal preference remains open |
-| Seam 2B: exact-search contract | Coordinator | active | 3 focused tests; full suite 83 pass | Status and match-mode slice landed; count/context/requiredness still open |
+| Seam 2B: exact-search contract | Coordinator | complete | 14 focused retrieval-contract tests; full suite 104 pass; disposable corpus UAT | Required literal terms, count units, `return_total_count`, bounded context, exact evidence preservation, and conservative absence permission are implemented |
 | Seam 3: runtime authority/requiredness | Coordinator | reviewing | Required exact failure blocks; full suite 86 pass | Non-exact required-layer diagnostics need UAT |
 | Seam 4A: graph executor | Coordinator | reviewing | Depth, fairness, provenance fixtures; corpus UAT graph pool 24 with multiple traversed notes; full suite 96 pass | Inbound/both corpus UAT pending |
 | Seam 4B: lexical FTS5 executor | Coordinator | reviewing | Five FTS5 mode test; ingest/runtime lexical tests; full suite 86 pass | Full-corpus freshness and packet-size UAT pending |
@@ -48,9 +49,9 @@
 | Blocker | Boundary | Owner Agent | Resolution |
 | --- | --- | --- | --- |
 | Deferred delegated-agent inventory was not inspected before implementation | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; the completed work was therefore coordinator-executed. |
-| Corpus-level UAT is required | evidence boundary | Operator/user | Run disposable complete-corpus checks in implementation-07-UAT-request.md | Do not archive until artifacts or bounded follow-up seams are recorded |
+| Final corpus-wide UAT remains required | evidence boundary | Operator/user | Exact UAT is recorded; later inbound/both, vector, temporal, and final synthesis evidence remain open | Do not archive until the remaining bundle gates are recorded |
 | Compiler did not emit journal preference for genealogy query | compiler/schema boundary | Coordinator | Actual compiler emitted `idea_origin` and `precursor_concepts`; runtime did not infer journal scope; controlled supported-scope UAT separately demonstrated the runtime contract. | Keep Seam 8 open; do not hardcode query-specific scope inference |
 
 ## Closeout Note
 
-- When this bundle completes, move it from `active/` to `archive/`.
+- Seam 2B is complete for this slice. When this bundle completes, move it from `active/` to `archive/`.
