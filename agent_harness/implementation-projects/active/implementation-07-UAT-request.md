@@ -227,3 +227,52 @@ until genuine temporal retrieval exists. The selector may fill the configured
 sparse stopping is introduced, and the configured value is not inherently 24.
 Reassess only if later UAT shows noise, reasoning degradation, or material
 context cost.
+
+## Seam 6A temporal retrieval UAT (2026-07-19)
+
+The accepted ADR is
+`implementation-07-seam-6a-temporal-retrieval-ADR.md`. The implementation
+adds a normalized `temporal_anchors` projection and a controlled
+`temporal_retrieve` operator without changing compiler or frontier prompts.
+
+Disposable configured-corpus ingest used a temporary staged data root and an
+unavailable embedding backend; the active index was not overwritten. It
+recorded 1,083 notes, 14,608 chunks, and 506 valid anchors. All anchors were
+`journal_entry`, `explicit_primary`, and day precision; invalid, ambiguous,
+and conflict counts were zero. Projection validation passed and activation
+completed atomically.
+
+For the controlled earliest-relevant `semantic geometry` comparison, ordinary
+lexical retrieval returned 50 candidates from 5 notes after its cap. Direct
+temporal relevance admission scanned the full FTS projection, then applied
+the configured journal-entry anchor filter and returned 24 candidates from 19
+notes. All 24 temporal IDs were outside the ordinary lexical top-50 set,
+demonstrating recovery beyond ordinary executor truncation rather than date
+sorting of the selected packet. Repeated temporal runs were deterministic with
+candidate-ID hash
+`f9a0c656fdb14ceda7dd2cb8c9e26f02837f77b3c577a0cc04feb848ce12ec71`.
+
+A controlled runtime plan with required `temporal_retrieve` completed with 24
+candidates and 24 selected temporal contributions. The packet retained
+temporal source provenance, anchor IDs, intervals, precision, authority,
+relation status, and the fifth-surface fusion order. Synthetic tests covered
+latest, before, after, between, vector identity/threshold admission, and
+required temporal contribution behavior through the existing runtime path.
+
+The corpus did not provide a trustworthy Gärdenfors encounter/read anchor in
+the configured mapping. It is therefore not described as a historical origin
+or influence based on publication order. Earlier anchored journal evidence,
+later conceptual evidence, and undated structural evidence remain distinct;
+causal influence is unresolved. Temporal retrieval independently recovered
+anchored evidence, so the deferred preferred-scope reservoir issue remains
+deferred. The configured max-fill observation remains open; no sparse stopping
+was added.
+
+Local verification for this UAT: temporal focused suite `5` passed; complete
+Python suite `147` passed; compileall and `git diff --check` passed. Prompt
+hashes remained compiler
+`21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4` and
+frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.
+YAML changed from `09d7d5ea139d66b98ce56e17a469b70fbdbbbd3c4bd4258ea5f9217eb6c15052`
+to `854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`.
+No private corpus text was committed.

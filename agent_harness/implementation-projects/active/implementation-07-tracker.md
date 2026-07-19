@@ -123,6 +123,64 @@ remain; no sparse stopping is introduced, and the configured value is not
 inherently 24. Reassess only if later UAT demonstrates noise, reasoning
 degradation, or material context cost.
 
+## Seam 6A typed temporal retrieval (2026-07-19)
+
+Accepted contract: `implementation-07-seam-6a-temporal-retrieval-ADR.md`,
+committed as `ab4dea7`. Typed anchor persistence was implemented in
+`7840e7e`; bounded temporal retrieval and fifth-surface ordinal fusion in
+`4d7ce30`; persistence/vector and relation-mode tests in `331a032` and
+`6eb7515`/`2d98c78`.
+
+Runtime YAML now owns temporal enablement, default mode `earliest`, maximum
+candidate count `100`, default limit `24`, allowed modes, default anchor types,
+allowed authorities, conflict inclusion, and explicit field mappings. The
+checked-in corpus mapping is only `journal_entry_date -> journal_entry /
+explicit_primary`; no filesystem timestamps or guessed generic date fields
+are used. Year/month/day/datetime precision becomes explicit bounded intervals.
+
+The staged temporal projection is `temporal_anchors`, with stable IDs, note /
+optional chunk linkage, type, interval, precision, source field, original
+value, authority, parsing status, conflict group, unresolved state, diagnostic
+reason, and ingest run ID. It is rebuilt in the candidate database, validated
+before activation, and covered by atomic failure behavior. Invalid and
+ambiguous values remain diagnostic rows; same-type disagreement preserves all
+anchors and marks a deterministic conflict group.
+
+Disposable configured-corpus UAT used a temporary data root and did not touch
+the active index: 1,083 notes, 14,608 chunks, 506 valid `journal_entry`
+anchors, all `explicit_primary` and day precision, zero invalid/ambiguous/
+conflicted anchors. Temporal earliest lexical admission for `semantic
+geometry` returned 24 candidates from 19 notes, while ordinary lexical top-50
+returned 50 candidates from 5 notes. All 24 temporal candidate IDs were
+outside the ordinary top-50 pool; temporal projection search was direct and
+reported `searches_full_temporal_projection: true`. Repeated runs were
+identical; temporal candidate ID hash was
+`f9a0c656fdb14ceda7dd2cb8c9e26f02837f77b3c577a0cc04feb848ce12ec71`.
+
+Controlled runtime execution with a required `temporal_retrieve` layer
+completed with 24 candidates and 24 selected temporal contributions. The
+fusion surface order is exact, lexical, vector, graph, temporal; no ordinary
+or final packet global date sort was introduced. Fixture coverage verifies
+earliest/latest/before/after/between, precision, ambiguity, conflicts,
+atomic persistence, vector identity/threshold admission, provenance, and
+full-projection admission.
+
+This UAT did not establish a Gärdenfors encounter/read date. The configured
+corpus supplied journal-entry anchors, not an encounter anchor for that source;
+publication order is therefore not treated as influence evidence. No causal
+claim is authorized by temporal retrieval. Preferred admission remains
+deferred because temporal retrieval independently recovered relevant anchored
+evidence. Configured max-fill remains an observation: the controlled runtime
+used the YAML-bound selection ceiling and did not add sparse stopping.
+
+Operator-supplied visual CI evidence is recorded for recovery: run title
+`docs(seam5): accept bounded fusion and reopen seam6a`, tests identifier
+`tests #99`, commit `0015d8c`, branch `codex/big-refactor-07.18.26`, passed in
+approximately 1m35s; no independently available run ID is claimed.
+
+Seam 6A is complete for this bounded typed-anchor/temporal-retrieval contract.
+Seam 7 remains unopened; no persisted resource-inventory work has begun.
+
 Operator live-UAT aggregates: the genealogy run produced the strongest
 conceptual-development reconstruction observed so far, but did not establish
 historical chronology or causal influence; this supports fusion functioning
@@ -137,6 +195,8 @@ passed (`36` tests); complete local Python suite passed (`142` tests),
 compileall passed, and `git diff --check` passed. Prompt hashes are unchanged:
 compiler `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`
 and frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.
-The YAML hash was `070f4a528d845e2a8d31a7c174062a7444caca66b2325e682079f5f8432c8bd6`
-after the temporal revert and `09d7d5ea139d66b98ce56e17a469b70fbdbbbd3c4bd4258ea5f9217eb6c15052`
-after retiring `source_priority`. No temporal production surface remains.
+The YAML hash before Seam 6A was
+`09d7d5ea139d66b98ce56e17a469b70fbdbbbd3c4bd4258ea5f9217eb6c15052` and the
+final Seam 6A hash is
+`854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`.
+No temporal production surface from reverted `0b039ad` remains.
