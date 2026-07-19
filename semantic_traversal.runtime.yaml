@@ -12,6 +12,7 @@ retrieval:
     context_chars: 240
   lexical:
     max_candidates: 100
+    default_mode: any_tokens
   vector:
     max_candidates: 200
   graph:
@@ -58,6 +59,7 @@ retrieval_scoring:
 
 graph_traversal:
   enabled: true
+  direction: outbound
   hop_limit: 2
   max_candidates: 24
   seed_sources:

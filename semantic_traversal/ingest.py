@@ -1045,6 +1045,15 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         CREATE INDEX IF NOT EXISTS idx_chunks_note_id ON chunks(note_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_source_root_label ON chunks(source_root_label);
 
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            chunk_id UNINDEXED,
+            paragraph_text,
+            note_title,
+            section_label,
+            relative_path,
+            metadata
+        );
+
         CREATE TABLE IF NOT EXISTS {vector_table} (
             chunk_id TEXT PRIMARY KEY,
             vector_json TEXT NOT NULL,
@@ -1138,6 +1147,7 @@ def _materialize_records(
         config=config,
         embedding_backend=embedding_backend,
     )
+    _refresh_lexical_index(connection=connection)
 
     connection.execute(
         """
@@ -1169,6 +1179,19 @@ def _materialize_records(
     )
     connection.commit()
     return counts
+
+
+def _refresh_lexical_index(*, connection: sqlite3.Connection) -> None:
+    """Keep the FTS surface transactionally aligned with the active chunks."""
+    connection.execute("DELETE FROM chunks_fts")
+    connection.execute(
+        """
+        INSERT INTO chunks_fts (chunk_id, paragraph_text, note_title, section_label, relative_path, metadata)
+        SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, frontmatter_semantics_json
+        FROM chunks
+        ORDER BY chunk_id
+        """
+    )
 
 
 def _upsert_note(

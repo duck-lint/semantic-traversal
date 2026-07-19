@@ -33,6 +33,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         },
         "lexical": {
             "max_candidates": int,
+            "default_mode": str,
         },
         "vector": {
             "max_candidates": int,
@@ -78,6 +79,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     },
     "graph_traversal": {
         "enabled": bool,
+        "direction": str,
         "hop_limit": int,
         "max_candidates": int,
         "seed_sources": [str],
@@ -201,6 +203,10 @@ class RuntimeConfig:
         return int(self.raw["retrieval"]["lexical"]["max_candidates"])
 
     @property
+    def retrieval_lexical_default_mode(self) -> str:
+        return str(self.raw["retrieval"]["lexical"]["default_mode"])
+
+    @property
     def retrieval_vector_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["vector"]["max_candidates"])
 
@@ -251,6 +257,10 @@ class RuntimeConfig:
     @property
     def graph_traversal_enabled(self) -> bool:
         return bool(self.raw["graph_traversal"]["enabled"])
+
+    @property
+    def graph_traversal_direction(self) -> str:
+        return str(self.raw["graph_traversal"]["direction"])
 
     @property
     def graph_traversal_hop_limit(self) -> int:
@@ -607,6 +617,8 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             current = current[part]
         if int(current) < 0:
             raise ConfigError(f"Runtime config field retrieval.{field} must be non-negative")
+    if str(parsed["retrieval"]["lexical"]["default_mode"]) not in {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}:
+        raise ConfigError("Runtime config field retrieval.lexical.default_mode must be a supported FTS5 mode")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",
@@ -627,6 +639,8 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             raise ConfigError(f"Runtime config field chunking.low_signal_apparatus.{field} must be a boolean")
     if "short_all_caps_max_chars" in low_signal_apparatus and int(low_signal_apparatus["short_all_caps_max_chars"]) < 0:
         raise ConfigError("Runtime config field chunking.low_signal_apparatus.short_all_caps_max_chars must be non-negative")
+    if str(parsed["graph_traversal"]["direction"]) not in {"outbound", "inbound", "both"}:
+        raise ConfigError("Runtime config field graph_traversal.direction must be outbound, inbound, or both")
     validate_sql_identifier(str(parsed["indexes"]["vector_table"]), "indexes.vector_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_nodes_table"]), "indexes.graph_nodes_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_edges_table"]), "indexes.graph_edges_table")

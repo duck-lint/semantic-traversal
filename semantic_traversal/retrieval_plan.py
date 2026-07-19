@@ -346,6 +346,7 @@ def _retrieval_layer(
     limit: int | None = None,
     depth: int | None = None,
     return_total_count: bool | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     layer: dict[str, Any] = {"operator": operator, "required": required}
     if limit is not None:
@@ -354,6 +355,8 @@ def _retrieval_layer(
         layer["depth"] = depth
     if return_total_count is not None:
         layer["return_total_count"] = return_total_count
+    if mode is not None:
+        layer["mode"] = mode
     return layer
 
 
@@ -456,6 +459,8 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
                 pass
         if "return_total_count" in entry:
             layer["return_total_count"] = bool(entry.get("return_total_count"))
+        if "mode" in entry:
+            layer["mode"] = str(entry.get("mode") or "").strip()
         layers.append(layer)
     return layers or list(fallback)
 

@@ -28,6 +28,14 @@ from .storage import append_ledger_record, create_thread_paths, load_json, write
 
 QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph"}
+EXACT_SEARCH_STATUSES = {
+    "not_requested",
+    "skipped_no_terms",
+    "unavailable",
+    "failed",
+    "completed_no_matches",
+    "completed_with_matches",
+}
 
 
 def _default_active_focus() -> dict[str, Any]:
@@ -621,16 +629,28 @@ def _chunk_matches_scope(row: dict[str, Any], scope_filters: dict[str, Any]) -> 
         return True
     relative_path = str(row.get("relative_path") or "").lower().replace("\\", "/")
     source_root_path = str(row.get("source_root_path") or "").lower().replace("\\", "/")
-    title = str(row.get("note_title") or "").lower()
-    frontmatter_semantics = ""
+    frontmatter_values: dict[str, Any] = {}
     try:
-        frontmatter_semantics = json.dumps(json.loads(str(row.get("frontmatter_semantics_json") or "{}")), ensure_ascii=True).lower()
+        parsed_frontmatter = json.loads(str(row.get("frontmatter_semantics_json") or "{}"))
+        if isinstance(parsed_frontmatter, dict):
+            frontmatter_values = parsed_frontmatter
     except json.JSONDecodeError:
-        frontmatter_semantics = str(row.get("frontmatter_semantics_json") or "").lower()
-    scope_haystack = f"{source_root_path} {relative_path} {title} {frontmatter_semantics}"
-    # Journal/daily scopes are often encoded in path/title/frontmatter-derived filenames rather than a chunk column.
-    required_terms = list(dict.fromkeys([*path_terms, *note_type_terms]))
-    return any(term in scope_haystack for term in required_terms)
+        frontmatter_values = {}
+
+    # A dimension is an OR set; different dimensions are conjunctive. Note type
+    # is read from parsed frontmatter so a value such as `journal` cannot match
+    # an unrelated serialized field or a substring of another facet.
+    if note_type_terms:
+        raw_note_type = frontmatter_values.get("note_type")
+        note_types = _coerce_string_list(raw_note_type)
+        normalized_note_types = {value.strip().lower() for value in note_types if value.strip()}
+        if not normalized_note_types.intersection(note_type_terms):
+            return False
+    if path_terms:
+        path_haystack = f"{source_root_path} {relative_path}".lower()
+        if not any(term in path_haystack for term in path_terms):
+            return False
+    return True
 
 
 def _scoped_chunk_rows(chunk_rows: list[dict[str, Any]], scope_filters: dict[str, Any]) -> list[dict[str, Any]]:
@@ -666,10 +686,19 @@ def _exact_candidates(
     config: RuntimeConfig,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
-    terms = [str(entry.get("term") or "").strip() for entry in literal_terms if isinstance(entry, dict) and str(entry.get("term") or "").strip()]
+    term_entries = [
+        {
+            "term": str(entry.get("term") or "").strip(),
+            "match": str(entry.get("match") or "case_insensitive_substring").strip(),
+        }
+        for entry in literal_terms
+        if isinstance(entry, dict) and str(entry.get("term") or "").strip()
+    ]
+    terms = [entry["term"] for entry in term_entries]
     if not terms:
         return [], ["exact search skipped: no literal terms"], {
             "operator": "exact_chunk_search",
+            "status": "skipped_no_terms",
             "literal_terms": [],
             "scope": scope_filters,
             "total_match_count": 0,
@@ -681,13 +710,20 @@ def _exact_candidates(
     candidates: list[dict[str, Any]] = []
     matching_note_ids: set[str] = set()
     total_match_count = 0
-    lowered_terms = [term.lower() for term in terms]
     for row in scoped_rows:
         haystack = "\n".join(
             str(row.get(field) or "")
             for field in ("note_title", "section_label", "relative_path", "paragraph_text")
-        ).lower()
-        matched_terms = [term for term, lowered_term in zip(terms, lowered_terms, strict=True) if lowered_term in haystack]
+        )
+        matched_terms = [
+            entry["term"]
+            for entry in term_entries
+            if (
+                entry["term"] in haystack
+                if entry["match"] == "case_sensitive_substring"
+                else entry["term"].lower() in haystack.lower()
+            )
+        ]
         if not matched_terms:
             continue
         total_match_count += 1
@@ -710,6 +746,7 @@ def _exact_candidates(
         notes.append("exact search produced no matches")
     return candidates, notes, {
         "operator": "exact_chunk_search",
+        "status": "completed_with_matches" if total_match_count else "completed_no_matches",
         "literal_terms": terms,
         "scope": scope_filters,
         "total_match_count": total_match_count,
@@ -800,37 +837,56 @@ def _lexical_candidates(
     chunk_rows: list[dict[str, Any]],
     query_terms: list[str],
     *,
+    connection: sqlite3.Connection,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
     config: RuntimeConfig,
+    mode: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     candidates: list[dict[str, Any]] = []
     notes: list[str] = []
     if not query_terms:
         return candidates, notes
-    scoped_rows = _scoped_chunk_rows(chunk_rows, scope_filters or {})
-    lowered_terms = [str(term).lower() for term in query_terms if str(term).strip()]
-    for row in scoped_rows:
-        haystack = " ".join(
-            str(row.get(field) or "")
-            for field in ("note_title", "section_label", "relative_path", "paragraph_text")
-        ).lower()
-        matched_terms = [term for term in lowered_terms if term in haystack]
-        if not matched_terms:
+    selected_mode = str(mode or config.retrieval_lexical_default_mode).strip()
+    supported_modes = {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}
+    if selected_mode not in supported_modes:
+        return [], [f"lexical search unavailable: unsupported mode {selected_mode}"]
+    terms = [str(term).strip() for term in query_terms if str(term).strip()]
+    if selected_mode == "exact_phrase":
+        fts_query = '"' + " ".join(terms).replace('"', '""') + '"'
+    else:
+        tokens = [token for term in terms for token in QUERY_TOKEN_RE.findall(term.lower())]
+        if selected_mode == "prefix":
+            tokens = [f"{token}*" for token in tokens]
+        joiner = " AND " if selected_mode == "all_tokens" else " OR "
+        fts_query = joiner.join(tokens)
+    if not fts_query:
+        return [], ["lexical search skipped: no query tokens"]
+    try:
+        match_rows = connection.execute(
+            "SELECT chunk_id, bm25(chunks_fts) AS fts_rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY fts_rank ASC, chunk_id ASC",
+            (fts_query,),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        return [], [f"lexical search unavailable: FTS5 index error: {exc}"]
+    rows_by_id = {str(row.get("chunk_id")): row for row in _scoped_chunk_rows(chunk_rows, scope_filters or {})}
+    for match_row in match_rows:
+        row = rows_by_id.get(str(match_row["chunk_id"]))
+        if row is None or (limit is not None and len(candidates) >= limit):
             continue
-        if limit is not None and len(candidates) >= limit:
-            continue
-        candidates.append(
-            {
-                **row,
-                "selection_reason": f"lexical match: {', '.join(matched_terms)}",
-                "score": len(matched_terms) + float(config.retrieval_scoring["lexical_bonus"]),
-                "selection_source": "lexical",
-                "match_reason": f"lexical term {', '.join(matched_terms)}",
-            }
-        )
+        rank = float(match_row["fts_rank"] or 0.0)
+        candidates.append({
+            **row,
+            "selection_reason": f"FTS5 {selected_mode} match: {', '.join(terms)}",
+            "score": (1.0 / (1.0 + abs(rank))) + float(config.retrieval_scoring["lexical_bonus"]),
+            "selection_source": "lexical",
+            "match_reason": f"FTS5 {selected_mode} query {fts_query}",
+            "lexical_mode": selected_mode,
+            "lexical_query": " ".join(terms),
+            "fts_rank": rank,
+        })
     if candidates:
-        notes.append(f"lexical search matched {len(candidates)} chunk(s)")
+        notes.append(f"lexical FTS5 search mode={selected_mode} matched {len(candidates)} chunk(s)")
     else:
         notes.append("lexical search produced no matches")
     return candidates, notes
@@ -853,20 +909,27 @@ def _vector_candidates(
     config: RuntimeConfig,
     embedding_backend: EmbeddingBackend,
     vector_query: str,
+    vector_queries: list[str] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     notes: list[str] = []
-    if not vector_query.strip():
+    queries = [str(query).strip() for query in (vector_queries or [vector_query]) if str(query).strip()]
+    if not queries:
         return [], ["vector search skipped: empty query"]
     if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
         return [], ["vector search unavailable"]
 
-    response = embedding_backend.embed_query_text(vector_query)
-    if response.status != "embedded" or not response.vectors:
-        return [], [f"vector search unavailable: {response.status}"]
-
-    query_vector = response.vectors[0]
+    query_vectors: list[tuple[str, list[float]]] = []
+    query_failures: list[str] = []
+    for query in queries:
+        response = embedding_backend.embed_query_text(query)
+        if response.status == "embedded" and response.vectors:
+            query_vectors.append((query, response.vectors[0]))
+        else:
+            query_failures.append(f"{query}: {response.status}")
+    if not query_vectors:
+        return [], [f"vector search unavailable: {'; '.join(query_failures)}"]
     rows = connection.execute(
         f"SELECT chunk_id, vector_json FROM {config.vector_table}"
     ).fetchall()
@@ -886,9 +949,14 @@ def _vector_candidates(
             continue
         if not isinstance(vector, list) or not all(isinstance(value, (int, float)) for value in vector):
             continue
-        similarity = _cosine_similarity(query_vector, [float(value) for value in vector])
+        similarities = [
+            (query, _cosine_similarity(query_vector, [float(value) for value in vector]))
+            for query, query_vector in query_vectors
+        ]
+        query, similarity = max(similarities, key=lambda item: (item[1], item[0]))
         if similarity <= 0.0:
             continue
+        matching_queries = [query_name for query_name, score in similarities if score > 0.0]
         candidates.append(
             {
                 **chunk_row,
@@ -896,15 +964,18 @@ def _vector_candidates(
                 "score": similarity + float(config.retrieval_scoring["vector_bonus"]),
                 "selection_source": "vector",
                 "match_reason": f"vector query similarity {similarity:.3f}",
+                "semantic_query_provenance": matching_queries,
             }
         )
     candidates = sorted(candidates, key=lambda candidate: -float(candidate.get("score") or 0.0))
     if limit is not None:
         candidates = candidates[:limit]
     if candidates:
-        notes.append(f"vector search matched {len(candidates)} chunk(s)")
+        notes.append(f"vector search matched {len(candidates)} chunk(s) across {len(query_vectors)} semantic quer{'y' if len(query_vectors) == 1 else 'ies'}")
     else:
         notes.append("vector search produced no matches")
+    if query_failures:
+        notes.append(f"vector queries failed: {'; '.join(query_failures)}")
     return candidates, notes
 
 
@@ -926,6 +997,7 @@ def _graph_candidates(
             "matched_seed_count": 0,
             "expanded_note_count": 0,
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
         }
 
     try:
@@ -943,6 +1015,7 @@ def _graph_candidates(
             "matched_seed_count": 0,
             "expanded_note_count": 0,
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
         }
 
     chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
@@ -963,11 +1036,17 @@ def _graph_candidates(
             "matched_seed_count": 0,
             "expanded_note_count": 0,
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
         }
 
-    outgoing: dict[str, list[tuple[str, str]]] = {}
+    outgoing: dict[str, list[tuple[str, str, str]]] = {}
+    incoming: dict[str, list[tuple[str, str, str]]] = {}
     for row in edge_rows:
-        outgoing.setdefault(str(row["source_node_id"]), []).append((str(row["target_node_id"]), str(row["edge_type"])))
+        source_node_id = str(row["source_node_id"])
+        target_node_id = str(row["target_node_id"])
+        edge_type = str(row["edge_type"])
+        outgoing.setdefault(source_node_id, []).append((target_node_id, edge_type, "outbound"))
+        incoming.setdefault(target_node_id, []).append((source_node_id, edge_type, "inbound"))
 
     selected_note_ids: list[str] = []
     note_reasons: dict[str, list[str]] = {}
@@ -1010,7 +1089,12 @@ def _graph_candidates(
         if current_node is None:
             continue
         current_label = str(current_node.get("label") or current_note_id)
-        for target_node_id, edge_type in outgoing.get(current_node_id, []):
+        traversals: list[tuple[str, str, str]] = []
+        if config.graph_traversal_direction in {"outbound", "both"}:
+            traversals.extend(outgoing.get(current_node_id, []))
+        if config.graph_traversal_direction in {"inbound", "both"}:
+            traversals.extend(incoming.get(current_node_id, []))
+        for target_node_id, edge_type, edge_direction in traversals:
             if edge_type not in edge_type_allowlist:
                 continue
             if edge_type not in edge_types_used:
@@ -1024,7 +1108,7 @@ def _graph_candidates(
             if not target_note_id:
                 continue
             target_label = str(target_node.get("label") or target_note_id)
-            note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1}: {current_label} -> {target_label}")
+            note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1} ({edge_direction}): {current_label} -> {target_label}")
             if target_note_id not in visited_notes:
                 visited_notes.add(target_note_id)
                 selected_note_ids.append(target_note_id)
@@ -1075,6 +1159,8 @@ def _graph_candidates(
                 "score": float(config.retrieval_scoring["graph_bonus"]),
                 "selection_source": "graph",
                 "match_reason": "graph expansion",
+                "graph_direction": config.graph_traversal_direction,
+                "graph_provenance": note_reasons.get(str(chunk_row["note_id"]), []),
             }
         )
     if candidates:
@@ -1091,6 +1177,7 @@ def _graph_candidates(
         "matched_seed_count": matched_seed_count,
         "expanded_note_count": expanded_note_count,
         "edge_types_used": edge_types_used,
+        "direction": config.graph_traversal_direction,
     }
 
 
@@ -1187,7 +1274,11 @@ def _merge_candidates(
             merged[chunk_id] = dict(candidate)
             merged[chunk_id]["sources"] = [source]
             merged[chunk_id]["source_layers"] = [source]
+            merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys(_coerce_string_list(candidate.get("semantic_query_provenance"))))
             return
+        existing_queries = _coerce_string_list(existing.get("semantic_query_provenance"))
+        candidate_queries = _coerce_string_list(candidate.get("semantic_query_provenance"))
+        existing["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
         existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
         existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
         existing_score = float(existing.get("score") or 0.0)
@@ -1199,6 +1290,7 @@ def _merge_candidates(
             merged[chunk_id] = dict(candidate)
             merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
             merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
+            merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
         else:
             existing["score"] = max(existing_score, candidate_score)
             existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
@@ -1324,6 +1416,7 @@ def _semantic_traversal(
     exact_notes: list[str] = []
     exact_info = {
         "operator": "exact_chunk_search",
+        "status": "not_requested",
         "literal_terms": [],
         "scope": scope_filters,
         "total_match_count": 0,
@@ -1351,9 +1444,11 @@ def _semantic_traversal(
         lexical_candidates, lexical_notes = _lexical_candidates(
             chunk_rows,
             lexical_queries,
+            connection=connection,
             scope_filters=scope_filters,
             limit=_layer_limit(lexical_layer, config.retrieval_lexical_max_candidates),
             config=config,
+            mode=str(lexical_layer.get("mode") or config.retrieval_lexical_default_mode),
         )
     else:
         execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by bound retrieval plan"})
@@ -1368,6 +1463,7 @@ def _semantic_traversal(
             config=config,
             embedding_backend=embedding_backend,
             vector_query=semantic_queries[0] if semantic_queries else (lexical_queries[0] if lexical_queries else str(bound_retrieval_plan.get("intent_type") or "")),
+            vector_queries=semantic_queries,
             scope_filters=scope_filters,
             limit=_layer_limit(vector_layer, config.retrieval_vector_max_candidates),
         )
@@ -1434,12 +1530,13 @@ def _semantic_traversal(
     claim_policy = bound_retrieval_plan.get("claim_policy") if isinstance(bound_retrieval_plan.get("claim_policy"), dict) else {}
     coverage = {
         "exact_search_performed": exact_search_performed,
+        "exact_status": str(exact_info.get("status") or ("completed_with_matches" if total_exact_matches else "completed_no_matches" if exact_search_performed else "not_requested")),
         "scope": scope_filters,
         "literal_terms": [str(entry.get("term") or "") for entry in literal_terms if str(entry.get("term") or "")],
         "total_exact_matches": total_exact_matches,
         "matching_note_count": matching_note_count,
-        "coverage_claims_allowed": bool(claim_policy.get("coverage_claims_allowed")) and exact_search_performed,
-        "negative_claims_allowed": exact_search_performed and total_exact_matches == 0,
+        "coverage_claims_allowed": bool(claim_policy.get("coverage_claims_allowed")) and exact_info.get("status") in {"completed_no_matches", "completed_with_matches"},
+        "negative_claims_allowed": exact_info.get("status") == "completed_no_matches",
     }
     limits: list[str] = [f"Only {config.max_retrieval_chunks} chunk(s) may be selected for frontier synthesis."]
     if exact_search_performed:
@@ -1483,6 +1580,9 @@ def _semantic_traversal(
                 "paragraph_text": str(candidate["paragraph_text"]),
                 "chunk_hash": str(candidate["chunk_hash"]),
                 "source_layers": _candidate_source_layers(candidate),
+                "semantic_query_provenance": _coerce_string_list(candidate.get("semantic_query_provenance")),
+                "graph_direction": candidate.get("graph_direction"),
+                "graph_provenance": candidate.get("graph_provenance", []),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
@@ -1515,6 +1615,21 @@ def _coverage_report(
     bound_plan = traversal_manifest.get("bound_retrieval_plan") if isinstance(traversal_manifest.get("bound_retrieval_plan"), dict) else {}
     graph_seeds = list(bound_plan.get("graph_seeds") or [])
     semantic_queries = list(bound_plan.get("semantic_queries") or [])
+    layer_manifests = traversal_manifest.get("layer_manifests") if isinstance(traversal_manifest.get("layer_manifests"), dict) else {}
+    candidate_counts = traversal_manifest.get("candidate_counts") if isinstance(traversal_manifest.get("candidate_counts"), dict) else {}
+    required_layer_failures: list[str] = []
+    for layer in bound_plan.get("retrieval_layers") or []:
+        if not isinstance(layer, dict) or not bool(layer.get("required")):
+            continue
+        operator = str(layer.get("operator") or "")
+        source = LAYER_TO_SOURCE.get(operator)
+        if source == "exact":
+            exact_status = str((layer_manifests.get("exact") or {}).get("status") or "not_requested")
+            if exact_status not in {"completed_no_matches", "completed_with_matches"}:
+                required_layer_failures.append(f"required exact layer is {exact_status}")
+        elif source and int(candidate_counts.get(source) or 0) == 0:
+            required_layer_failures.append(f"required {source} layer produced no candidates")
+    blocking_reasons.extend(required_layer_failures)
     if selected_count == 0 and (semantic_queries or graph_seeds):
         blocking_reasons.append("retrieval required but no chunks were selected")
     selection_notes = traversal_manifest.get("selection_notes") if isinstance(traversal_manifest, dict) else []
