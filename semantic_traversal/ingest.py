@@ -1404,7 +1404,9 @@ def _refresh_temporal_index(
             for anchor in all_anchors
         ],
     )
-    return temporal_diagnostics(all_anchors, issues)
+    diagnostics = temporal_diagnostics(all_anchors, issues)
+    diagnostics["unanchored_note_count"] = max(0, len(note_records) - int(diagnostics.get("anchored_note_count") or 0))
+    return diagnostics
 
 
 def _validate_temporal_index(*, connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
@@ -1442,6 +1444,7 @@ def _validate_temporal_index(*, connection: sqlite3.Connection, config: RuntimeC
         "total_anchor_count": len(rows),
         "anchored_note_count": len({str(row["note_id"]) for row in valid_rows}),
         "anchored_chunk_count": len({str(row["chunk_id"]) for row in valid_rows if row["chunk_id"] is not None}),
+        "unanchored_note_count": max(0, len(note_ids) - len({str(row["note_id"]) for row in valid_rows})),
         "valid_count": len(valid_rows),
         "invalid_count": sum(str(row["parsing_status"]) == "invalid" for row in rows),
         "ambiguous_count": sum(str(row["parsing_status"]) == "ambiguous" for row in rows),

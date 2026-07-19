@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 
 from semantic_traversal.config import load_runtime_config
+from semantic_traversal.embeddings import UnavailableEmbeddingBackend
+from semantic_traversal.ingest import IngestSourceRoot, run_ingest
 from semantic_traversal.runtime import _temporal_candidates
 from semantic_traversal.temporal import build_temporal_anchors, parse_temporal_value
 
@@ -87,3 +90,25 @@ class TemporalTests(unittest.TestCase):
         self.assertEqual(candidates[0]["temporal_provenance"][0]["anchor_id"], "a-old")
         connection.close()
 
+    def test_ingest_persists_temporal_projection_and_manifest_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="temporal-fixture-") as root_text:
+            root = Path(root_text)
+            (root / "entry.md").write_text(
+                "---\nuuid: 019bc983-8065-7611-b57c-b9ef76d7b848\nnote_type: journal_entry\njournal_entry_date: 2025-09\n---\n\nA dated entry.\n",
+                encoding="utf-8",
+            )
+            data_root = root / "data"
+            result = run_ingest(
+                repo_root=Path(__file__).resolve().parents[1],
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="fixture", path=root),),
+                embedding_backend=UnavailableEmbeddingBackend(reason="test"),
+            )
+            connection = sqlite3.connect(result.database_path)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM temporal_anchors").fetchone()[0], 1)
+            row = connection.execute("SELECT anchor_type, precision, canonical_start, canonical_end, authority FROM temporal_anchors").fetchone()
+            self.assertEqual(tuple(row), ("journal_entry", "month", "2025-09-01T00:00:00Z", "2025-09-30T23:59:59.999999Z", "explicit_primary"))
+            connection.close()
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["temporal_index"]["valid_count"], 1)
+            self.assertEqual(manifest["temporal_index"]["counts_by_precision"], {"month": 1})
