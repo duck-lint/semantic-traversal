@@ -49,7 +49,7 @@ The repository has archived implementation bundles through implementation-06 and
 
 - The attached program is authoritative for desired behaviour, while existing tests and production consumers establish current contract details.
 - The configured external vault may not be available in this environment; fixture-root tests are therefore required before any live ingest claim.
-- No multi-agent delegation capability is exposed in the current tool set; this bundle is coordinator-executed unless that changes.
+- Deferred delegated-agent tools were available in the inspected inventory but were not discovered before implementation; this bundle remains coordinator-executed because no delegation call was made.
 
 ## Affected and Non-Affected Surfaces
 

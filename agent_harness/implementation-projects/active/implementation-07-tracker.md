@@ -14,6 +14,7 @@
 | 2026-07-18 | Coordinator | Captured baseline hashes and verification | Python compileall passed; baseline Python suite passed with 80 tests; plugin build passed; `npx tsc --noEmit` failed on missing `electron` declaration (`TS2307`) | Preserve prompt/YAML hashes and inspect first runtime gaps |
 | 2026-07-18 | Coordinator | Added exact status enum behaviour and multi-query vector execution/provenance | Focused retrieval contract tests pass; full suite passes with 83 tests; prompts and YAML unchanged | Continue with a separate scope/requiredness seam |
 | 2026-07-18 | Coordinator | Added parsed scope algebra, required exact blocking, YAML-owned FTS5 modes/index, and configurable graph direction/provenance | Full suite passes with 86 tests; compileall and diff check pass; prompts unchanged; YAML hash changed for lexical mode and graph direction | Request corpus-level UAT |
+| 2026-07-18 | Coordinator | Repaired selected multi-surface provenance, runtime-owned compiler graph depth, and fair graph candidate materialization; removed duplicate `graph_traversal.hop_limit` YAML authority | Changed `semantic_traversal/runtime.py`, `semantic_traversal/retrieval_resolver.py`, `semantic_traversal/config.py`, `semantic_traversal.runtime.yaml`, `tests/test_ingest_runtime.py`, and `tests/test_runtime_config.py`; 93-test suite, compileall, and diff check pass; prompt hashes unchanged | Keep Seam 5 fusion/selection open; corpus UAT not run against active index |
 
 ## Work Status
 
@@ -25,7 +26,7 @@
 | Seam 2A: scope model | Coordinator | reviewing | Focused OR/AND/exact facet test; full suite 86 pass | Hard/preferred scope request representation remains open |
 | Seam 2B: exact-search contract | Coordinator | active | 3 focused tests; full suite 83 pass | Status and match-mode slice landed; count/context/requiredness still open |
 | Seam 3: runtime authority/requiredness | Coordinator | reviewing | Required exact failure blocks; full suite 86 pass | Non-exact required-layer diagnostics need UAT |
-| Seam 4A: graph executor | Coordinator | reviewing | Existing graph tests plus direction/provenance implementation; full suite 86 pass | Inbound/both corpus UAT pending |
+| Seam 4A: graph executor | Coordinator | reviewing | Depth, fairness, provenance fixtures; full suite 93 pass | Inbound/both corpus UAT pending |
 | Seam 4B: lexical FTS5 executor | Coordinator | reviewing | Five FTS5 mode test; ingest/runtime lexical tests; full suite 86 pass | Full-corpus freshness and packet-size UAT pending |
 | Seam 4C: vector executor | Coordinator | reviewing | Multi-query provenance test; full suite 86 pass | Threshold/diversity caps and identity checks still open; UAT required |
 | Seam 5: fusion/selection | Coordinator | proposed | pending | Depends on 4A/4B/4C |
@@ -38,7 +39,7 @@
 
 | Blocker | Boundary | Owner Agent | Resolution |
 | --- | --- | --- | --- |
-| No delegated-agent tool is exposed in this session | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; work was therefore coordinator-executed. |
+| Deferred delegated-agent inventory was not inspected before implementation | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; the completed work was therefore coordinator-executed. |
 | Corpus-level UAT is required | evidence boundary | Operator/user | Run disposable complete-corpus checks in implementation-07-UAT-request.md | Do not archive until artifacts or bounded follow-up seams are recorded |
 
 ## Closeout Note

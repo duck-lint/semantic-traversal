@@ -24,7 +24,17 @@ The current automated suite proves contracts on isolated fixtures, but cannot es
 
 ## Current implementation status
 
-Automated regression: 86 tests passing; compileall and diff check passing. Python production changes are uncommitted. Plugin build passes; `npx tsc --noEmit` remains blocked by missing `electron` declarations (`TS2307`).
+Automated regression after implementation-07 repairs: 93 tests passing; compileall and diff check passing. Python production changes are uncommitted. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
+
+The configured vault and active SQLite index were present, but corpus-level UAT was not run in this slice: no disposable full-corpus ingest was created, and querying the active index would create thread artifacts. Fixture evidence is therefore not presented as corpus-wide proof.
+
+Focused fixture evidence now covers truthful multi-layer provenance, graph depth 0/1/2/default/clamping, runtime-vs-removed-hop-limit authority, deterministic round-robin graph candidates, graph provenance retention through merge, and deterministic source-layer ordering.
+
+## Repair evidence
+
+- Prompt SHA-256 before and after: semantic compiler `9CA92643B2550410743D494FC82E3AE67C718C8F7867D72E43DDB49925E28F4B`; frontier synthesis `FDAC281E48E765AF09578BE02E53AD65A443D49914FAC53D017ADE5391A18776`.
+- YAML SHA-256 before: `43C9E7927D53B63B3924AC11C3627247A72ED0686F706ED16547483C107D2856`; after: `47CB325D8B1E2A290013563D93231B2BD47126E6A5A76EB9D1D6C495508B7385` (only duplicate graph hop-limit authority removed).
+- Remaining open seams: hard/preferred scope representation, full exact-search contract, non-exact requiredness, inbound/both corpus UAT, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final scaling/UAT, and plugin TypeScript readiness.
 
 ## UAT decision
 

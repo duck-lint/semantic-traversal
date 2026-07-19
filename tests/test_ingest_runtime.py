@@ -19,6 +19,8 @@ from semantic_traversal.ingest import IngestFrontmatterError, IngestSourceRoot, 
 from semantic_traversal.llm import LLMResponse
 from semantic_traversal.runtime import (
     _apply_retrieval_candidate_hygiene,
+    _candidate_source_layers,
+    _count_selected_by_layer,
     _merge_candidates,
     _select_retrieval_chunks,
     run_thread_turn,
@@ -285,7 +287,10 @@ def _write_markdown_note(
     return path
 
 
-def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> dict[str, Any]:
+def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str], graph_depth: int | None = 1) -> dict[str, Any]:
+    graph_layer = {"operator": "graph_expand", "required": False}
+    if graph_depth is not None:
+        graph_layer["depth"] = graph_depth
     return {
         "raw_user_input": raw_user_input,
         "intent": "fixture",
@@ -305,7 +310,7 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
             "retrieval_layers": [
                 {"operator": "lexical_chunk_search", "required": False, "limit": 50},
                 {"operator": "vector_search", "required": False, "limit": 24},
-                {"operator": "graph_expand", "required": False, "depth": 1},
+                graph_layer,
             ],
             "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
             "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
@@ -810,7 +815,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=0)),
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
@@ -821,13 +826,12 @@ class ThesisRuntimeTests(unittest.TestCase):
     def test_graph_traversal_hop_limit_one_retrieves_directly_linked_note(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         config = load_runtime_config(repo_root=REPO_ROOT)
-        config.raw["graph_traversal"]["hop_limit"] = 1
         result = run_thread_turn(
             repo_root=REPO_ROOT,
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
@@ -840,13 +844,12 @@ class ThesisRuntimeTests(unittest.TestCase):
     def test_graph_traversal_hop_limit_zero_does_not_expand_linked_note(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         config = load_runtime_config(repo_root=REPO_ROOT)
-        config.raw["graph_traversal"]["hop_limit"] = 0
         result = run_thread_turn(
             repo_root=REPO_ROOT,
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=0)),
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
@@ -1355,6 +1358,110 @@ class ThesisRuntimeTests(unittest.TestCase):
         ]
         selected = _select_retrieval_chunks(merged_candidates=candidates, max_chunks=3)
         self.assertEqual([chunk["chunk_id"] for chunk in selected], ["chunk-a", "chunk-c"])
+
+    def test_selected_multi_surface_provenance_survives_merge_and_selection(self) -> None:
+        candidates = [
+            {"chunk_id": "shared", "chunk_hash": "shared-hash", "selection_source": "lexical", "score": 3.0, "selection_reason": "lexical"},
+            {"chunk_id": "shared", "chunk_hash": "shared-hash", "selection_source": "vector", "score": 2.0, "selection_reason": "vector"},
+            {"chunk_id": "shared", "chunk_hash": "shared-hash", "selection_source": "graph", "score": 1.0, "selection_reason": "graph"},
+        ]
+        merged = _merge_candidates(candidates[:1], candidates[1:2], candidates[2:], config=load_runtime_config(repo_root=REPO_ROOT))
+        selected = _select_retrieval_chunks(merged_candidates=merged, max_chunks=1)
+        self.assertEqual(selected[0]["selection_source"], "lexical")
+        self.assertEqual(selected[0]["source_layers"], ["lexical", "vector", "graph"])
+        self.assertNotIn("sources", selected[0])
+        self.assertEqual(_candidate_source_layers(selected[0]), ["lexical", "vector", "graph"])
+        self.assertEqual(_count_selected_by_layer(selected), {"exact": 0, "lexical": 1, "vector": 1, "graph": 1})
+
+    def test_source_layer_order_and_duplicates_are_deterministic(self) -> None:
+        candidate = {"source_layers": ["graph", "vector", "graph", "lexical", "bogus", "exact"]}
+        self.assertEqual(_candidate_source_layers(candidate), ["exact", "lexical", "vector", "graph"])
+
+    def test_graph_materialization_is_round_robin_across_notes(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        graph_manifest = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertEqual(graph_manifest["candidate_note_ids"][:3], [
+            "graph-fixture::uuid::aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "graph-fixture::uuid::bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "graph-fixture::uuid::cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        ])
+        self.assertTrue(all(chunk["graph_provenance"] for chunk in result.retrieval_packet["selected_chunks"] if "graph" in chunk["source_layers"]))
+
+    def test_graph_depth_is_runtime_canonicalized_and_hop_limit_is_not_authoritative(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        graph = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertEqual(graph["requested_depth"], 1)
+        self.assertEqual(graph["effective_depth"], 1)
+        self.assertEqual(graph["depth_adjustment"], "none")
+        self.assertEqual(graph["expanded_note_count"], 2)
+
+    def test_graph_depth_two_and_clamping_are_visible(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        for requested, expected, adjustment in ((2, 2, "none"), (99, 2, "clamped_to_max")):
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="A",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=requested)),
+                embedding_backend=UnavailableEmbeddingBackend(),
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            self.assertEqual(graph["requested_depth"], requested)
+            self.assertEqual(graph["effective_depth"], expected)
+            self.assertEqual(graph["depth_adjustment"], adjustment)
+            self.assertTrue(any("graph_expand.depth" in str(item.get("field")) for item in result.semantic_traversal_manifest["resolver_adjustments"]))
+
+    def test_graph_direction_combines_with_depth(self) -> None:
+        for direction, expects_a in (("outbound", False), ("inbound", True), ("both", True)):
+            data_root = _prepare_graph_fixture_data_root()
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = direction
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="B",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("B", graph_seeds=["B"], graph_depth=1)),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            note_ids = result.semantic_traversal_manifest["graph_traversal"]["candidate_note_ids"]
+            self.assertEqual(any("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" in note_id for note_id in note_ids), expects_a)
+            self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["direction"], direction)
+
+    def test_missing_graph_depth_uses_yaml_default_with_diagnostic(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=None)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        graph = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertIsNone(graph["requested_depth"])
+        self.assertEqual(graph["effective_depth"], graph["default_depth"])
+        self.assertEqual(graph["depth_adjustment"], "defaulted")
 
     def test_template_boilerplate_is_demoted_for_non_template_queries(self) -> None:
         semantic_compiler_packet = {
@@ -1964,7 +2071,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
             embedding_backend=UnavailableEmbeddingBackend(),
         )
         selected_for_book = [chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["note_title"] == "The Parmenidean Ascent"]

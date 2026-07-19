@@ -203,6 +203,46 @@ def bind_retrieval_plan(
 
     literal_terms = [entry for entry in planner_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
     retrieval_layers = [entry for entry in planner_retrieval_plan.get("retrieval_layers", []) if isinstance(entry, dict)]
+    canonical_layers: list[dict[str, Any]] = []
+    for raw_layer in retrieval_layers:
+        layer = dict(raw_layer)
+        if str(layer.get("operator") or "") == "graph_expand":
+            requested_depth: int | None
+            adjustment = "none"
+            raw_depth = layer.get("depth")
+            try:
+                requested_depth = int(raw_depth) if raw_depth is not None else None
+            except (TypeError, ValueError):
+                requested_depth = None
+                adjustment = "defaulted_invalid"
+            if requested_depth is None:
+                effective_depth = max(0, config.retrieval_graph_default_depth)
+                if adjustment == "none":
+                    adjustment = "defaulted"
+            else:
+                effective_depth = max(0, requested_depth)
+                if effective_depth != requested_depth:
+                    adjustment = "sanitized"
+                if effective_depth > config.retrieval_graph_max_depth:
+                    effective_depth = config.retrieval_graph_max_depth
+                    adjustment = "clamped_to_max"
+            layer["depth"] = effective_depth
+            layer["requested_depth"] = requested_depth
+            layer["default_depth"] = config.retrieval_graph_default_depth
+            layer["max_depth"] = config.retrieval_graph_max_depth
+            layer["effective_depth"] = effective_depth
+            layer["depth_adjustment"] = adjustment
+            adjustments.append(
+                {
+                    "field": "retrieval_layers.graph_expand.depth",
+                    "requested": requested_depth,
+                    "effective": effective_depth,
+                    "action": adjustment,
+                    "reason": "runtime-owned retrieval.graph default/max bounds",
+                }
+            )
+        canonical_layers.append(layer)
+    retrieval_layers = canonical_layers
     selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})
     if "max_chunks" not in selection_policy:
         selection_policy["max_chunks"] = config.max_retrieval_chunks

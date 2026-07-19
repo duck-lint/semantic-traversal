@@ -60,7 +60,6 @@ retrieval_scoring:
 graph_traversal:
   enabled: true
   direction: outbound
-  hop_limit: 2
   max_candidates: 24
   seed_sources:
     - graph_seeds

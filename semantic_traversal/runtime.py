@@ -658,14 +658,19 @@ def _scoped_chunk_rows(chunk_rows: list[dict[str, Any]], scope_filters: dict[str
 
 
 def _candidate_source_layers(candidate: dict[str, Any]) -> list[str]:
-    sources = candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
-    normalized: list[str] = []
+    # `source_layers` is materialized before merge-only fields are removed. It
+    # is the durable provenance surface; `sources` is only the merge scratch
+    # field and selection_source is only the winning representation.
+    sources = candidate.get("source_layers") or candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
+    observed: set[str] = set()
     for source in _coerce_string_list(sources):
         if source == "graph_expanded":
             source = "graph"
-        if source and source not in normalized:
-            normalized.append(source)
-    return normalized
+        if source:
+            observed.add(source)
+    # Keep packet and manifest ordering stable even when candidates arrive from
+    # different executors or contain duplicate support entries.
+    return [source for source in ("exact", "lexical", "vector", "graph") if source in observed]
 
 
 def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[str, int]:
@@ -985,6 +990,7 @@ def _graph_candidates(
     config: RuntimeConfig,
     planner_retrieval_plan: dict[str, Any],
     prior_thread_state: dict[str, Any],
+    graph_depth: dict[str, Any] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
@@ -992,7 +998,7 @@ def _graph_candidates(
     if not config.graph_traversal_enabled:
         return [], ["graph traversal disabled"], {
             "enabled": False,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
             "matched_seed_count": 0,
             "expanded_note_count": 0,
@@ -1010,7 +1016,7 @@ def _graph_candidates(
     except sqlite3.OperationalError:
         return [], ["graph search unavailable"], {
             "enabled": config.graph_traversal_enabled,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
             "matched_seed_count": 0,
             "expanded_note_count": 0,
@@ -1031,7 +1037,7 @@ def _graph_candidates(
     if not seed_values:
         return [], ["graph search skipped: no graph seeds"], {
             "enabled": config.graph_traversal_enabled,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
             "matched_seed_count": 0,
             "expanded_note_count": 0,
@@ -1081,7 +1087,8 @@ def _graph_candidates(
 
     while queue:
         current_note_id, hop = queue.pop(0)
-        if hop >= config.graph_traversal_hop_limit:
+        effective_depth = int((graph_depth or {}).get("effective_depth", 0))
+        if hop >= effective_depth:
             continue
         # Avoid relying on helper placement below; note node ids are canonical.
         current_node_id = f"note::{current_note_id}"
@@ -1116,9 +1123,12 @@ def _graph_candidates(
                 expanded_note_count += 1
 
     max_graph_candidates = limit if limit is not None else config.graph_traversal_max_candidates
-    selected_chunk_ids: list[str] = []
+    eligible_rows_by_note: list[list[dict[str, Any]]] = []
     for note_id in selected_note_ids:
-        note_chunk_rows = [chunk_row for chunk_row in chunk_rows.values() if str(chunk_row["note_id"]) == note_id and _chunk_matches_scope(chunk_row, scope_filters or {})]
+        note_chunk_rows = sorted(
+            [chunk_row for chunk_row in chunk_rows.values() if str(chunk_row["note_id"]) == note_id and _chunk_matches_scope(chunk_row, scope_filters or {})],
+            key=lambda row: str(row.get("chunk_id") or ""),
+        )
         if not note_chunk_rows:
             continue
         preferred_rows = [
@@ -1135,16 +1145,27 @@ def _graph_candidates(
                 )
             )
         ]
-        candidate_rows = preferred_rows or note_chunk_rows
-        for chunk_row in candidate_rows:
-            chunk_id = str(chunk_row["chunk_id"])
+        eligible_rows_by_note.append(preferred_rows or note_chunk_rows)
+
+    # Materialize one representative per traversed note per round. This keeps
+    # a large seed note from consuming the graph pool before neighbors appear.
+    selected_chunk_ids: list[str] = []
+    round_index = 0
+    while len(selected_chunk_ids) < max_graph_candidates:
+        added_this_round = False
+        for candidate_rows in eligible_rows_by_note:
+            if round_index >= len(candidate_rows):
+                continue
+            chunk_id = str(candidate_rows[round_index]["chunk_id"])
             if chunk_id in selected_chunk_ids:
                 continue
             selected_chunk_ids.append(chunk_id)
+            added_this_round = True
             if len(selected_chunk_ids) >= max_graph_candidates:
                 break
-        if len(selected_chunk_ids) >= max_graph_candidates:
+        if not added_this_round:
             break
+        round_index += 1
 
     candidates = []
     for chunk_id in selected_chunk_ids:
@@ -1168,16 +1189,18 @@ def _graph_candidates(
     else:
         notes.append("graph search produced no matches")
     notes.append(
-        f"graph traversal enabled={config.graph_traversal_enabled}, hop_limit={config.graph_traversal_hop_limit}, matched_seed_count={matched_seed_count}, expanded_note_count={expanded_note_count}"
+        f"graph traversal enabled={config.graph_traversal_enabled}, effective_depth={int((graph_depth or {}).get('effective_depth', 0))}, matched_seed_count={matched_seed_count}, expanded_note_count={expanded_note_count}"
     )
     return candidates, notes, {
         "enabled": config.graph_traversal_enabled,
-        "hop_limit": config.graph_traversal_hop_limit,
+        "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
+        **(graph_depth or {}),
         "seed_sources": list(config.graph_traversal_seed_sources),
         "matched_seed_count": matched_seed_count,
         "expanded_note_count": expanded_note_count,
         "edge_types_used": edge_types_used,
         "direction": config.graph_traversal_direction,
+        "candidate_note_ids": [str(candidate.get("note_id") or "") for candidate in candidates],
     }
 
 
@@ -1270,17 +1293,24 @@ def _merge_candidates(
         chunk_id = str(candidate["chunk_id"])
         existing = merged.get(chunk_id)
         source = str(candidate.get("selection_source") or "lexical")
+        candidate_layers = _candidate_source_layers(candidate)
         if existing is None:
             merged[chunk_id] = dict(candidate)
-            merged[chunk_id]["sources"] = [source]
-            merged[chunk_id]["source_layers"] = [source]
+            merged[chunk_id]["sources"] = list(candidate_layers)
+            merged[chunk_id]["source_layers"] = list(candidate_layers)
             merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys(_coerce_string_list(candidate.get("semantic_query_provenance"))))
             return
         existing_queries = _coerce_string_list(existing.get("semantic_query_provenance"))
         candidate_queries = _coerce_string_list(candidate.get("semantic_query_provenance"))
+        existing_graph_provenance = _coerce_string_list(existing.get("graph_provenance"))
+        candidate_graph_provenance = _coerce_string_list(candidate.get("graph_provenance"))
         existing["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
-        existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
-        existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
+        existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
+        existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
+        if existing_graph_provenance or candidate_graph_provenance:
+            existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
+        if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
+            existing["graph_direction"] = candidate.get("graph_direction")
         existing_score = float(existing.get("score") or 0.0)
         candidate_score = float(candidate.get("score") or 0.0)
         if candidate_score > existing_score or (
@@ -1288,8 +1318,11 @@ def _merge_candidates(
             and source_priority.get(source, 0) > source_priority.get(str(existing.get("selection_source") or ""), 0)
         ):
             merged[chunk_id] = dict(candidate)
-            merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
-            merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
+            merged[chunk_id]["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
+            if merged[chunk_id].get("graph_direction") is None:
+                merged[chunk_id]["graph_direction"] = existing.get("graph_direction")
+            merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
+            merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
             merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
         else:
             existing["score"] = max(existing_score, candidate_score)
@@ -1311,7 +1344,7 @@ def _merge_candidates(
         ),
     )
     for candidate in ranked:
-        sources = candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
+        sources = _candidate_source_layers(candidate)
         candidate["selection_reason"] = ", ".join(
             part for part in [candidate.get("selection_reason"), f"sources: {', '.join(str(source) for source in sources)}"] if part
         )
@@ -1481,6 +1514,7 @@ def _semantic_traversal(
             config=config,
             planner_retrieval_plan=bound_retrieval_plan,
             prior_thread_state=prior_thread_state,
+            graph_depth=graph_layer,
             scope_filters=scope_filters,
             limit=_layer_limit(graph_layer, config.retrieval_graph_max_candidates),
         )
@@ -1488,11 +1522,12 @@ def _semantic_traversal(
         execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by bound retrieval plan"})
         graph_candidates, graph_notes, graph_traversal_info = [], ["graph search skipped: not requested by bound retrieval plan"], {
             "enabled": config.graph_traversal_enabled,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
             "matched_seed_count": 0,
             "expanded_note_count": 0,
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
         }
 
     exact_candidates = _apply_retrieval_candidate_hygiene(

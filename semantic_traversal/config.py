@@ -80,7 +80,6 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     "graph_traversal": {
         "enabled": bool,
         "direction": str,
-        "hop_limit": int,
         "max_candidates": int,
         "seed_sources": [str],
         "edge_type_allowlist": [str],
@@ -263,9 +262,6 @@ class RuntimeConfig:
         return str(self.raw["graph_traversal"]["direction"])
 
     @property
-    def graph_traversal_hop_limit(self) -> int:
-        return int(self.raw["graph_traversal"]["hop_limit"])
-
     @property
     def graph_traversal_max_candidates(self) -> int:
         return int(self.raw["graph_traversal"]["max_candidates"])
