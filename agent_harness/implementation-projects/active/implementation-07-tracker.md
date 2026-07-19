@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 5 ordinal fusion and evidence-source breadth experiment.
-- Next action: verify same-pool replay and representative corpus evidence; keep the full Seam 5 hybrid unapproved.
+- Current work: Seam 6A temporal substrate and temporal retrieval.
+- Next action: define and verify YAML/runtime-owned temporal metadata precedence, deterministic date ordering, and bounded temporal diagnostics without changing prompts or compiler schema.
 
 ## Completed Repair Status
 
@@ -29,6 +29,7 @@
 | 2026-07-19 | Coordinator | Completed Seam 4B FTS5 freshness, failure atomicity, and packet-scale evidence | Added candidate-database activation, lexical projection validation, preserved latest-success artifacts, staged failure diagnostics, and explicit FTS index/raw/scoped/returned counts; lifecycle, corruption, failure-stage, lexical-mode, and deterministic-order tests pass; full configured-vault disposable ingest produced 1,078 notes and 14,576 chunks with a valid 14,576-row FTS projection; operator manually verified CI for commit `7cad93683773c20e5bc0ff299c4842e95fa78ada` (no registered check artifact was used) | Advance to Seam 4C vector identity/threshold/diversity; keep fusion, temporal, inventory, compiler/schema, final synthesis, and plugin readiness open |
 | 2026-07-19 | Coordinator | Completed Seam 4C vector identity, thresholds, and diversity | Added canonical embedding identity persistence/validation and changed-content invalidation; YAML-owned minimum similarity `0.5`, per-query cap `50`, per-note cap `4`, and global vector cap `200`; independent multi-query execution, deterministic query ordering, round-robin allocation, per-query score provenance, malformed-row diagnostics, and runtime compatibility diagnostics; focused vector/ingest/config tests pass; full suite 133 pass; complete configured-vault disposable ingest produced 1,078 notes, 14,577 chunks, and 14,577 compatible vectors; repeated corpus probes were deterministic | Advance to Seam 5 fusion/selection; keep temporal, inventory, compiler/schema, final synthesis, and plugin readiness open |
 | 2026-07-19 | Coordinator | Opened Seam 5 architecture-decision phase | Audited current merge/rank/selection behavior; recorded supplied 24-chunk/4-note genealogy counterexample; added four current-behavior characterization tests; proposed bounded-hybrid ADR with rank-based fusion, required reservations, preferred reservoir, hard note/source/byte bounds, and deterministic redundancy controls; pre-change baseline 133, post-characterization suite 137 pass | Await explicit approval of `implementation-07-seam-5-fusion-ADR.md`; do not modify production ranking |
+| 2026-07-19 | Coordinator | Accepted and closed the bounded Seam 5 ordinal-fusion experiment on the target branch | Fast-forwarded `codex/big-refactor-07.18.26` from `b5883fb` to `3dd1579`; same-pool replay reduced selected-note concentration from 4 notes/max 13 chunks to 11 notes/max 4 chunks; full suite 142 pass; prompt guards and diff checks pass | Keep the full hybrid ADR proposed; advance to Seam 6A temporal substrate |
 
 ## Work Status
 
@@ -43,8 +44,8 @@
 | Seam 4A: graph executor | Coordinator | complete | Directed complete-representative topology; outbound/inbound/`both`, depth 2, cycle/self-link, reciprocal, insertion-order, scope, edge/node controls, fairness, required contribution, and provenance tests; full suite 118 pass; compileall/diff check pass | Graph direction and bounded path provenance are verified. A full configured-corpus direction run remains optional evidence, not a blocker for the complete representative gate. |
 | Seam 4B: lexical FTS5 executor | Coordinator | complete | 5 FTS5 mode coverage; freshness/update/rename/delete/unchanged lifecycle tests; corruption validator; initial/refresh/schema/validation/activation failure preservation tests; full suite 126 pass; compileall and diff check pass; disposable full configured-vault ingest and deterministic packet-scale lexical UAT | Candidate activation is atomic at the database-file boundary; FTS projection alignment and bounded lexical attrition are manifest-visible. |
 | Seam 4C: vector executor | Coordinator | complete | Identity reuse/invalidation, malformed-index diagnostics, threshold/per-query/per-note caps, deterministic multi-query round-robin, score provenance, complete configured-corpus ingest, repeated corpus probes; full suite 133 pass; compileall and diff check pass | Canonical vector identity and bounded diversity are manifest-visible. General fusion/selection remains open. |
-| Seam 5: fusion/selection | Coordinator | bounded experiment verified | Approved branch experiment implements unweighted ordinal surface fusion, required reservations, retired ordinary layer budgets, and note breadth-before-depth; same-pool genealogy replay and representative probes pass; full verification recorded below | Full hybrid remains unapproved; preferred-scope reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds remain deferred |
-| Seam 6A: temporal substrate | Coordinator | proposed | pending | Depends on 1A |
+| Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid remains proposed; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds remain open |
+| Seam 6A: temporal substrate | Coordinator | in progress | governance closeout complete; production work pending | Define date precedence and deterministic temporal retrieval next; do not modify compiler prompts/schema |
 | Seam 7: persisted inventory | Coordinator | proposed | pending | Depends on retrieval executors and 6A |
 | Seam 8: compiler/schema contract | Coordinator | proposed | pending | Depends on runtime support |
 | Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Depends on all behavioural seams |
@@ -59,10 +60,12 @@
 
 ## Closeout Note
 
-- Seam 4C is complete for this slice. The bounded Seam 5 ordinal-fusion experiment is verified on `codex/seam5-ordinal-note-breadth`; the full Seam 5 design remains open and unapproved. Do not archive implementation-07 yet; temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness remain open.
+- Seam 5 is complete only for the accepted bounded ordinal-fusion experiment now fast-forwarded into `codex/big-refactor-07.18.26` at `3dd1579`. The broader Seam 5 hybrid ADR remains proposed and unapproved. Seam 6A temporal substrate is the current work; do not archive implementation-07 yet because persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness remain open.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
 
 Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-fusion-ADR.md` remains proposed for the full hybrid. A narrower approved experiment was implemented only on `codex/seam5-ordinal-note-breadth`: unweighted ordinal surface fusion, required reservations, retirement of ordinary layer-budget allocation, and evidence-source breadth-before-depth. The experiment does not approve or implement preferred reservoirs, hard note/source/byte bounds, redundancy suppression, query/graph quotas, or weighted RRF.
+
+Seam 5 normalization and closeout (2026-07-19): the accepted experiment branch was verified at `3dd1579de29a5b960489a3b4f1bb6eba05f40f73`, descended directly from `b5883fbce243d1cc61c28fe06a19f4d5eda7181f`, and fast-forwarded into `codex/big-refactor-07.18.26` with no conflict. Seam 5 is closed for that bounded experiment only. The full-hybrid recommendation in the ADR remains proposed; no preferred reservoir, hard note/source/byte caps, fuzzy redundancy rule, byte ceiling, weighted RRF, query/graph quota, temporal ordering, compiler/schema change, or final synthesis claim is closed by this normalization.
 
 Final design-slice verification: pre-change full suite `133` passed; characterization-focused suite `4` passed; post-change full suite `137` passed; `compileall` and `git diff --check` passed. Prompt and YAML hashes remained unchanged.
 

@@ -1,9 +1,9 @@
 # ADR: Seam 5 Fusion, Deterministic Selection, and Bounded Packets
 
-- Status: proposed
+- Status: accepted for bounded ordinal-fusion experiment; full hybrid remains proposed
 - Date: 2026-07-19
-- Scope: design and approval only; no production fusion or packet implementation is included in this ADR slice
-- Approval: explicit implementation approval is required before changing runtime ranking or selection
+- Scope: the bounded ordinal-fusion experiment is accepted; the broader hybrid remains design-only
+- Approval: the bounded experiment is accepted; explicit approval is still required before implementing the broader hybrid
 
 ## Context
 

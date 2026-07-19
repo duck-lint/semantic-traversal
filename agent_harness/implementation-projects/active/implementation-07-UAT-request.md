@@ -182,6 +182,12 @@ Final experiment verification is local, not a claim about registered CI: focused
 
 Final hashes for this experiment: rendered compiler fixture `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`; frontier instructions `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`; YAML `070f4a528d845e2a8d31a7c174062a7444caca66b2325e682079f5f8432c8bd6`. The source UAT's generated compiler prompt hash `9ca92643b2550410743d494fc82e3ae67c718c8f7867d72e43ddb49925e28f4b` remains recorded unchanged.
 
+## Seam 5 normalization and closeout (2026-07-19)
+
+The accepted experiment commit `3dd1579de29a5b960489a3b4f1bb6eba05f40f73` descended directly from `b5883fbce243d1cc61c28fe06a19f4d5eda7181f` and was fast-forwarded into `codex/big-refactor-07.18.26`. Both worktrees were clean before normalization; no conflict or independent target divergence was found. Seam 5 is complete for the bounded ordinal-fusion experiment only. The broader weighted-RRF/hybrid ADR remains proposed and unapproved.
+
+The next planned seam is Seam 6A: temporal substrate and temporal retrieval. Its implementation must preserve the accepted fusion contract, use runtime/YAML authority for temporal policy and bounds, and keep prompts, compiler schema, packet field compatibility, and final historical-causation claims outside scope.
+
 ## Seam 5 architecture baseline and ADR (2026-07-19)
 
 This is a design-only phase. No production fusion, ranking, selection, prompt, YAML, or packet-construction code changed. The active baseline at `ac4516fa853762f3d4efa9b304085581cd889f0f` was 133 passing Python tests. Prompt hashes were unchanged: compiler `9ca92643b2550410743d494fc82e3ae67c718c8f7867d72e43ddb49925e28f4b`, frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`; YAML remained `2178698b9086aed79747618ca792eddc2e885732d8a952750850e45a7f029743`.
