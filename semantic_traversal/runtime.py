@@ -4,6 +4,7 @@ import json
 import math
 import re
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1698,6 +1699,66 @@ def _apply_retrieval_candidate_hygiene(
     return adjusted
 
 
+_FUSION_SURFACE_ORDER = ("exact", "lexical", "vector", "graph")
+
+
+def _deduplicate_surface_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    surface: str,
+) -> list[dict[str, Any]]:
+    """Keep the first executor-local representation for each chunk."""
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for candidate in candidates:
+        chunk_id = str(candidate.get("chunk_id") or "")
+        if not chunk_id or chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        unique.append(candidate)
+    return unique
+
+
+def _surface_rank_maps(
+    surface_candidates: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, float]]]:
+    ranks: dict[str, dict[str, int]] = {}
+    raw_scores: dict[str, dict[str, float]] = {}
+    for surface in _FUSION_SURFACE_ORDER:
+        ranks[surface] = {}
+        raw_scores[surface] = {}
+        for ordinal, candidate in enumerate(surface_candidates.get(surface, []), start=1):
+            chunk_id = str(candidate.get("chunk_id") or "")
+            if not chunk_id:
+                continue
+            ranks[surface][chunk_id] = ordinal
+            raw_scores[surface][chunk_id] = float(candidate.get("score") or 0.0)
+    return ranks, raw_scores
+
+
+def _apply_ordinal_fusion_metadata(
+    candidate: dict[str, Any],
+    *,
+    surface_ranks: dict[str, int],
+    surface_raw_scores: dict[str, float],
+) -> None:
+    ordered_ranks = {
+        surface: surface_ranks[surface]
+        for surface in _FUSION_SURFACE_ORDER
+        if surface in surface_ranks
+    }
+    ordered_scores = {
+        surface: surface_raw_scores[surface]
+        for surface in _FUSION_SURFACE_ORDER
+        if surface in surface_raw_scores
+    }
+    candidate["surface_ranks"] = ordered_ranks
+    candidate["surface_raw_scores"] = ordered_scores
+    candidate["ordinal_fusion_score"] = sum(1.0 / rank for rank in ordered_ranks.values())
+    candidate["best_surface_rank"] = min(ordered_ranks.values()) if ordered_ranks else None
+    candidate["surface_rank_sum"] = sum(ordered_ranks.values())
+
+
 def _merge_candidates(
     lexical_candidates: list[dict[str, Any]],
     vector_candidates: list[dict[str, Any]],
@@ -1706,7 +1767,17 @@ def _merge_candidates(
     exact_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
-    source_priority = {str(key): int(value) for key, value in config.retrieval_scoring["source_priority"].items()}
+    surface_candidates = {
+        "exact": _deduplicate_surface_candidates(list(exact_candidates or []), surface="exact"),
+        "lexical": _deduplicate_surface_candidates(lexical_candidates, surface="lexical"),
+        "vector": _deduplicate_surface_candidates(vector_candidates, surface="vector"),
+        "graph": _deduplicate_surface_candidates(graph_candidates, surface="graph"),
+    }
+    surface_ranks, surface_raw_scores = _surface_rank_maps(surface_candidates)
+    surface_representations = {
+        surface: {str(candidate.get("chunk_id") or ""): candidate for candidate in candidates}
+        for surface, candidates in surface_candidates.items()
+    }
 
     def merge_list(existing: dict[str, Any], candidate: dict[str, Any], field: str) -> None:
         values = [*existing.get(field, []), *candidate.get(field, [])]
@@ -1758,47 +1829,73 @@ def _merge_candidates(
             existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
         if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
             existing["graph_direction"] = candidate.get("graph_direction")
-        existing_score = float(existing.get("score") or 0.0)
-        candidate_score = float(candidate.get("score") or 0.0)
-        if candidate_score > existing_score or (
-            candidate_score == existing_score
-            and source_priority.get(source, 0) > source_priority.get(str(existing.get("selection_source") or ""), 0)
-        ):
-            merged[chunk_id] = dict(candidate)
-            merged[chunk_id]["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
-            merged[chunk_id]["graph_hop_provenance"] = []
-            merge_list(merged[chunk_id], existing, "graph_hop_provenance")
-            merge_list(merged[chunk_id], candidate, "graph_hop_provenance")
-            if merged[chunk_id].get("graph_direction") is None:
-                merged[chunk_id]["graph_direction"] = existing.get("graph_direction")
-            merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
-            merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
-            merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
-            merge_vector_provenance(merged[chunk_id], existing)
-            merged[chunk_id]["exact_term_provenance"] = list(dict.fromkeys([*_coerce_string_list(existing.get("exact_term_provenance")), *_coerce_string_list(candidate.get("exact_term_provenance"))]))
-            evidence = [*existing.get("exact_match_evidence", []), *candidate.get("exact_match_evidence", [])]
-            merged[chunk_id]["exact_match_evidence"] = []
-            for item in evidence:
-                if item not in merged[chunk_id]["exact_match_evidence"]:
-                    merged[chunk_id]["exact_match_evidence"].append(item)
-        else:
-            existing["score"] = max(existing_score, candidate_score)
-            existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
-            existing["selection_reason"] = ", ".join(
-                part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
-            )
-            merge_vector_provenance(existing, candidate)
+        existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
+        existing["selection_reason"] = ", ".join(
+            part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
+        )
+        merge_vector_provenance(existing, candidate)
 
-    for candidate in list(exact_candidates or []) + lexical_candidates + vector_candidates + graph_candidates:
-        absorb(candidate)
+    for surface in _FUSION_SURFACE_ORDER:
+        for candidate in surface_candidates[surface]:
+            absorb(candidate)
+
+    for chunk_id, candidate in merged.items():
+        supporting_ranks = {
+            surface: ranks[chunk_id]
+            for surface, ranks in surface_ranks.items()
+            if chunk_id in ranks
+        }
+        supporting_scores = {
+            surface: raw_scores[chunk_id]
+            for surface, raw_scores in surface_raw_scores.items()
+            if chunk_id in raw_scores
+        }
+        _apply_ordinal_fusion_metadata(
+            candidate,
+            surface_ranks=supporting_ranks,
+            surface_raw_scores=supporting_scores,
+        )
+        best_surface = min(
+            supporting_ranks,
+            key=lambda surface: (supporting_ranks[surface], _FUSION_SURFACE_ORDER.index(surface)),
+        )
+        best_representation = surface_representations[best_surface][chunk_id]
+        preserved_fields = {
+            "source_layers",
+            "sources",
+            "exact_term_provenance",
+            "exact_match_evidence",
+            "graph_provenance",
+            "graph_hop_provenance",
+            "graph_direction",
+            "vector_query_scores",
+            "semantic_query_provenance",
+            "vector_best_query",
+            "vector_similarity",
+            "selection_reason",
+            "surface_ranks",
+            "surface_raw_scores",
+            "ordinal_fusion_score",
+            "best_surface_rank",
+            "surface_rank_sum",
+        }
+        merged_fields = {key: candidate[key] for key in preserved_fields if key in candidate}
+        candidate.update({key: value for key, value in best_representation.items() if key not in preserved_fields})
+        candidate.update(merged_fields)
+        candidate["selection_source"] = best_surface
 
     ranked = sorted(
         merged.values(),
         key=lambda candidate: (
             bool(candidate.get("_retrieval_demoted")),
+            -float(candidate.get("ordinal_fusion_score") or 0.0),
             not bool(candidate.get("preferred_scope_match")),
-            -source_priority.get(str((candidate.get("selection_source") or "lexical")), 0),
-            -float(candidate.get("score") or 0.0),
+            int(candidate.get("best_surface_rank") or 10**9),
+            int(candidate.get("surface_rank_sum") or 10**9),
+            tuple(
+                candidate.get("surface_ranks", {}).get(surface, 10**9)
+                for surface in _FUSION_SURFACE_ORDER
+            ),
             str(candidate["chunk_id"]),
         ),
     )
@@ -1843,28 +1940,21 @@ def _select_retrieval_chunks(
         selected.append(selected_candidate)
         return True
 
-    budgets = selection_policy.get("budgets") if isinstance(selection_policy, dict) else None
     preserve_required_layers = bool(selection_policy.get("preserve_required_layers")) if isinstance(selection_policy, dict) else False
     # Reserve exact-backed representatives only for required terms with
-    # positive matches. The configured exact budget and overall packet limit
-    # remain hard bounds; inability to reserve is diagnosed after selection.
+    # positive matches. Ordinary retrieval-layer budgets are retired; exact
+    # term bounds, executor limits, and the global packet maximum remain hard.
     required_exact_terms = set(required_exact_terms or set())
-    exact_budget = None
-    if isinstance(budgets, dict):
-        try:
-            exact_budget = max(0, int(budgets.get("exact", 0)))
-        except (TypeError, ValueError):
-            exact_budget = 0
     reserved_terms: set[str] = set()
-    if required_exact_terms and (exact_budget is None or exact_budget > 0):
+    if required_exact_terms:
         for candidate in merged_candidates:
             candidate_terms = set(_coerce_string_list(candidate.get("exact_term_provenance")))
             if "exact" not in _candidate_source_layers(candidate) or not candidate_terms.intersection(required_exact_terms - reserved_terms):
                 continue
-            if exact_budget is not None and sum("exact" in _candidate_source_layers(item) for item in selected) >= exact_budget:
-                break
             if absorb(candidate):
                 reserved_terms.update(candidate_terms.intersection(required_exact_terms))
+                selected[-1]["_fusion_selection_stage"] = "required_exact_reservation"
+                selected[-1]["_fusion_required_reservation"] = True
 
     required_sources = set(required_sources or set())
     reservation_diagnostics = selection_diagnostics if selection_diagnostics is not None else {}
@@ -1872,22 +1962,6 @@ def _select_retrieval_chunks(
     reservation_diagnostics.setdefault("preserved_sources", [])
     reservation_diagnostics.setdefault("inadequacies", [])
     if preserve_required_layers and required_sources:
-        def source_budget_available(candidate: dict[str, Any]) -> bool:
-            if not isinstance(budgets, dict):
-                return True
-            selected_source_counts = {
-                source: sum(source in _candidate_source_layers(item) for item in selected)
-                for source in required_sources
-            }
-            for source in required_sources.intersection(_candidate_source_layers(candidate)):
-                try:
-                    budget = max(0, int(budgets.get(source, 0)))
-                except (TypeError, ValueError):
-                    budget = 0
-                if selected_source_counts.get(source, 0) >= budget:
-                    return False
-            return True
-
         while True:
             satisfied = {
                 source for source in required_sources
@@ -1899,14 +1973,11 @@ def _select_retrieval_chunks(
             eligible = [
                 candidate for candidate in merged_candidates
                 if set(_candidate_source_layers(candidate)).intersection(unsatisfied)
-                and source_budget_available(candidate)
             ]
             if not eligible:
                 for source in sorted(unsatisfied):
                     reason = "no candidate survived executor limits"
-                    if isinstance(budgets, dict) and int(budgets.get(source, 0) or 0) <= 0:
-                        reason = "source budget is zero"
-                    elif len(selected) >= max(0, max_chunks):
+                    if len(selected) >= max(0, max_chunks):
                         reason = "packet maximum is exhausted"
                     reservation_diagnostics["inadequacies"].append({"source": source, "reason": reason})
                 break
@@ -1918,30 +1989,136 @@ def _select_retrieval_chunks(
                 reason = "packet maximum is exhausted" if len(selected) >= max(0, max_chunks) else "deduplication removed the only representative"
                 reservation_diagnostics["inadequacies"].append({"source": sorted(unsatisfied)[0], "reason": reason})
                 break
+            selected[-1]["_fusion_selection_stage"] = "required_layer_reservation"
+            selected[-1]["_fusion_required_reservation"] = True
             reservation_diagnostics["preserved_sources"] = sorted(
                 set(reservation_diagnostics["preserved_sources"]).union(_candidate_source_layers(best))
             )
 
-    if isinstance(budgets, dict):
-        for source in ("exact", "lexical", "vector", "graph"):
-            try:
-                budget = max(0, int(budgets.get(source, 0)))
-            except (TypeError, ValueError):
-                budget = 0
-            taken = sum(source in _candidate_source_layers(item) for item in selected)
-            for candidate in merged_candidates:
-                if taken >= budget:
-                    break
-                if source not in _candidate_source_layers(candidate):
-                    continue
-                if absorb(candidate):
-                    taken += 1
-
-    for candidate in merged_candidates:
-        if len(selected) >= max(0, max_chunks):
+    # Ordinary selection is breadth-before-depth across evidence sources
+    # identified by note_id. Required reservations already count as depth.
+    selected_ids = {str(item.get("chunk_id") or "") for item in selected}
+    selected_hashes = {str(item.get("chunk_hash") or "") for item in selected if str(item.get("chunk_hash") or "")}
+    note_candidates: dict[str, list[dict[str, Any]]] = {}
+    note_first_position: dict[str, int] = {}
+    for position, candidate in enumerate(merged_candidates):
+        chunk_id = str(candidate.get("chunk_id") or "")
+        if chunk_id in selected_ids:
+            continue
+        note_id = str(candidate.get("note_id") or "")
+        note_candidates.setdefault(note_id, []).append(candidate)
+        note_first_position.setdefault(note_id, position)
+    note_order = sorted(note_candidates, key=lambda note_id: (note_first_position[note_id], note_id))
+    note_counts = {
+        note_id: sum(str(item.get("note_id") or "") == note_id for item in selected)
+        for note_id in note_order
+    }
+    note_offsets = {note_id: 0 for note_id in note_order}
+    round_number = 0
+    while len(selected) < max(0, max_chunks):
+        eligible_notes = [
+            note_id for note_id in note_order
+            if note_offsets[note_id] < len(note_candidates[note_id])
+        ]
+        if not eligible_notes:
             break
-        absorb(candidate)
+        minimum_depth = min(note_counts[note_id] for note_id in eligible_notes)
+        round_number += 1
+        for note_id in note_order:
+            if len(selected) >= max(0, max_chunks):
+                break
+            if note_id not in eligible_notes or note_counts[note_id] != minimum_depth:
+                continue
+            candidate = note_candidates[note_id][note_offsets[note_id]]
+            note_offsets[note_id] += 1
+            chunk_id = str(candidate.get("chunk_id") or "")
+            chunk_hash = str(candidate.get("chunk_hash") or "")
+            before_depth = note_counts[note_id]
+            if chunk_id in selected_ids:
+                reservation_diagnostics.setdefault("duplicate_rejections", []).append({"chunk_id": chunk_id, "reason": "duplicate_chunk_id"})
+                continue
+            if chunk_hash and chunk_hash in selected_hashes:
+                reservation_diagnostics.setdefault("duplicate_rejections", []).append({"chunk_id": chunk_id, "reason": "duplicate_content_hash"})
+                continue
+            selected_candidate = dict(candidate)
+            selected_candidate["_fusion_selection_stage"] = "ordinary_note_breadth"
+            selected_candidate["_fusion_round"] = round_number
+            selected_candidate["_fusion_note_count_before"] = before_depth
+            selected_candidate["_fusion_note_count_after"] = before_depth + 1
+            if absorb(selected_candidate):
+                selected_ids.add(chunk_id)
+                if chunk_hash:
+                    selected_hashes.add(chunk_hash)
+                note_counts[note_id] += 1
     return selected
+
+
+def _fusion_diagnostics(
+    *,
+    merged_candidates: list[dict[str, Any]],
+    selected_candidates: list[dict[str, Any]],
+    selection_diagnostics: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    selected_ids = {str(candidate.get("chunk_id") or "") for candidate in selected_candidates}
+    selected_by_id = {str(candidate.get("chunk_id") or ""): candidate for candidate in selected_candidates}
+    selected_hashes = {str(candidate.get("chunk_hash") or "") for candidate in selected_candidates if str(candidate.get("chunk_hash") or "")}
+    selected_note_counts = Counter(str(candidate.get("note_id") or "") for candidate in selected_candidates)
+    selected_preferred = [candidate for candidate in selected_candidates if bool(candidate.get("preferred_scope_match"))]
+    candidate_records: list[dict[str, Any]] = []
+    for candidate in merged_candidates:
+        chunk_id = str(candidate.get("chunk_id") or "")
+        selected = chunk_id in selected_ids
+        selected_record = selected_by_id.get(chunk_id, candidate)
+        rejection_reason = None
+        if not selected:
+            chunk_hash = str(candidate.get("chunk_hash") or "")
+            if chunk_hash and chunk_hash in selected_hashes:
+                rejection_reason = "duplicate_content_hash"
+            else:
+                rejection_reason = "not_selected_after_note_breadth"
+        candidate_records.append({
+            "chunk_id": chunk_id,
+            "note_id": str(candidate.get("note_id") or ""),
+            "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
+            "retrieval_demoted": bool(candidate.get("_retrieval_demoted")),
+            "source_layers": _candidate_source_layers(candidate),
+            "surface_ranks": dict(candidate.get("surface_ranks") or {}),
+            "surface_raw_scores": dict(candidate.get("surface_raw_scores") or {}),
+            "ordinal_fusion_score": candidate.get("ordinal_fusion_score"),
+            "best_surface_rank": candidate.get("best_surface_rank"),
+            "surface_rank_sum": candidate.get("surface_rank_sum"),
+            "selection_source": candidate.get("selection_source"),
+            "status": "selected" if selected else "rejected",
+            "selection_stage": selected_record.get("_fusion_selection_stage"),
+            "selection_round": selected_record.get("_fusion_round"),
+            "note_selected_count_before": selected_record.get("_fusion_note_count_before"),
+            "note_selected_count_after": selected_record.get("_fusion_note_count_after"),
+            "required_reservation": bool(selected_record.get("_fusion_required_reservation")),
+            "rejection_reason": rejection_reason,
+        })
+    packet_bytes = len(json.dumps(retrieval_packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return {
+        "selector": "ordinal_note_breadth",
+        "ordinal_formula": "sum(1 / surface_rank) over supporting surfaces",
+        "surface_order": list(_FUSION_SURFACE_ORDER),
+        "ordinary_layer_budgets": "retired",
+        "budget_diagnostic": "selection_policy.budgets retired for ordinal-note-breadth selector",
+        "candidate_count": len(merged_candidates),
+        "unique_candidate_note_count": len({str(candidate.get("note_id") or "") for candidate in merged_candidates}),
+        "selected_count": len(selected_candidates),
+        "selected_unique_note_count": len(selected_note_counts),
+        "selected_chunks_per_note": dict(sorted(selected_note_counts.items())),
+        "max_selected_chunks_per_note": max(selected_note_counts.values(), default=0),
+        "preferred_selected_count": len(selected_preferred),
+        "preferred_selected_unique_note_count": len({str(candidate.get("note_id") or "") for candidate in selected_preferred}),
+        "selected_counts_by_supporting_surface": _count_selected_by_layer(selected_candidates),
+        "selected_counts_by_selection_source": dict(sorted(Counter(str(candidate.get("selection_source") or "") for candidate in selected_candidates).items())),
+        "required_reservation": dict(selection_diagnostics),
+        "retrieval_packet_bytes": packet_bytes,
+        "synthesis_context_bytes": None,
+        "candidates": candidate_records,
+    }
 
 
 def _semantic_traversal(
@@ -2376,6 +2553,12 @@ def _semantic_traversal(
         "retrieval_observation": "matched_chunks" if selected_candidates else "no_matches",
         "assembled_from_traversal_manifest": True,
     }
+    traversal_manifest["fusion"] = _fusion_diagnostics(
+        merged_candidates=merged_candidates,
+        selected_candidates=selected_candidates,
+        selection_diagnostics=selection_diagnostics,
+        retrieval_packet=retrieval_packet,
+    )
 
     return traversal_manifest, retrieval_packet
 
@@ -2888,6 +3071,15 @@ def run_thread_turn(
         runtime_outcome=runtime_outcome,
         blocking_reasons=blocking_reasons,
     )
+    fusion_manifest = semantic_traversal_manifest.get("fusion")
+    if isinstance(fusion_manifest, dict):
+        # The manifest is referenced by the context packet. Two passes make
+        # the recorded value include the diagnostic field itself without
+        # introducing a hidden byte ceiling or truncating evidence.
+        for _ in range(2):
+            fusion_manifest["synthesis_context_bytes"] = len(
+                json.dumps(synthesis_context_packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            )
 
     assistant_response_text: str | None = None
     llm_metadata: dict[str, Any] = {

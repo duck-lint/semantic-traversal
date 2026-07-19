@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 5 fusion, deterministic selection, and bounded packets.
-- Next action: approve a fusion ADR grounded in executor contracts and corpus UAT before modifying production ranking.
+- Current work: Seam 5 ordinal fusion and evidence-source breadth experiment.
+- Next action: verify same-pool replay and representative corpus evidence; keep the full Seam 5 hybrid unapproved.
 
 ## Completed Repair Status
 
@@ -43,7 +43,7 @@
 | Seam 4A: graph executor | Coordinator | complete | Directed complete-representative topology; outbound/inbound/`both`, depth 2, cycle/self-link, reciprocal, insertion-order, scope, edge/node controls, fairness, required contribution, and provenance tests; full suite 118 pass; compileall/diff check pass | Graph direction and bounded path provenance are verified. A full configured-corpus direction run remains optional evidence, not a blocker for the complete representative gate. |
 | Seam 4B: lexical FTS5 executor | Coordinator | complete | 5 FTS5 mode coverage; freshness/update/rename/delete/unchanged lifecycle tests; corruption validator; initial/refresh/schema/validation/activation failure preservation tests; full suite 126 pass; compileall and diff check pass; disposable full configured-vault ingest and deterministic packet-scale lexical UAT | Candidate activation is atomic at the database-file boundary; FTS projection alignment and bounded lexical attrition are manifest-visible. |
 | Seam 4C: vector executor | Coordinator | complete | Identity reuse/invalidation, malformed-index diagnostics, threshold/per-query/per-note caps, deterministic multi-query round-robin, score provenance, complete configured-corpus ingest, repeated corpus probes; full suite 133 pass; compileall and diff check pass | Canonical vector identity and bounded diversity are manifest-visible. General fusion/selection remains open. |
-| Seam 5: fusion/selection | Coordinator | design proposed | ADR created; four current-behavior characterization tests; full suite 137 pass; compileall/diff check pass; prompt/YAML hashes unchanged | Await approval before production fusion implementation |
+| Seam 5: fusion/selection | Coordinator | bounded experiment verified | Approved branch experiment implements unweighted ordinal surface fusion, required reservations, retired ordinary layer budgets, and note breadth-before-depth; same-pool genealogy replay and representative probes pass; full verification recorded below | Full hybrid remains unapproved; preferred-scope reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds remain deferred |
 | Seam 6A: temporal substrate | Coordinator | proposed | pending | Depends on 1A |
 | Seam 7: persisted inventory | Coordinator | proposed | pending | Depends on retrieval executors and 6A |
 | Seam 8: compiler/schema contract | Coordinator | proposed | pending | Depends on runtime support |
@@ -59,12 +59,26 @@
 
 ## Closeout Note
 
-- Seam 4C is complete for this slice. The next planned seam is Seam 5: fusion/selection. Do not archive implementation-07 yet; temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness remain open.
+- Seam 4C is complete for this slice. The bounded Seam 5 ordinal-fusion experiment is verified on `codex/seam5-ordinal-note-breadth`; the full Seam 5 design remains open and unapproved. Do not archive implementation-07 yet; temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness remain open.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
 
-Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-fusion-ADR.md` is proposed, not approved. It recommends a bounded hybrid centered on weighted reciprocal-rank fusion, required-evidence reservations, bounded preferred-scope reservoirs, hard note/source/byte ceilings, and deterministic normalized-text redundancy checks. No production fusion, ranking, selection, YAML, packet, or prompt code changed. Four characterization tests freeze current budget overflow, one-note concentration, unlike-score ordering, and preferred-scope loss after executor truncation.
+Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-fusion-ADR.md` remains proposed for the full hybrid. A narrower approved experiment was implemented only on `codex/seam5-ordinal-note-breadth`: unweighted ordinal surface fusion, required reservations, retirement of ordinary layer-budget allocation, and evidence-source breadth-before-depth. The experiment does not approve or implement preferred reservoirs, hard note/source/byte bounds, redundancy suppression, query/graph quotas, or weighted RRF.
 
 Final design-slice verification: pre-change full suite `133` passed; characterization-focused suite `4` passed; post-change full suite `137` passed; `compileall` and `git diff --check` passed. Prompt and YAML hashes remained unchanged.
+
+## Seam 5 bounded ordinal-fusion experiment (2026-07-19)
+
+The experiment was created from `b5883fbce243d1cc61c28fe06a19f4d5eda7181f` on branch `codex/seam5-ordinal-note-breadth`; the baseline branch was not modified. The recorded genealogy artifacts were available at `C:\Users\madis\Desktop\kháos\.semantic-traversal\threads\thread-872f7213b0c1\turns\turn-000001`. Their hashes were compiler packet `ee789c9a5b6e5a42d7b8279ada0c7dabe6e7d630ec36cc21eded0e654364df03`, retrieval packet `7eb7292fccd60c2b7d44f205587144a0602d06910263deff4671ffecfd2d0856`, traversal manifest `b0a5b8b7e0d8ac9ed21557551790659928f3637dcd6624a567d27a92ad51c782`, and synthesis context `ade4f5dff22f37428f02f48abe9631bde91f94cf88f0d850b5851110f4bf56f`. The candidate pool was not persisted by the original run; temporary instrumentation reconstructed it from the same compiler packet, configured database, and executor backends. Capture hash: `797a5d8bfd507c0e15ca03dc3736061c1773da6552d57f9593f3bda437f387b`.
+
+The original selection reproduced 24 chunks from 4 notes, with maximum note concentration 13; title counts were 13 Gärdenfors, 8 Semantic Geometry, 2 December 31 2025, and 1 Semantic Traversal. Support counts were lexical 19, vector 6, graph 4; only 2 preferred-scope chunks survived. Same-pool experimental selection retained 24 chunks from 11 notes, maximum concentration 4, with support counts lexical 13, vector 3, graph 12. Both semantic-query streams remained represented and graph support came from four distinct notes rather than only the seed note. Repeated experimental replay produced identical selected IDs, candidate pool, and fusion diagnostics; selected-ID hash `d8248dc0a14c20aabc8a51353656e4597763165c7ce02fbc9dfdc8428fcd1ef`, fusion hash `09722de61abd7a797d228e524ce891fbcdc656c237e77ccf9c18b1d2e472e500`.
+
+The production change is intentionally narrower than the proposed ADR: fusion uses one-based per-surface ranks and `sum(1/rank)` with deterministic preferred-scope, best-rank, rank-sum, canonical-surface, and chunk-ID tie-breaks; raw cross-surface scores and source-priority values are retained for audit but no longer decide cross-surface fusion. Required exact/layer reservations remain first. Ordinary layer budgets are retired explicitly by runtime resolver diagnostics rather than silently treated as caps. Remaining candidates are selected breadth-before-depth by deterministic note order, without a new hard note cap. Existing provenance, exact/content-hash deduplication, and global `max_chunks` remain intact.
+
+Representative probes covered genealogy, exact literal, broad conceptual, narrow factual, graph relation, preferred-scope, multi-query, and unrelated control cases. All completed deterministically; packet sizes ranged from 31,404 to 66,856 bytes in direct executor probes. The preferred-scope probe used an empty preferred request in its controlled plan, so it is not evidence for preferred-scope admission; the existing preferred-scope truncation limitation remains open. The original persisted genealogy packet was approximately 47,895 bytes and synthesis context approximately 93,029 bytes; no byte ceiling was introduced. Near-duplicate journal chunks remain because fuzzy redundancy suppression is deferred.
+
+Verification for this branch: focused retrieval/config/fusion tests `142` passed; the complete local Python suite, compileall, and diff check are recorded with final hashes below. Prompt hashes remained compiler `9ca92643b2550410743d494fc82e3ae67c718c8f7867d72e43ddb49925e28f4b` and frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`. The YAML hash changed only because the retired compiler-budget compatibility surface was made explicit; no prompt text changed.
+
+Final local hash guard: rendered compiler fixture `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`, frontier instructions `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`, and YAML `070f4a528d845e2a8d31a7c174062a7444caca66b2325e682079f5f8432c8bd6`. The previously recorded genealogy compiler prompt hash `9ca92643b2550410743d494fc82e3ae67c718c8f7867d72e43ddb49925e28f4b` remains unchanged in the source UAT artifact.
 
 Operator-supplied visual GitHub Actions evidence: run title `complete seam 4c vector identity and diversity`, tests/run identifier `tests #94`, commit `ac4516f`, branch `codex/big-refactor-07.18.26`, passed, approximately 1m49s. No independently available run/job ID is claimed.
 

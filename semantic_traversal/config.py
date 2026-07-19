@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,11 +56,13 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "selection_policy": {
                 "max_chunks": int,
                 "preserve_required_layers": bool,
-                "budgets": dict,
             },
             "claim_policy": {
                 "negative_claims_require_exact_layer": bool,
             },
+        },
+        "compiler_compatibility": {
+            "selection_policy_budgets": dict,
         },
         "scope_aliases": dict,
         "scope_policy": {
@@ -278,7 +281,14 @@ class RuntimeConfig:
 
     @property
     def retrieval_planner_defaults(self) -> dict[str, Any]:
-        return self.raw["retrieval"]["planner_defaults"]
+        defaults = deepcopy(self.raw["retrieval"]["planner_defaults"])
+        compatibility = self.raw["retrieval"].get("compiler_compatibility", {})
+        legacy_budgets = compatibility.get("selection_policy_budgets", {}) if isinstance(compatibility, dict) else {}
+        # The frozen compiler packet still emits this legacy field. Keep its
+        # explicit compatibility values available to packet canonicalization,
+        # while runtime binding retires it from ordinary selection authority.
+        defaults.setdefault("selection_policy", {})["budgets"] = dict(legacy_budgets)
+        return defaults
 
     @property
     def graph_traversal_enabled(self) -> bool:

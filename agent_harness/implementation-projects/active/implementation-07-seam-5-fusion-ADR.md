@@ -217,3 +217,26 @@ This ADR phase changes only records and characterization tests. The future imple
 ## Decision and implementation gate
 
 Decision: proposed bounded hybrid as described above, with weighted reciprocal-rank fusion at its core. This is a recommendation, not an implementation authorization. Production ranking, selection, YAML controls, packet construction, and prompts must remain unchanged until the user explicitly approves the open questions or supplies a revised contract.
+
+## Approved bounded-decision addendum (2026-07-19)
+
+The user approved a narrower experiment on branch `codex/seam5-ordinal-note-breadth`, based on `b5883fb`, without approving the full hybrid above. The approved experiment is:
+
+- unweighted ordinal reciprocal-rank fusion with no offset constant and no source weights;
+- one stream each for exact, lexical, vector, and graph;
+- `selection_source` chosen by best surface rank, then canonical surface order;
+- required exact and required-layer reservations preserved first;
+- ordinary `selection_policy.budgets` allocation retired explicitly;
+- evidence-source breadth-before-depth grouped by `note_id`;
+- existing exact chunk/content-hash deduplication and global `max_chunks` ceiling;
+- durable fusion/rejection diagnostics sufficient to audit the experiment.
+
+The following remain deferred and unapproved: preferred-scope reservoirs, fuzzy or Jaccard redundancy, packet-byte ceilings, hard note caps, hard retrieval-layer quotas, weighted RRF, query or graph quotas, marginal-contribution thresholds, temporal ordering, compiler/schema work, and the remainder of the proposed hybrid. Preferred scope remains only a tie-break in this experiment and may still be lost before fusion when an executor limit truncates it.
+
+Success requires truthful same-candidate-pool replay of the recorded genealogy failure, more than four selected notes, lower than thirteen maximum note concentration, no reduction in preferred selected evidence, retained vector/graph provenance, deterministic output, required-evidence preservation, representative-query regressions remaining green, and unchanged prompts. Failure must be reported as the narrowest demonstrated gap; it must not trigger automatic implementation of the full hybrid.
+
+Rollback boundary: revert the experiment branch to `b5883fb`; no ingest or index migration is required. The original full-hybrid decision above remains proposed and unapproved.
+
+The experiment passed its bounded gate on the reconstructed live candidate pool. The baseline pool was exact 0, lexical 50, vector 8, graph 24, merged 77; the baseline selector produced 24 selected chunks from 4 notes with maximum concentration 13. The ordinal selector used the same 77 merged candidates and produced 24 selected chunks from 11 notes with maximum concentration 4. Repeated runs produced identical selected IDs and fusion diagnostics. Vector provenance retained both semantic-query streams, and graph support represented four notes rather than collapsing to the seed note. Preferred selected evidence did not decrease in the same-pool replay, but preferred-scope admission before executor truncation remains unresolved and is intentionally not claimed as fixed. The original near-duplicate journal chunks also remain because redundancy suppression was deferred.
+
+The implementation changed runtime selector behavior and the explicit runtime/YAML budget-binding seam; therefore the earlier migration statement that this phase changes only records and characterization tests applies only to the preceding design-only phase, not to this approved experiment branch. The full ADR decision remains proposed; this addendum authorizes only the bounded experiment described above.

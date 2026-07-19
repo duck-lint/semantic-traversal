@@ -309,10 +309,6 @@ def bind_retrieval_plan(
     retrieval_layers = canonical_layers
     requested_selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})
     runtime_selection_policy = config.retrieval_planner_defaults["selection_policy"]
-    runtime_budgets = {
-        source: max(0, int(runtime_selection_policy["budgets"].get(source, 0)))
-        for source in ("exact", "lexical", "vector", "graph")
-    }
     runtime_max_chunks = min(
         max(0, int(runtime_selection_policy["max_chunks"])),
         max(0, int(config.max_retrieval_chunks)),
@@ -320,8 +316,15 @@ def bind_retrieval_plan(
     selection_policy = {
         "max_chunks": runtime_max_chunks,
         "preserve_required_layers": bool(runtime_selection_policy["preserve_required_layers"]),
-        "budgets": runtime_budgets,
     }
+    budget_retirement = {
+        "field": "selection_policy.budgets",
+        "requested": requested_selection_policy.get("budgets"),
+        "effective": None,
+        "action": "retired",
+        "reason": "ordinary retrieval-layer allocation is retired for ordinal-note-breadth selector",
+    }
+    adjustments.append(budget_retirement)
     if requested_selection_policy != selection_policy:
         adjustments.append(
             {

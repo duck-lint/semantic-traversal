@@ -34,13 +34,14 @@ retrieval:
     selection_policy:
       max_chunks: 24
       preserve_required_layers: true
-      budgets:
-        exact: 12
-        lexical: 6
-        vector: 6
-        graph: 4
     claim_policy:
       negative_claims_require_exact_layer: true
+  compiler_compatibility:
+    selection_policy_budgets:
+      exact: 12
+      lexical: 6
+      vector: 6
+      graph: 4
 
 runtime_conversation:
   stop_words: [a, an, and, are, as, at, be, but, by, about, do, for, from, how, i, if, in, into, is, it, my, of, "on", or, our, retrieve, retrieved, retrieves, retrieving, note, notes, regarding, search, the, find, found, locate, mention, mentions, show, to, with, you, your]

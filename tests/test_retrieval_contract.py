@@ -135,7 +135,7 @@ class RetrievalContractTests(unittest.TestCase):
         lexical = [{"chunk_id": "shared", "chunk_hash": "h", "selection_source": "lexical", "score": 6}]
         merged = _merge_candidates(lexical, [], [], config=self.config, exact_candidates=exact)
         selected = _select_retrieval_chunks(merged_candidates=merged, max_chunks=1, required_exact_terms={"alpha"})
-        self.assertEqual(selected[0]["selection_source"], "lexical")
+        self.assertEqual(selected[0]["selection_source"], "exact")
         self.assertEqual(selected[0]["source_layers"], ["exact", "lexical"])
         self.assertEqual(selected[0]["exact_term_provenance"], ["alpha"])
         self.assertEqual(selected[0]["exact_match_evidence"], [{"term": "alpha"}])
@@ -240,7 +240,7 @@ class RetrievalContractTests(unittest.TestCase):
         self.assertEqual(merged[0]["semantic_query_provenance"], ["alpha", "beta"])
         self.assertEqual(merged[0]["vector_query_scores"], [{"query": "alpha", "similarity": 0.7}, {"query": "beta", "similarity": 0.6}])
 
-    def test_characterization_current_global_fill_can_exceed_source_budget(self) -> None:
+    def test_retired_layer_budgets_do_not_control_ordinal_selection(self) -> None:
         candidates = [
             {"chunk_id": "lex-a", "note_id": "n1", "chunk_hash": "lex-a", "selection_source": "lexical", "source_layers": ["lexical"], "score": 4.0},
             {"chunk_id": "lex-b", "note_id": "n2", "chunk_hash": "lex-b", "selection_source": "lexical", "source_layers": ["lexical"], "score": 3.0},
@@ -252,12 +252,67 @@ class RetrievalContractTests(unittest.TestCase):
             max_chunks=4,
             selection_policy={"budgets": {"exact": 0, "lexical": 1, "vector": 0, "graph": 0}},
         )
-        # Characterizes the current behavior: the budget pass takes one lexical
-        # item, then the unrestricted global fill takes the remaining candidates.
-        self.assertEqual(sum("lexical" in item["source_layers"] for item in selected), 2)
+        self.assertEqual([item["chunk_id"] for item in selected], ["lex-a", "lex-b", "vec-a", "vec-b"])
         self.assertEqual(len(selected), 4)
 
-    def test_characterization_current_selection_can_fill_one_note(self) -> None:
+    def test_ordinal_fusion_formula_and_surface_rank_provenance(self) -> None:
+        lexical = [
+            {"chunk_id": "lex-first", "note_id": "n1", "chunk_hash": "lex-first", "selection_source": "lexical", "source_layers": ["lexical"], "score": 100.0},
+            {"chunk_id": "shared", "note_id": "n2", "chunk_hash": "shared", "selection_source": "lexical", "source_layers": ["lexical"], "score": 1.0},
+        ]
+        vector = [
+            {"chunk_id": "vector-first", "note_id": "n3", "chunk_hash": "vector-first", "selection_source": "vector", "source_layers": ["vector"], "score": 0.0},
+            {"chunk_id": "shared", "note_id": "n2", "chunk_hash": "shared", "selection_source": "vector", "source_layers": ["vector"], "score": 0.0},
+        ]
+        merged = _merge_candidates(lexical, vector, [], config=self.config)
+        shared = next(item for item in merged if item["chunk_id"] == "shared")
+        self.assertEqual(shared["surface_ranks"], {"lexical": 2, "vector": 2})
+        self.assertEqual(shared["ordinal_fusion_score"], 1.0)
+        self.assertEqual(shared["selection_source"], "lexical")
+        self.assertEqual(shared["surface_raw_scores"], {"lexical": 1.0, "vector": 0.0})
+
+    def test_ordinal_fusion_ignores_raw_magnitude_when_local_order_is_unchanged(self) -> None:
+        def run(score_a: float, score_b: float) -> list[str]:
+            merged = _merge_candidates(
+                [
+                    {"chunk_id": "a", "note_id": "n1", "chunk_hash": "a", "selection_source": "lexical", "source_layers": ["lexical"], "score": score_a},
+                    {"chunk_id": "b", "note_id": "n2", "chunk_hash": "b", "selection_source": "lexical", "source_layers": ["lexical"], "score": score_b},
+                ], [], [], config=self.config,
+            )
+            return [item["chunk_id"] for item in merged]
+        self.assertEqual(run(1000.0, 1.0), run(-1000.0, 9999.0))
+
+    def test_selection_source_uses_best_rank_then_canonical_surface_order(self) -> None:
+        lexical = [{"chunk_id": "shared", "note_id": "n1", "chunk_hash": "shared", "selection_source": "lexical", "source_layers": ["lexical"], "score": 100.0}]
+        vector = [{"chunk_id": "shared", "note_id": "n1", "chunk_hash": "shared", "selection_source": "vector", "source_layers": ["vector"], "score": -100.0}]
+        merged = _merge_candidates(lexical, vector, [], config=self.config)
+        self.assertEqual(merged[0]["selection_source"], "lexical")
+        self.assertEqual(merged[0]["surface_ranks"], {"lexical": 1, "vector": 1})
+
+    def test_required_reservations_count_as_note_depth_before_ordinary_rounds(self) -> None:
+        exact = [
+            {"chunk_id": "required-alpha", "note_id": "a", "chunk_hash": "required-alpha", "selection_source": "exact", "source_layers": ["exact"], "score": 1.0, "exact_term_provenance": ["alpha"]},
+            {"chunk_id": "required-beta", "note_id": "a", "chunk_hash": "required-beta", "selection_source": "exact", "source_layers": ["exact"], "score": 1.0, "exact_term_provenance": ["beta"]},
+        ]
+        ordinary = [
+            {"chunk_id": "b1", "note_id": "b", "chunk_hash": "b1", "selection_source": "lexical", "source_layers": ["lexical"], "score": 1.0},
+            {"chunk_id": "c1", "note_id": "c", "chunk_hash": "c1", "selection_source": "lexical", "source_layers": ["lexical"], "score": 1.0},
+        ]
+        merged = _merge_candidates(ordinary, [], [], config=self.config, exact_candidates=exact)
+        selected = _select_retrieval_chunks(merged_candidates=merged, max_chunks=4, required_exact_terms={"alpha", "beta"})
+        self.assertEqual([item["note_id"] for item in selected], ["a", "a", "b", "c"])
+
+    def test_fusion_diagnostics_are_manifest_visible(self) -> None:
+        candidates = [{"chunk_id": "c1", "note_id": "n1", "chunk_hash": "c1", "selection_source": "lexical", "source_layers": ["lexical"], "score": 1.0}]
+        merged = _merge_candidates(candidates, [], [], config=self.config)
+        selected = _select_retrieval_chunks(merged_candidates=merged, max_chunks=1, selection_policy={"preserve_required_layers": True})
+        from semantic_traversal.runtime import _fusion_diagnostics
+        diagnostics = _fusion_diagnostics(merged_candidates=merged, selected_candidates=selected, selection_diagnostics={}, retrieval_packet={"selected_chunks": []})
+        self.assertEqual(diagnostics["selector"], "ordinal_note_breadth")
+        self.assertEqual(diagnostics["budget_diagnostic"], "selection_policy.budgets retired for ordinal-note-breadth selector")
+        self.assertEqual(diagnostics["candidates"][0]["status"], "selected")
+
+    def test_ordinal_selection_allocates_breadth_before_depth(self) -> None:
         candidates = [
             {"chunk_id": f"a-{index}", "note_id": "seed", "chunk_hash": f"a-{index}", "selection_source": "graph", "source_layers": ["graph"], "score": 1.0}
             for index in range(4)
@@ -265,11 +320,9 @@ class RetrievalContractTests(unittest.TestCase):
             {"chunk_id": "z-neighbor", "note_id": "neighbor", "chunk_hash": "z-neighbor", "selection_source": "graph", "source_layers": ["graph"], "score": 1.0}
         ]
         selected = _select_retrieval_chunks(merged_candidates=candidates, max_chunks=4)
-        # No final per-note cap exists yet; a single traversed note can consume
-        # the packet even when another note has an eligible candidate.
-        self.assertEqual([item["note_id"] for item in selected], ["seed"] * 4)
+        self.assertEqual([item["note_id"] for item in selected], ["seed", "neighbor", "seed", "seed"])
 
-    def test_characterization_current_ranking_compares_executor_scores_directly(self) -> None:
+    def test_ordinal_fusion_keeps_executor_raw_scores_out_of_cross_surface_order(self) -> None:
         exact = [{"chunk_id": "exact", "note_id": "n1", "chunk_hash": "exact", "selection_source": "exact", "source_layers": ["exact"], "score": 4.1}]
         vector = [{"chunk_id": "vector", "note_id": "n2", "chunk_hash": "vector", "selection_source": "vector", "source_layers": ["vector"], "score": 3.2}]
         graph = [{"chunk_id": "graph", "note_id": "n3", "chunk_hash": "graph", "selection_source": "graph", "source_layers": ["graph"], "score": 3.1}]
@@ -341,8 +394,8 @@ class RetrievalContractTests(unittest.TestCase):
             selection_policy={"preserve_required_layers": True, "budgets": {"exact": 0, "lexical": 2, "vector": 0, "graph": 0}},
             required_sources={"vector"}, selection_diagnostics=zero_diagnostics,
         )
-        self.assertEqual([item["chunk_id"] for item in zero_selected], ["lex", "multi"])
-        self.assertTrue(any(item["reason"] == "source budget is zero" for item in zero_diagnostics["inadequacies"]))
+        self.assertEqual([item["chunk_id"] for item in zero_selected], ["multi", "lex"])
+        self.assertEqual(zero_diagnostics["inadequacies"], [])
 
     def test_runtime_resolver_replaces_compiler_selection_and_claim_policy(self) -> None:
         plan = {
@@ -355,11 +408,12 @@ class RetrievalContractTests(unittest.TestCase):
         bound, adjustments, _ = bind_retrieval_plan(planner_retrieval_plan=plan, inventory_summary={"frontmatter_facets": {"note_type": []}, "observed_source_labels": [], "path_topology": {"top_level": [], "second_level": []}}, config=self.config, raw_user_input="alpha")
         self.assertEqual(bound["selection_policy"]["max_chunks"], 24)
         self.assertTrue(bound["selection_policy"]["preserve_required_layers"])
-        self.assertEqual(bound["selection_policy"]["budgets"], {"exact": 12, "lexical": 6, "vector": 6, "graph": 4})
+        self.assertNotIn("budgets", bound["selection_policy"])
         self.assertTrue(bound["claim_policy"]["negative_claims_require_exact_layer"])
         self.assertEqual(bound["retrieval_layers"][0]["effective_limit"], self.config.retrieval_lexical_max_candidates)
         self.assertEqual(bound["retrieval_layers"][0]["limit_adjustment"], "clamped_to_max")
         self.assertTrue(any(item["action"] == "runtime_policy_override" for item in adjustments))
+        self.assertTrue(any(item["action"] == "retired" and item["field"] == "selection_policy.budgets" for item in adjustments))
 
     def test_required_exact_layer_blocks_when_terms_were_skipped(self) -> None:
         packet = {
