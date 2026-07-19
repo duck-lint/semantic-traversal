@@ -999,9 +999,14 @@ def _lexical_candidates(
         "requested_mode": mode,
         "effective_mode": None,
         "fts_available": None,
+        "index_row_count": None,
+        "raw_match_count": None,
+        "scoped_match_count": None,
+        "returned_candidate_count": 0,
         "candidate_count": 0,
     }
     def finish() -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+        diagnostics["returned_candidate_count"] = len(candidates)
         diagnostics["candidate_count"] = len(candidates)
         return (candidates, notes, diagnostics) if return_diagnostics else (candidates, notes)
 
@@ -1041,7 +1046,12 @@ def _lexical_candidates(
         message = [f"lexical search unavailable: FTS5 index error: {exc}"]
         return ([], message, diagnostics) if return_diagnostics else ([], message)
     diagnostics["fts_available"] = True
+    diagnostics["index_row_count"] = int(connection.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0])
     rows_by_id = {str(row.get("chunk_id")): row for row in _scoped_chunk_rows(chunk_rows, scope_filters or {})}
+    diagnostics["raw_match_count"] = len(match_rows)
+    diagnostics["scoped_match_count"] = sum(
+        1 for match_row in match_rows if str(match_row["chunk_id"]) in rows_by_id
+    )
     for match_row in match_rows:
         row = rows_by_id.get(str(match_row["chunk_id"]))
         if row is None or (limit is not None and len(candidates) >= limit):

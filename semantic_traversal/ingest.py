@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 import sqlite3
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -47,6 +49,7 @@ class IngestPaths:
     database_path: Path
     manifests_root: Path
     latest_manifest_path: Path
+    latest_success_manifest_path: Path
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,15 @@ class IngestFrontmatterError(RuntimeError):
         self.manifest_path = manifest_path
 
 
+class IngestStageError(RuntimeError):
+    """Retain the bounded failure stage while preserving the originating error."""
+
+    def __init__(self, stage: str, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.stage = stage
+        self.cause = cause
+
+
 @dataclass(frozen=True)
 class _Block:
     kind: str
@@ -156,12 +168,62 @@ def create_ingest_paths(data_root: Path, *, config: RuntimeConfig) -> IngestPath
         database_path=ingest_root / config.storage_ingestion_database_filename,
         manifests_root=manifests_root,
         latest_manifest_path=manifests_root / config.storage_latest_ingest_manifest_filename,
+        latest_success_manifest_path=manifests_root / "latest-success.json",
     )
 
 
 def build_configured_source_roots(repo_root: Path, config: RuntimeConfig | None = None) -> tuple[IngestSourceRoot, ...]:
     resolved_config = config or load_runtime_config(repo_root=repo_root)
     return (IngestSourceRoot(label=resolved_config.vault_source_label, path=resolved_config.vault_root),)
+
+
+def _candidate_database_path(active_database_path: Path, run_id: str) -> Path:
+    return active_database_path.with_name(f"{active_database_path.name}.candidate-{run_id}")
+
+
+def _sqlite_sidecar_paths(database_path: Path) -> tuple[Path, ...]:
+    return tuple(database_path.parent / f"{database_path.name}{suffix}" for suffix in ("-journal", "-wal", "-shm"))
+
+
+def _clone_active_database(*, active_database_path: Path, candidate_database_path: Path) -> None:
+    if candidate_database_path.exists() or any(path.exists() for path in _sqlite_sidecar_paths(candidate_database_path)):
+        _cleanup_candidate_database(candidate_database_path)
+    if not active_database_path.exists():
+        return
+    source = sqlite3.connect(active_database_path)
+    target = sqlite3.connect(candidate_database_path)
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+
+
+def _cleanup_sqlite_sidecars(database_path: Path) -> None:
+    for path in _sqlite_sidecar_paths(database_path):
+        if path.exists():
+            path.unlink()
+
+
+def _cleanup_candidate_database(candidate_database_path: Path) -> None:
+    _cleanup_sqlite_sidecars(candidate_database_path)
+    if candidate_database_path.exists():
+        candidate_database_path.unlink()
+
+
+def _write_success_artifact(*, ingest_paths: IngestPaths, manifest_path: Path, manifest: dict[str, Any]) -> None:
+    serialized = json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
+    manifest_path.write_text(serialized, encoding="utf-8")
+    ingest_paths.latest_manifest_path.write_text(serialized, encoding="utf-8")
+    ingest_paths.latest_success_manifest_path.write_text(serialized, encoding="utf-8")
+
+
+def _write_failure_artifact(*, ingest_paths: IngestPaths, run_id: str, manifest: dict[str, Any]) -> Path:
+    manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
+    serialized = json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
+    manifest_path.write_text(serialized, encoding="utf-8")
+    ingest_paths.latest_manifest_path.write_text(serialized, encoding="utf-8")
+    return manifest_path
 
 
 def run_ingest(
@@ -198,52 +260,111 @@ def run_ingest(
             source_roots=resolved_source_roots,
             validation_issues=validation_issues,
             skipped_sources=skipped_sources,
+            failure_stage="frontmatter_validation",
+            active_database_replaced=False,
+            prior_active_database_preserved=ingest_paths.database_path.exists(),
+            candidate_database_cleaned=True,
+            error_type="IngestFrontmatterError",
+            error_message="frontmatter validation failed",
+            latest_success_manifest_path=ingest_paths.latest_success_manifest_path,
         )
-        manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
-        manifest_path.write_text(json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-        ingest_paths.latest_manifest_path.write_text(
-            json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
+        manifest_path = _write_failure_artifact(ingest_paths=ingest_paths, run_id=run_id, manifest=failure_manifest)
         raise IngestFrontmatterError(
             f"Ingest frontmatter validation failed; see failure manifest at {manifest_path}",
             manifest_path=manifest_path,
         )
     resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 
-    connection = sqlite3.connect(ingest_paths.database_path)
+    active_database_path = ingest_paths.database_path
+    candidate_database_path = _candidate_database_path(active_database_path, run_id)
+    prior_active_exists = active_database_path.exists()
+    failure_stage = "before_schema_initialization"
+    active_database_replaced = False
+    candidate_database_cleaned = False
+    lexical_index: dict[str, Any] | None = None
     try:
+        _clone_active_database(
+            active_database_path=active_database_path,
+            candidate_database_path=candidate_database_path,
+        )
+        failure_stage = "schema_initialization"
+        connection = sqlite3.connect(candidate_database_path)
         connection.row_factory = sqlite3.Row
-        _initialize_schema(connection, config=resolved_config)
-        counts = _materialize_records(
-            connection=connection,
-            note_records=note_records,
-            source_roots=resolved_source_roots,
+        try:
+            _initialize_schema(connection, config=resolved_config)
+            failure_stage = "materialization"
+            counts = _materialize_records(
+                connection=connection,
+                note_records=note_records,
+                source_roots=resolved_source_roots,
+                run_id=run_id,
+                generated_at=generated_at,
+                config=resolved_config,
+                embedding_backend=resolved_embedding_backend,
+            )
+            failure_stage = "candidate_validation"
+            lexical_index = _validate_lexical_index(connection=connection, config=resolved_config)
+            if lexical_index.get("status") != "valid":
+                raise RuntimeError(
+                    f"candidate lexical index validation failed: {lexical_index.get('failure_reason', 'alignment mismatch')}"
+                )
+        finally:
+            connection.close()
+
+        failure_stage = "activation"
+        os.replace(candidate_database_path, active_database_path)
+        active_database_replaced = True
+        _cleanup_sqlite_sidecars(active_database_path)
+        manifest = _build_manifest(
             run_id=run_id,
             generated_at=generated_at,
-            config=resolved_config,
-            embedding_backend=resolved_embedding_backend,
+            repo_root=resolved_repo_root,
+            data_root=resolved_data_root,
+            database_path=active_database_path,
+            source_roots=resolved_source_roots,
+            note_records=note_records,
+            counts=counts,
+            skipped_sources=skipped_sources,
+            lexical_index=lexical_index or {},
         )
-    finally:
-        connection.close()
-
-    manifest = _build_manifest(
-        run_id=run_id,
-        generated_at=generated_at,
-        repo_root=resolved_repo_root,
-        data_root=resolved_data_root,
-        database_path=ingest_paths.database_path,
-        source_roots=resolved_source_roots,
-        note_records=note_records,
-        counts=counts,
-        skipped_sources=skipped_sources,
-    )
-    manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    ingest_paths.latest_manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-    )
+        manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
+        _write_success_artifact(ingest_paths=ingest_paths, manifest_path=manifest_path, manifest=manifest)
+        candidate_database_cleaned = True
+    except Exception as exc:
+        cleanup_error: Exception | None = None
+        try:
+            _cleanup_candidate_database(candidate_database_path)
+            candidate_database_cleaned = not any(path.exists() for path in _sqlite_sidecar_paths(candidate_database_path))
+        except Exception as cleanup_exc:
+            cleanup_error = cleanup_exc
+        cause = exc.cause if isinstance(exc, IngestStageError) else exc
+        if isinstance(exc, IngestStageError):
+            failure_stage = exc.stage
+        failure_manifest = _build_failure_manifest(
+            run_id=run_id,
+            generated_at=generated_at,
+            repo_root=resolved_repo_root,
+            data_root=resolved_data_root,
+            database_path=active_database_path,
+            source_roots=resolved_source_roots,
+            validation_issues=[],
+            skipped_sources=skipped_sources,
+            failure_stage=failure_stage,
+            active_database_replaced=active_database_replaced,
+            prior_active_database_preserved=prior_active_exists and not active_database_replaced,
+            candidate_database_cleaned=candidate_database_cleaned,
+            error_type=type(cause).__name__,
+            error_message=str(cause),
+            cleanup_error=cleanup_error,
+            latest_success_manifest_path=ingest_paths.latest_success_manifest_path,
+        )
+        try:
+            _write_failure_artifact(ingest_paths=ingest_paths, run_id=run_id, manifest=failure_manifest)
+        except Exception:
+            pass
+        if isinstance(exc, IngestStageError):
+            raise cause from exc
+        raise
 
     return IngestRunResult(
         run_id=run_id,
@@ -1147,7 +1268,10 @@ def _materialize_records(
         config=config,
         embedding_backend=embedding_backend,
     )
-    _refresh_lexical_index(connection=connection)
+    try:
+        _refresh_lexical_index(connection=connection)
+    except Exception as exc:
+        raise IngestStageError("lexical_index_refresh", exc) from exc
 
     connection.execute(
         """
@@ -1179,6 +1303,81 @@ def _materialize_records(
     )
     connection.commit()
     return counts
+
+
+def _validate_lexical_index(*, connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": "invalid",
+        "table": "chunks_fts",
+        "canonical_chunk_count": 0,
+        "fts_row_count": 0,
+        "missing_chunk_count": 0,
+        "orphan_row_count": 0,
+        "duplicate_chunk_id_count": 0,
+        "field_mismatch_count": 0,
+        "query_probe_status": "not_run",
+        "validation_stage": "candidate_post_materialization",
+    }
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'"
+    ).fetchone()
+    if table is None:
+        result["failure_reason"] = "chunks_fts table is missing"
+        return result
+    canonical_rows = connection.execute(
+        "SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, frontmatter_semantics_json FROM chunks ORDER BY chunk_id"
+    ).fetchall()
+    fts_rows = connection.execute(
+        "SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, metadata FROM chunks_fts ORDER BY chunk_id"
+    ).fetchall()
+    canonical_by_id = {str(row["chunk_id"]): row for row in canonical_rows}
+    fts_ids = [str(row["chunk_id"]) for row in fts_rows]
+    fts_id_set = set(fts_ids)
+    duplicate_ids = sorted(chunk_id for chunk_id, count in Counter(fts_ids).items() if count > 1)
+    missing_ids = sorted(set(canonical_by_id) - fts_id_set)
+    orphan_ids = sorted(fts_id_set - set(canonical_by_id))
+    mismatch_ids: list[str] = []
+    for row in fts_rows:
+        chunk_id = str(row["chunk_id"])
+        canonical = canonical_by_id.get(chunk_id)
+        if canonical is None:
+            continue
+        if (
+            str(row["paragraph_text"]) != str(canonical["paragraph_text"])
+            or str(row["note_title"]) != str(canonical["note_title"])
+            or str(row["section_label"]) != str(canonical["section_label"])
+            or str(row["relative_path"]) != str(canonical["relative_path"])
+            or str(row["metadata"]) != str(canonical["frontmatter_semantics_json"])
+        ) and chunk_id not in mismatch_ids:
+            mismatch_ids.append(chunk_id)
+    result.update(
+        {
+            "canonical_chunk_count": len(canonical_rows),
+            "fts_row_count": len(fts_rows),
+            "missing_chunk_count": len(missing_ids),
+            "orphan_row_count": len(orphan_ids),
+            "duplicate_chunk_id_count": len(duplicate_ids),
+            "field_mismatch_count": len(mismatch_ids),
+            "missing_chunk_sample": missing_ids[:5],
+            "orphan_row_sample": orphan_ids[:5],
+            "field_mismatch_sample": sorted(mismatch_ids)[:5],
+        }
+    )
+    try:
+        connection.execute("SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1", ("a",)).fetchone()
+        result["query_probe_status"] = "passed"
+    except sqlite3.Error as exc:
+        result["query_probe_status"] = "failed"
+        result["failure_reason"] = f"FTS query probe failed: {exc}"
+        return result
+    if any(
+        result[key]
+        for key in ("missing_chunk_count", "orphan_row_count", "duplicate_chunk_id_count", "field_mismatch_count")
+    ) or result["canonical_chunk_count"] != result["fts_row_count"]:
+        result["failure_reason"] = "canonical chunks and chunks_fts are not aligned"
+        return result
+    result["status"] = "valid"
+    return result
 
 
 def _refresh_lexical_index(*, connection: sqlite3.Connection) -> None:
@@ -1733,6 +1932,7 @@ def _build_manifest(
     note_records: tuple[NoteRecord, ...],
     counts: dict[str, int],
     skipped_sources: list[dict[str, Any]],
+    lexical_index: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "status": "success",
@@ -1753,6 +1953,7 @@ def _build_manifest(
             "skipped_source_count": len(skipped_sources),
         },
         "skipped_sources": skipped_sources,
+        "lexical_index": lexical_index,
         "notes": [
             {
                 "note_id": note_record.note_id,
@@ -1813,6 +2014,14 @@ def _build_failure_manifest(
     source_roots: tuple[IngestSourceRoot, ...],
     validation_issues: list[dict[str, Any]],
     skipped_sources: list[dict[str, Any]],
+    failure_stage: str = "frontmatter_validation",
+    active_database_replaced: bool = False,
+    prior_active_database_preserved: bool = False,
+    candidate_database_cleaned: bool = True,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    cleanup_error: Exception | None = None,
+    latest_success_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
         "status": "failed",
@@ -1821,6 +2030,14 @@ def _build_failure_manifest(
         "repo_root": str(repo_root),
         "data_root": str(data_root),
         "database_path": str(database_path),
+        "latest_success_manifest_path": str(latest_success_manifest_path) if latest_success_manifest_path else None,
+        "failure_stage": failure_stage,
+        "active_database_replaced": active_database_replaced,
+        "prior_active_database_preserved": prior_active_database_preserved,
+        "candidate_database_cleaned": candidate_database_cleaned,
+        "error_type": error_type,
+        "error_message": error_message,
+        "cleanup_error": type(cleanup_error).__name__ if cleanup_error else None,
         "source_roots": [{"label": root.label, "path": str(root.path)} for root in source_roots],
         "summary": {
             "note_count": 0,

@@ -300,6 +300,33 @@ class RetrievalContractTests(unittest.TestCase):
             self.assertTrue(candidates, (mode, notes))
             self.assertEqual(candidates[0]["lexical_mode"], mode)
 
+    def test_lexical_diagnostics_distinguish_index_matches_scope_and_return_limit(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata)")
+        connection.executemany(
+            "INSERT INTO chunks_fts VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("c1", "alpha", "One", "Body", "JOURNAL/one.md", "{}"),
+                ("c2", "alpha", "Two", "Body", "READING/two.md", "{}"),
+                ("c3", "alpha", "Three", "Body", "READING/three.md", "{}"),
+            ],
+        )
+        rows = [
+            {"chunk_id": "c1", "note_id": "n1", "source_root_label": "vault", "source_root_path": "", "relative_path": "JOURNAL/one.md", "note_title": "One", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "h1"},
+            {"chunk_id": "c2", "note_id": "n2", "source_root_label": "vault", "source_root_path": "", "relative_path": "READING/two.md", "note_title": "Two", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "h2"},
+        ]
+        candidates, _, diagnostics = _lexical_candidates(
+            rows, ["alpha"], connection=connection, scope_filters={}, limit=1,
+            config=self.config, mode="any_tokens", return_diagnostics=True,
+        )
+        self.assertEqual([item["chunk_id"] for item in candidates], ["c1"])
+        self.assertEqual(diagnostics["index_row_count"], 3)
+        self.assertEqual(diagnostics["raw_match_count"], 3)
+        self.assertEqual(diagnostics["scoped_match_count"], 2)
+        self.assertEqual(diagnostics["returned_candidate_count"], 1)
+        self.assertEqual(diagnostics["candidate_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

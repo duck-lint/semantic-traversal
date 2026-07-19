@@ -113,3 +113,34 @@ The compiler packet submitted `Concept` as the graph seed and requested depth `1
 The bounded graph repair was production code, not evidence-only: `semantic_traversal/runtime.py` now sorts adjacency by edge type and stable node ID, retains structured hop orientation separately from traversal direction, propagates bounded hop provenance through merge and packet serialization, and exposes submitted seeds plus matched, selected, candidate, and unique-note counts. `tests/test_ingest_runtime.py` gained the complete directed topology, depth-2, insertion-order, inbound provenance, and cycle/reciprocal/self-link regressions. `tests/test_runtime_config.py` now locks invalid YAML direction rejection.
 
 Seam 4A is complete. Remaining open seams are FTS5 full-ingest freshness and failure atomicity (Seam 4B), vector thresholds/diversity (Seam 4C), general fusion/selection, temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness. No full configured-corpus direction claim is made beyond the complete representative evidence recorded here.
+
+## Seam 4B FTS5 freshness, failure atomicity, and packet-scale UAT (2026-07-19)
+
+Seam 4B is complete. The production gaps were bounded to three causes: ingestion mutated the active SQLite database before all later stages had succeeded; there was no post-materialization proof that `chunks_fts` exactly projected canonical chunk rows; and lexical diagnostics exposed only the post-limit candidate count, making raw FTS matches and scope attrition unauditable.
+
+The repair stages each ingest into a same-directory candidate database, validate schema/materialization/FTS alignment, and activate with `os.replace` only after candidate connections are closed. Failure manifests record the stage, whether activation occurred, whether the prior active database was preserved, candidate cleanup, and the path of the preserved `latest-success.json`. FTS validation checks canonical/FTS counts, missing and orphan IDs, duplicate IDs, searchable-field equality, and a bounded query probe. The active vector degradation policy was preserved. Lexical diagnostics now distinguish FTS index rows, raw matches, scope-admissible matches, and returned candidates while retaining the compatibility `candidate_count`.
+
+Focused evidence:
+
+- Freshness lifecycle covered initial ingest, paragraph update, frontmatter metadata update, rename, unchanged reingest, and delete; FTS rows and searchable metadata tracked the canonical chunks.
+- Validator regressions covered duplicate IDs, orphan rows, and field mismatches.
+- Failure regressions covered before/schema initialization, materialization/FTS refresh, candidate validation, and activation. Initial failure left no active database; later failures preserved the prior active database bytes and latest-success manifest, and cleaned candidate files/sidecars.
+- All five YAML-owned lexical modes remained exercised: `exact_phrase`, `all_tokens`, `any_tokens`, `prefix`, and `ranked_fts`.
+
+Disposable full configured-vault ingest used the YAML source root `C:\Users\madis\Desktop\kháos` and a temporary data root; the active configured index was not modified. The successful run recorded 1,078 notes, 14,576 chunks, and 14,576 FTS rows, with zero missing, orphan, duplicate, or field-mismatch rows and a passed query probe. The resulting database was 94,416,896 bytes and had no SQLite sidecars after activation.
+
+For the bounded lexical query `semantic geometry` with a return limit of 50, the disposable corpus reported:
+
+- `exact_phrase`: 92 raw/scoped matches, 50 returned, 13 unique notes;
+- `all_tokens`: 378 raw/scoped matches, 50 returned, 5 unique notes;
+- `any_tokens`: 2,035 raw/scoped matches, 50 returned, 5 unique notes;
+- `prefix`: 2,071 raw/scoped matches, 50 returned, 4 unique notes;
+- `ranked_fts`: 2,035 raw/scoped matches, 50 returned, 5 unique notes.
+
+Bounded serialized candidate packets were approximately 58–61 KB for these direct executor probes. Repeated runs produced identical candidate ordering and diagnostics for every mode. This is lexical executor evidence, not a claim that final cross-surface fusion is complete. Vector execution was intentionally unavailable in this lexical-only UAT and remains Seam 4C work.
+
+Operator verification: CI was manually verified as passing for commit `7cad93683773c20e5bc0ff299c4842e95fa78ada`; no GitHub check artifact or registered status was available in this session, so this is recorded as operator evidence rather than CI-service evidence.
+
+Prompt hashes remained unchanged: semantic compiler `9CA92643B2550410743D494FC82E3AE67C718C8F7867D72E43DDB49925E28F4B`; frontier synthesis `FDAC281E48E765AF09578BE02E53AD65A443D49914FAC53D017ADE5391A18776`. YAML remained `B0B2AA1F0EF45D1CADC52156DD79AB3E9E7379D3E626F541BBB5768065ABFBA4` before and after.
+
+Seam 4B is complete. Remaining open seams are Seam 4C vector identity/threshold/diversity, Seam 5 general fusion/selection, Seam 6A temporal substrate, Seam 7 persisted inventory, Seam 8 compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness. The next planned seam is Seam 4C; no Seam 4C implementation was started here.
