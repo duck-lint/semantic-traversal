@@ -309,7 +309,7 @@ def bind_retrieval_plan(
                 }
             )
         if operator == "temporal_retrieve":
-            mode = str(layer.get("mode") or "earliest").strip()
+            mode = str(layer.get("mode") or config.retrieval_temporal_default_mode).strip()
             if mode not in config.retrieval_temporal_allowed_modes:
                 adjustments.append({"field": "retrieval_layers.temporal_retrieve.mode", "requested": mode, "effective": None, "action": "unsupported", "reason": "runtime YAML allowed temporal modes"})
                 layer["mode_adjustment"] = "unsupported"

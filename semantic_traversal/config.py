@@ -51,6 +51,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "enabled": bool,
             "max_candidates": int,
             "default_limit": int,
+            "default_mode": str,
             "allowed_modes": [str],
             "default_anchor_types": [str],
             "allowed_authorities": [str],
@@ -268,6 +269,10 @@ class RuntimeConfig:
     @property
     def retrieval_temporal_default_limit(self) -> int:
         return int(self.retrieval_temporal["default_limit"])
+
+    @property
+    def retrieval_temporal_default_mode(self) -> str:
+        return str(self.retrieval_temporal["default_mode"])
 
     @property
     def retrieval_temporal_allowed_modes(self) -> tuple[str, ...]:
@@ -720,6 +725,8 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             raise ConfigError(f"Runtime config field retrieval.scope_policy.{field} must be hard or preferred")
     if str(parsed["retrieval"]["lexical"]["default_mode"]) not in {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}:
         raise ConfigError("Runtime config field retrieval.lexical.default_mode must be a supported FTS5 mode")
+    if str(parsed["retrieval"]["temporal"]["default_mode"]) not in set(str(value) for value in parsed["retrieval"]["temporal"]["allowed_modes"]):
+        raise ConfigError("Runtime config field retrieval.temporal.default_mode must be listed in allowed_modes")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",

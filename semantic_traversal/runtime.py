@@ -1717,7 +1717,7 @@ def _temporal_candidates(
     scope_filters: dict[str, Any],
     embedding_backend: EmbeddingBackend,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
-    mode = str(layer.get("mode") or "earliest")
+    mode = str(layer.get("mode") or config.retrieval_temporal_default_mode)
     diagnostics: dict[str, Any] = {
         "operator": "temporal_retrieve",
         "status": "not_requested",
