@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 
-from semantic_traversal.config import load_runtime_config
+from semantic_traversal.config import ConfigError, load_runtime_config
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +34,14 @@ class RuntimeConfigTests(unittest.TestCase):
     def test_relative_data_root_resolves_under_vault_root(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
         self.assertEqual(config.data_root, config.vault_root / ".semantic-traversal")
+
+    def test_invalid_graph_direction_is_rejected_during_config_loading(self) -> None:
+        source = (REPO_ROOT / "semantic_traversal.runtime.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "invalid-direction.yaml"
+            path.write_text(source.replace("direction: outbound", "direction: sideways", 1), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "graph_traversal.direction"):
+                load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
 
 
 

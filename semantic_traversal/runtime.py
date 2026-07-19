@@ -1202,10 +1202,16 @@ def _graph_candidates(
             "enabled": False,
             "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
             "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
 
     try:
@@ -1221,15 +1227,24 @@ def _graph_candidates(
             "enabled": config.graph_traversal_enabled,
             "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
             "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
 
     chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
     nodes_by_id = {str(row["node_id"]): dict(row) for row in node_rows}
-    note_nodes = [dict(row) for row in node_rows if str(row["node_type"]) in set(config.graph_traversal_node_type_allowlist)]
+    note_nodes = sorted(
+        [dict(row) for row in node_rows if str(row["node_type"]) in set(config.graph_traversal_node_type_allowlist)],
+        key=lambda row: str(row.get("node_id") or ""),
+    )
     edge_type_allowlist = set(config.graph_traversal_edge_type_allowlist)
     node_type_allowlist = set(config.graph_traversal_node_type_allowlist)
     seed_values = _graph_seed_values(
@@ -1243,11 +1258,23 @@ def _graph_candidates(
             "enabled": config.graph_traversal_enabled,
             "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
             "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
+
+    submitted_seeds: list[dict[str, str]] = []
+    for source_name, seed in seed_values:
+        item = {"source": str(source_name), "value": str(seed)}
+        if item not in submitted_seeds:
+            submitted_seeds.append(item)
 
     outgoing: dict[str, list[tuple[str, str, str]]] = {}
     incoming: dict[str, list[tuple[str, str, str]]] = {}
@@ -1260,6 +1287,8 @@ def _graph_candidates(
 
     selected_note_ids: list[str] = []
     note_reasons: dict[str, list[str]] = {}
+    note_hops: dict[str, list[dict[str, Any]]] = {}
+    matched_seed_note_ids: list[str] = []
     matched_seed_count = 0
     expanded_note_count = 0
     edge_types_used: list[str] = []
@@ -1284,6 +1313,8 @@ def _graph_candidates(
                 continue
             node_label = str(node_row.get("label") or note_id)
             note_reasons.setdefault(note_id, []).append(f"{source_name} graph seed matched note: {node_label}")
+            if note_id not in matched_seed_note_ids:
+                matched_seed_note_ids.append(note_id)
             if note_id not in visited_notes:
                 visited_notes.add(note_id)
                 selected_note_ids.append(note_id)
@@ -1302,9 +1333,9 @@ def _graph_candidates(
         current_label = str(current_node.get("label") or current_note_id)
         traversals: list[tuple[str, str, str]] = []
         if config.graph_traversal_direction in {"outbound", "both"}:
-            traversals.extend(outgoing.get(current_node_id, []))
+            traversals.extend(sorted(outgoing.get(current_node_id, []), key=lambda item: (item[1], item[0])))
         if config.graph_traversal_direction in {"inbound", "both"}:
-            traversals.extend(incoming.get(current_node_id, []))
+            traversals.extend(sorted(incoming.get(current_node_id, []), key=lambda item: (item[1], item[0])))
         for target_node_id, edge_type, edge_direction in traversals:
             if edge_type not in edge_type_allowlist:
                 continue
@@ -1320,6 +1351,26 @@ def _graph_candidates(
                 continue
             target_label = str(target_node.get("label") or target_note_id)
             note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1} ({edge_direction}): {current_label} -> {target_label}")
+            edge_source_note_id = str(nodes_by_id.get(
+                current_node_id if edge_direction == "outbound" else target_node_id,
+                {},
+            ).get("ref_id") or "")
+            edge_target_note_id = str(nodes_by_id.get(
+                target_node_id if edge_direction == "outbound" else current_node_id,
+                {},
+            ).get("ref_id") or "")
+            hop_evidence = {
+                "hop": hop + 1,
+                "traversal_direction": edge_direction,
+                "edge_type": edge_type,
+                "edge_source_note_id": edge_source_note_id,
+                "edge_target_note_id": edge_target_note_id,
+                "from_note_id": current_note_id,
+                "to_note_id": target_note_id,
+            }
+            target_hops = note_hops.setdefault(target_note_id, [])
+            if hop_evidence not in target_hops and len(target_hops) < 8:
+                target_hops.append(hop_evidence)
             if target_note_id not in visited_notes:
                 visited_notes.add(target_note_id)
                 selected_note_ids.append(target_note_id)
@@ -1386,6 +1437,7 @@ def _graph_candidates(
                 "match_reason": "graph expansion",
                 "graph_direction": config.graph_traversal_direction,
                 "graph_provenance": note_reasons.get(str(chunk_row["note_id"]), []),
+                "graph_hop_provenance": note_hops.get(str(chunk_row["note_id"]), []),
             }
         )
     if candidates:
@@ -1401,11 +1453,16 @@ def _graph_candidates(
         "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
         **(graph_depth or {}),
         "seed_sources": list(config.graph_traversal_seed_sources),
+        "submitted_seeds": submitted_seeds,
         "matched_seed_count": matched_seed_count,
+        "matched_seed_note_ids": matched_seed_note_ids,
         "expanded_note_count": expanded_note_count,
+        "selected_note_ids": list(selected_note_ids),
         "edge_types_used": edge_types_used,
         "direction": config.graph_traversal_direction,
         "candidate_note_ids": [str(candidate.get("note_id") or "") for candidate in candidates],
+        "candidate_unique_note_ids": list(dict.fromkeys(str(candidate.get("note_id") or "") for candidate in candidates)),
+        "traversal_hops": [hop for note_id in selected_note_ids for hop in note_hops.get(note_id, [])],
     }
 
 
@@ -1524,6 +1581,7 @@ def _merge_candidates(
         existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
         merge_list(existing, candidate, "exact_term_provenance")
         merge_list(existing, candidate, "exact_match_evidence")
+        merge_list(existing, candidate, "graph_hop_provenance")
         if existing_graph_provenance or candidate_graph_provenance:
             existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
         if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
@@ -1536,6 +1594,9 @@ def _merge_candidates(
         ):
             merged[chunk_id] = dict(candidate)
             merged[chunk_id]["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
+            merged[chunk_id]["graph_hop_provenance"] = []
+            merge_list(merged[chunk_id], existing, "graph_hop_provenance")
+            merge_list(merged[chunk_id], candidate, "graph_hop_provenance")
             if merged[chunk_id].get("graph_direction") is None:
                 merged[chunk_id]["graph_direction"] = existing.get("graph_direction")
             merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
@@ -1856,10 +1917,16 @@ def _semantic_traversal(
             "enabled": config.graph_traversal_enabled,
             "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
             "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
 
     exact_candidates = _apply_retrieval_candidate_hygiene(
@@ -2120,6 +2187,7 @@ def _semantic_traversal(
                 "semantic_query_provenance": _coerce_string_list(candidate.get("semantic_query_provenance")),
                 "graph_direction": candidate.get("graph_direction"),
                 "graph_provenance": candidate.get("graph_provenance", []),
+                "graph_hop_provenance": candidate.get("graph_hop_provenance", []),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
                 "preferred_scope_match": bool(candidate.get("preferred_scope_match")),

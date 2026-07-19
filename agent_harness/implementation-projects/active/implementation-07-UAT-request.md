@@ -24,7 +24,7 @@ The current automated suite proves contracts on isolated fixtures, but cannot es
 
 ## Current implementation status
 
-Seam 3 is complete. Automated regression after the runtime authority and non-exact required-layer changes: 112 tests passing; compileall and diff check passing. The Python changes are now committed and pushed on the implementation branch. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
+Seam 4A is complete. Automated regression after the graph direction/provenance changes: 118 tests passing; compileall and diff check passing. The Python changes are now committed and pushed on the implementation branch. Plugin build/type status was not rerun for this Python-only slice; the previously recorded `npx tsc --noEmit` blocker remains outside this seam.
 
 The configured vault index was copied to a disposable workspace index before UAT. The active index was not mutated.
 
@@ -53,7 +53,7 @@ The three prior repairs are now corpus-demonstrated: provenance and graph depth 
 
 - Prompt SHA-256 before and after: semantic compiler `9CA92643B2550410743D494FC82E3AE67C718C8F7867D72E43DDB49925E28F4B`; frontier synthesis `FDAC281E48E765AF09578BE02E53AD65A443D49914FAC53D017ADE5391A18776`.
 - YAML SHA-256 before: `47CB325D8B1E2A290013563D93231B2BD47126E6A5A76EB9D1D6C495508B7385`; after: `B0B2AA1F0EF45D1CADC52156DD79AB3E9E7379D3E626F541BBB5768065ABFBA4` (scope policy authority added).
-- Remaining open seams: compiler/schema emission of preferred scope, full exact-search contract, non-exact requiredness, inbound/both corpus UAT, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final scaling/UAT, and plugin TypeScript readiness.
+- Remaining open seams: compiler/schema emission of preferred scope, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final scaling/UAT, and plugin TypeScript readiness. Seam 4A direction is complete against the complete representative topology recorded below; full-corpus graph direction remains optional follow-up evidence rather than a claimed result.
 
 ## UAT decision
 
@@ -90,4 +90,26 @@ The configured 229 MB SQLite index was copied to a disposable workspace index; t
 
 Prompt hashes remained unchanged: semantic compiler `9CA92643B2550410743D494FC82E3AE67C718C8F7867D72E43DDB49925E28F4B`; frontier synthesis `FDAC281E48E765AF09578BE02E53AD65A443D49914FAC53D017ADE5391A18776`. YAML remained unchanged from the prior Seam 2B baseline: `B0B2AA1F0EF45D1CADC52156DD79AB3E9E7379D3E626F541BBB5768065ABFBA4`.
 
-Seam 3 is complete. Remaining open seams are compiler/schema emission of preferred scope, graph inbound/`both` corpus UAT, FTS full-ingest freshness, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness. Seam 4A is next; Seam 3 does not generalize requiredness to all future operators beyond the implemented lexical/vector/graph contract.
+Seam 3 was complete before this graph slice. Remaining open seams at that point were compiler/schema emission of preferred scope, graph inbound/`both` corpus UAT, FTS full-ingest freshness, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness. Seam 4A is now complete; Seam 3 does not generalize requiredness to all future operators beyond the implemented lexical/vector/graph contract.
+
+## Seam 4A graph direction and complete representative UAT (2026-07-18)
+
+The configured corpus was not used as proof of direction because its full wikilink topology was not established as the required distinguishing chain. Instead, a complete disposable representative corpus was used and the active index was not mutated. The topology stored these directed `note_links_note` edges:
+
+```text
+Journal -> Concept -> Reading
+```
+
+The compiler packet submitted `Concept` as the graph seed and requested depth `1`; runtime direction came from the copied config, not the compiler. Synthesis used an unavailable controlled backend, so retrieval approval/blocking was inspected independently of the intentional synthesis boundary.
+
+- Outbound: matched seed note `Concept`; one unique expanded note `Reading`; graph candidates represented `Concept` and `Reading`; no `Journal` candidate was reached. Structured hop evidence recorded `edge_source_note_id=Concept`, `edge_target_note_id=Reading`, `from_note_id=Concept`, `to_note_id=Reading`, and `traversal_direction=outbound`.
+- Inbound: matched seed note `Concept`; one unique expanded note `Journal`; graph candidates represented `Concept` and `Journal`; no `Reading` candidate was reached. Structured hop evidence recorded the stored edge as `Journal -> Concept` while the traversal step was `Concept -> Journal`, with `traversal_direction=inbound`.
+- Both: matched seed note `Concept`; two unique expanded notes, `Journal` and `Reading`; both hop directions appeared in one bounded union and no note was duplicated in `selected_note_ids`. Candidate chunks remained bounded and deterministic; multiple chunks from one note are distinguished from `candidate_unique_note_ids`.
+- Depth 2: outbound from `Journal` reached `Concept`, then `Reading`; inbound from `Reading` reached `Concept`, then `Journal`. The manifest recorded requested/effective depth `2/2` and hop numbers `1` and `2`.
+- Determinism: repeated runs and the same topology with reversed edge-row insertion order produced identical graph manifests, candidate ordering, selected packet ordering, and structured hop evidence. Reciprocal links, a self-link, and a directed cycle terminated without duplicate unique note identities or unbounded hop evidence; hop evidence is capped at eight distinct paths per note.
+- Scope: preferred journal scope retained non-preferred graph candidates and ranked journal evidence first; hard journal scope excluded non-journal graph candidates. Existing graph edge/node allowlists, disabled/unavailable/no-seed statuses, depth behavior, fairness, required graph contribution, and active-focus seed tests remained green.
+- Required graph: existing outbound fixture and the Seam 3 required graph integration test continue to show selected graph contribution and adequate coverage; the direction topology uses optional graph layers because its purpose is directional evidence.
+
+The bounded graph repair was production code, not evidence-only: `semantic_traversal/runtime.py` now sorts adjacency by edge type and stable node ID, retains structured hop orientation separately from traversal direction, propagates bounded hop provenance through merge and packet serialization, and exposes submitted seeds plus matched, selected, candidate, and unique-note counts. `tests/test_ingest_runtime.py` gained the complete directed topology, depth-2, insertion-order, inbound provenance, and cycle/reciprocal/self-link regressions. `tests/test_runtime_config.py` now locks invalid YAML direction rejection.
+
+Seam 4A is complete. Remaining open seams are FTS5 full-ingest freshness and failure atomicity (Seam 4B), vector thresholds/diversity (Seam 4C), general fusion/selection, temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness. No full configured-corpus direction claim is made beyond the complete representative evidence recorded here.

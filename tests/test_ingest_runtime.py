@@ -308,6 +308,57 @@ def _prepare_preferred_scope_graph_data_root() -> Path:
     return data_root
 
 
+def _prepare_directed_chain_data_root(*, reverse_edge_rows: bool = False) -> Path:
+    data_root = _register_temp_data_root()
+    source_root = data_root / "directed-chain-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    _write_markdown_note(
+        source_root,
+        "Journal.md",
+        "# Journal\n\nJournal evidence.\n\nLinks to [[Concept]].",
+        uuid_value="44444444-4444-4444-8444-444444444444",
+        frontmatter={"note_type": "journal_entry"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Concept.md",
+        "# Concept\n\nConcept evidence.\n\nLinks to [[Reading]].",
+        uuid_value="55555555-5555-4555-8555-555555555555",
+        frontmatter={"note_type": "concept"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Reading.md",
+        "# Reading\n\nReading evidence.",
+        uuid_value="66666666-6666-4666-8666-666666666666",
+        frontmatter={"note_type": "reading_notes"},
+    )
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="directed-chain", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+    )
+    if reverse_edge_rows:
+        connection = sqlite3.connect(data_root / "ingestion" / "latent_space.sqlite3")
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        rows = connection.execute(
+            f"SELECT edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at FROM {config.graph_edges_table} ORDER BY edge_id DESC"
+        ).fetchall()
+        connection.execute(f"DELETE FROM {config.graph_edges_table}")
+        connection.executemany(
+            f"INSERT INTO {config.graph_edges_table} (edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.commit()
+        connection.close()
+    return data_root
+
+
+def _graph_direction_payload(seed: str, *, depth: int = 1) -> dict[str, Any]:
+    return _graph_compiler_payload(seed, graph_seeds=[seed], graph_depth=depth)
+
+
 def _turn_artifact(path: Path) -> dict[str, Any]:
     return load_json(path) or {}
 
@@ -1535,6 +1586,139 @@ class ThesisRuntimeTests(unittest.TestCase):
             note_ids = result.semantic_traversal_manifest["graph_traversal"]["candidate_note_ids"]
             self.assertEqual(any("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" in note_id for note_id in note_ids), expects_a)
             self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["direction"], direction)
+
+    def test_directed_chain_outbound_inbound_and_both_are_true_unions(self) -> None:
+        expected = {
+            "Journal": "directed-chain::uuid::44444444-4444-4444-8444-444444444444",
+            "Concept": "directed-chain::uuid::55555555-5555-4555-8555-555555555555",
+            "Reading": "directed-chain::uuid::66666666-6666-4666-8666-666666666666",
+        }
+        for direction, expected_neighbors in (
+            ("outbound", {expected["Reading"]}),
+            ("inbound", {expected["Journal"]}),
+            ("both", {expected["Journal"], expected["Reading"]}),
+        ):
+            data_root = _prepare_directed_chain_data_root()
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = direction
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="Concept",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept")),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            note_ids = set(graph["candidate_note_ids"])
+            self.assertIn(expected["Concept"], note_ids)
+            self.assertEqual(note_ids - {expected["Concept"]}, expected_neighbors)
+            self.assertEqual(graph["direction"], direction)
+            self.assertEqual(len(graph["candidate_unique_note_ids"]), len(note_ids))
+            for chunk in result.retrieval_packet["selected_chunks"]:
+                if "graph" in chunk["source_layers"]:
+                    self.assertEqual(chunk["graph_direction"], direction)
+                    if chunk["note_id"] != expected["Concept"]:
+                        self.assertTrue(chunk["graph_hop_provenance"])
+
+    def test_directed_chain_depth_two_reaches_only_licensed_end(self) -> None:
+        for direction, seed, expected_notes in (
+            ("outbound", "Journal", {"directed-chain::uuid::44444444-4444-4444-8444-444444444444", "directed-chain::uuid::55555555-5555-4555-8555-555555555555", "directed-chain::uuid::66666666-6666-4666-8666-666666666666"}),
+            ("inbound", "Reading", {"directed-chain::uuid::66666666-6666-4666-8666-666666666666", "directed-chain::uuid::55555555-5555-4555-8555-555555555555", "directed-chain::uuid::44444444-4444-4444-8444-444444444444"}),
+        ):
+            data_root = _prepare_directed_chain_data_root()
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = direction
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input=seed,
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload(seed, depth=2)),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            self.assertEqual(set(graph["candidate_note_ids"]), expected_notes)
+            self.assertEqual(graph["effective_depth"], 2)
+
+    def test_graph_direction_is_deterministic_independent_of_edge_insertion_order(self) -> None:
+        manifests = []
+        packets = []
+        for reverse_edge_rows in (False, True, False):
+            data_root = _prepare_directed_chain_data_root(reverse_edge_rows=reverse_edge_rows)
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = "both"
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="Concept",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept")),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            manifests.append(graph)
+            packets.append(result.retrieval_packet["selected_chunks"])
+        self.assertEqual(manifests[0], manifests[1])
+        self.assertEqual(manifests[1], manifests[2])
+        self.assertEqual(packets[0], packets[1])
+        self.assertEqual(packets[1], packets[2])
+
+    def test_inbound_provenance_separates_stored_edge_from_traversal_step(self) -> None:
+        data_root = _prepare_directed_chain_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        config.raw["graph_traversal"]["direction"] = "inbound"
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Concept",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept")),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        journal_id = "directed-chain::uuid::44444444-4444-4444-8444-444444444444"
+        concept_id = "directed-chain::uuid::55555555-5555-4555-8555-555555555555"
+        journal_chunks = [chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["note_id"] == journal_id]
+        self.assertTrue(journal_chunks)
+        hop = journal_chunks[0]["graph_hop_provenance"][0]
+        self.assertEqual(hop["traversal_direction"], "inbound")
+        self.assertEqual(hop["edge_source_note_id"], journal_id)
+        self.assertEqual(hop["edge_target_note_id"], concept_id)
+        self.assertEqual(hop["from_note_id"], concept_id)
+        self.assertEqual(hop["to_note_id"], journal_id)
+
+    def test_graph_cycles_reciprocal_links_and_self_links_remain_bounded(self) -> None:
+        data_root = _prepare_directed_chain_data_root()
+        db_path = data_root / "ingestion" / "latent_space.sqlite3"
+        connection = sqlite3.connect(db_path)
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        connection.executemany(
+            f"INSERT INTO {config.graph_edges_table} (edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("extra-reciprocal", "note::55555555-5555-4555-8555-555555555555", "note::44444444-4444-4444-8444-444444444444", "note_links_note", "{}", "test", "test"),
+                ("extra-self", "note::55555555-5555-4555-8555-555555555555", "note::55555555-5555-4555-8555-555555555555", "note_links_note", "{}", "test", "test"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+        config.raw["graph_traversal"]["direction"] = "both"
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Concept",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept", depth=2)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        graph = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertEqual(len(graph["candidate_unique_note_ids"]), len(set(graph["candidate_unique_note_ids"])))
+        self.assertLessEqual(graph["expanded_note_count"], 2)
+        self.assertTrue(all(len(chunk.get("graph_hop_provenance", [])) <= 8 for chunk in result.retrieval_packet["selected_chunks"] if "graph" in chunk["source_layers"]))
 
     def test_missing_graph_depth_uses_yaml_default_with_diagnostic(self) -> None:
         data_root = _prepare_graph_fixture_data_root()

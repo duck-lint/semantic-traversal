@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 3 runtime authority and non-exact required-layer semantics.
-- Next action: implement and verify structured execution status, runtime-owned policy binding, and adequate selected contribution for required lexical, vector, and graph layers.
+- Current work: Seam 4A graph executor corpus and direction coverage.
+- Next action: verify outbound, inbound, and `both` traversal against an explicit directed topology; repair only bounded graph defects exposed by that evidence.
 
 ## Completed Repair Status
 
@@ -25,6 +25,7 @@
 | 2026-07-18 | Coordinator | Added explicit hard-versus-preferred scope binding and deterministic preferred-scope ordering; added selected-packet `selection_source` serialization | Runtime/YAML scope policy distinguishes exact hard scope from semantic preferred scope; 96-test suite and disposable corpus UAT pass; prompt text unchanged | Actual compiler genealogy run emitted concept-like scope requests but no journal preference; keep compiler/schema seam open |
 | 2026-07-18 | Coordinator | Completed Seam 2B exact contract and retained `selection_source` in selected packet serialization | Required literal-term coverage, independent total counts, bounded YAML context evidence, Unicode-safe per-term diagnostics, exact evidence preservation, and runtime-owned absence permission; 104-test suite, compileall, diff check, and disposable corpus UAT pass; prompt/YAML hashes preserved | Advance to Seam 3 only; keep compiler preferred-scope emission and general fusion open |
 | 2026-07-18 | Coordinator | Completed Seam 3 runtime authority and non-exact required-layer contract | Preserved unknown operators and invalid limits for diagnosis; bound selection/claim policy, budgets, and limits from YAML; added lexical/vector/graph execution manifests; added required-layer contribution checks and deterministic source reservation; 112-test suite, compileall, diff check, prompt/YAML hash retention, and controlled disposable-corpus UAT pass | Advance to Seam 4A only; keep compiler/schema emission, vector thresholds/diversity, fusion, temporal, inventory, and final UAT open |
+| 2026-07-18 | Coordinator | Completed Seam 4A graph executor direction and representative-corpus gate | Controlled complete `Journal -> Concept -> Reading` topology demonstrated outbound, inbound, and `both`; added canonical adjacency ordering, bounded structured hop provenance, submitted/matched/selected/unique note diagnostics, and packet propagation; 118-test suite, graph/config focused tests, compileall, diff check, and repeated representative UAT pass; prompt/YAML hashes preserved | Advance to Seam 4B only; keep FTS freshness, vector thresholds/diversity, fusion, temporal, inventory, compiler/schema, final synthesis, and plugin readiness open |
 
 ## Work Status
 
@@ -36,7 +37,7 @@
 | Seam 2A: scope model | Coordinator | reviewing | Hard/preferred fixture tests, deterministic repeated run, disposable corpus controlled-scope UAT; full suite 96 pass | Runtime contract is implemented; compiler emission of a journal preference remains open |
 | Seam 2B: exact-search contract | Coordinator | complete | 14 focused retrieval-contract tests; full suite 104 pass; disposable corpus UAT | Required literal terms, count units, `return_total_count`, bounded context, exact evidence preservation, and conservative absence permission are implemented |
 | Seam 3: runtime authority/requiredness | Coordinator | complete | 18 focused retrieval-contract tests; required lexical/vector/graph integration fixtures; full suite 112 pass; compileall, diff check, and controlled disposable-corpus UAT pass | Structured non-exact statuses, YAML-owned policy binding, unsupported-operator blocking, and selected source contribution are implemented; broad non-exact requiredness remains outside this seam |
-| Seam 4A: graph executor | Coordinator | reviewing | Depth, fairness, provenance fixtures; corpus UAT graph pool 24 with multiple traversed notes; full suite 96 pass | Inbound/both corpus UAT pending |
+| Seam 4A: graph executor | Coordinator | complete | Directed complete-representative topology; outbound/inbound/`both`, depth 2, cycle/self-link, reciprocal, insertion-order, scope, edge/node controls, fairness, required contribution, and provenance tests; full suite 118 pass; compileall/diff check pass | Graph direction and bounded path provenance are verified. A full configured-corpus direction run remains optional evidence, not a blocker for the complete representative gate. |
 | Seam 4B: lexical FTS5 executor | Coordinator | reviewing | Five FTS5 mode test; ingest/runtime lexical tests; full suite 86 pass | Full-corpus freshness and packet-size UAT pending |
 | Seam 4C: vector executor | Coordinator | reviewing | Multi-query provenance test; full suite 86 pass | Threshold/diversity caps and identity checks still open; UAT required |
 | Seam 5: fusion/selection | Coordinator | proposed | pending | Depends on 4A/4B/4C |
@@ -55,4 +56,4 @@
 
 ## Closeout Note
 
-- Seam 3 is complete for this slice. The next planned seam is Seam 4A: graph executor corpus and direction coverage. Do not archive implementation-07 yet; compiler/schema emission of preferred scope, inbound/both graph corpus UAT, vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, final synthesis UAT, and plugin TypeScript readiness remain open.
+- Seam 4A is complete for this slice. The next planned seam is Seam 4B: FTS5 full-ingest freshness, failure atomicity, and packet-scale corpus evidence. Do not archive implementation-07 yet; vector thresholds/diversity, general fusion/selection, temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness remain open.
