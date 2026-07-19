@@ -1705,6 +1705,104 @@ def _apply_retrieval_candidate_hygiene(
     return adjusted
 
 
+def _temporal_anchor_order_key(anchor: dict[str, Any]) -> tuple[str, str, str]:
+    """Return a stable interval key without comparing raw cross-surface scores."""
+    return (
+        str(anchor.get("canonical_start") or ""),
+        str(anchor.get("canonical_end") or ""),
+        str(anchor.get("anchor_id") or ""),
+    )
+
+
+def _choose_temporal_governing_anchor(
+    anchors: list[dict[str, Any]],
+    *,
+    mode: str,
+    direction: str,
+) -> dict[str, Any]:
+    """Choose the mode-specific anchor while retaining the complete set."""
+    if not anchors:
+        raise ValueError("temporal governing anchor requires at least one anchor")
+    if mode == "latest" or (mode == "ordered" and direction == "descending"):
+        return max(anchors, key=_temporal_anchor_order_key)
+    if mode == "before":
+        return max(
+            anchors,
+            key=lambda anchor: (
+                str(anchor.get("canonical_end") or anchor.get("canonical_start") or ""),
+                str(anchor.get("canonical_start") or ""),
+                str(anchor.get("anchor_id") or ""),
+            ),
+        )
+    if mode == "after":
+        return min(
+            anchors,
+            key=lambda anchor: (
+                str(anchor.get("canonical_start") or anchor.get("canonical_end") or ""),
+                str(anchor.get("canonical_end") or ""),
+                str(anchor.get("anchor_id") or ""),
+            ),
+        )
+    # earliest, ordered ascending, and between use the earliest qualifying
+    # interval as their governing temporal position.
+    return min(anchors, key=_temporal_anchor_order_key)
+
+
+def _temporal_candidate_position(candidate: dict[str, Any], field: str) -> str:
+    return str(candidate.get(field) or "")
+
+
+def _order_temporal_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    mode: str,
+    direction: str,
+) -> list[dict[str, Any]]:
+    """Apply the accepted temporal tuple with relevance in the right place."""
+    ordered = list(candidates)
+    # Stable passes make the tuple explicit while keeping identity as the last
+    # tie-breaker. Relation modes intentionally apply relevance last, making it
+    # primary after relation admission; date is only their secondary tie-break.
+    ordered.sort(key=lambda candidate: str(candidate.get("chunk_id") or ""))
+    if mode in {"earliest", "latest", "ordered"}:
+        descending = mode == "latest" or (mode == "ordered" and direction == "descending")
+        ordered.sort(
+            key=lambda candidate: -float(candidate.get("internal_ordinal_relevance") or 0.0)
+        )
+        ordered.sort(
+            key=lambda candidate: _temporal_candidate_position(
+                candidate, "temporal_governing_canonical_start"
+            ),
+            reverse=descending,
+        )
+        return ordered
+
+    if mode == "before":
+        ordered.sort(
+            key=lambda candidate: (
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_end")
+                or _temporal_candidate_position(candidate, "temporal_governing_canonical_start"),
+            ),
+            reverse=True,
+        )
+    elif mode == "after":
+        ordered.sort(
+            key=lambda candidate: (
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_start")
+                or _temporal_candidate_position(candidate, "temporal_governing_canonical_end"),
+            )
+        )
+    elif mode == "between":
+        ordered.sort(
+            key=lambda candidate: (
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_start"),
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_end"),
+            )
+        )
+    ordered.sort(key=lambda candidate: -float(candidate.get("internal_ordinal_relevance") or 0.0))
+    return ordered
+
+
 def _temporal_candidates(
     *,
     connection: sqlite3.Connection,
@@ -1798,12 +1896,14 @@ def _temporal_candidates(
         anchors = anchor_by_note.get(str(row.get("note_id")), [])
         if not anchors:
             continue
-        anchor = sorted(anchors, key=lambda item: (str(item.get("canonical_start") or ""), str(item["anchor_id"]))) [0]
+        direction = str(layer.get("direction") or "ascending")
+        anchor = _choose_temporal_governing_anchor(anchors, mode=mode, direction=direction)
         lexical_rank = lexical_by_id.get(chunk_id, (None, {}))[0]
         vector_rank = vector_by_id.get(chunk_id, (None, {}))[0]
         ranks = [rank for rank in (lexical_rank, vector_rank) if rank is not None]
         ordinal = sum(1.0 / rank for rank in ranks) if ranks else 0.0
         provenance = [{"anchor_id": item["anchor_id"], "anchor_type": item["anchor_type"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "precision": item["precision"], "authority": item["authority"], "source_field": item["source_field"], "relation": mode, "relation_certainty": item["relation_certainty"]} for item in anchors]
+        ordered_anchors = sorted(anchors, key=_temporal_anchor_order_key)
         temporal.append({
             **row,
             "selection_source": "temporal",
@@ -1812,18 +1912,24 @@ def _temporal_candidates(
             "internal_lexical_rank": lexical_rank,
             "internal_vector_rank": vector_rank,
             "internal_ordinal_relevance": ordinal,
-            "temporal_anchor_ids": [item["anchor_id"] for item in anchors],
-            "temporal_provenance": provenance,
+            "temporal_anchor_ids": [item["anchor_id"] for item in ordered_anchors],
+            "temporal_provenance": [
+                item for item in sorted(provenance, key=lambda value: (str(value.get("canonical_start") or ""), str(value.get("canonical_end") or ""), str(value.get("anchor_id") or "")))
+            ],
+            "temporal_governing_anchor_id": anchor["anchor_id"],
+            "temporal_governing_anchor_type": anchor["anchor_type"],
+            "temporal_governing_canonical_start": anchor["canonical_start"],
+            "temporal_governing_canonical_end": anchor["canonical_end"],
             "temporal_mode": mode,
             "relation_status": anchor["relation_certainty"],
             "selection_reason": f"temporal {mode} relevance admission",
             "match_reason": f"temporal {mode} relation with ordinal relevance",
         })
-    reverse = mode in {"latest", "after"} or (mode == "ordered" and str(layer.get("direction") or "ascending") == "descending")
-    if reverse:
-        temporal.sort(key=lambda candidate: (str(candidate["temporal_provenance"][0].get("canonical_start") or ""), float(candidate.get("internal_ordinal_relevance") or 0.0), str(candidate["chunk_id"])), reverse=True)
-    else:
-        temporal.sort(key=lambda candidate: (str(candidate["temporal_provenance"][0].get("canonical_start") or ""), -float(candidate.get("internal_ordinal_relevance") or 0.0), str(candidate["chunk_id"])))
+    temporal = _order_temporal_candidates(
+        temporal,
+        mode=mode,
+        direction=str(layer.get("direction") or "ascending"),
+    )
     temporal = temporal[: min(config.retrieval_temporal_max_candidates, max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit)))))]
     diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "matched_note_count": len({str(item["note_id"]) for item in temporal}), "relation_certainty_counts": dict(sorted(Counter(str(item.get("relation_status")) for item in temporal).items()))})
     return temporal, [*lexical_notes, *vector_notes], diagnostics
@@ -1959,6 +2065,11 @@ def _merge_candidates(
         merge_list(existing, candidate, "graph_hop_provenance")
         merge_list(existing, candidate, "temporal_provenance")
         merge_list(existing, candidate, "temporal_anchor_ids")
+        if existing.get("temporal_governing_anchor_id") is None and candidate.get("temporal_governing_anchor_id") is not None:
+            existing["temporal_governing_anchor_id"] = candidate["temporal_governing_anchor_id"]
+            existing["temporal_governing_anchor_type"] = candidate.get("temporal_governing_anchor_type")
+            existing["temporal_governing_canonical_start"] = candidate.get("temporal_governing_canonical_start")
+            existing["temporal_governing_canonical_end"] = candidate.get("temporal_governing_canonical_end")
         if existing_graph_provenance or candidate_graph_provenance:
             existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
         if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
@@ -2008,6 +2119,10 @@ def _merge_candidates(
             "vector_similarity",
             "temporal_provenance",
             "temporal_anchor_ids",
+            "temporal_governing_anchor_id",
+            "temporal_governing_anchor_type",
+            "temporal_governing_canonical_start",
+            "temporal_governing_canonical_end",
             "selection_reason",
             "surface_ranks",
             "surface_raw_scores",
@@ -2718,6 +2833,7 @@ def _semantic_traversal(
                 "temporal_mode": candidate.get("temporal_mode"),
                 "temporal_anchor_ids": candidate.get("temporal_anchor_ids", []),
                 "temporal_provenance": candidate.get("temporal_provenance", []),
+                "temporal_governing_anchor_id": candidate.get("temporal_governing_anchor_id"),
                 "relation_status": candidate.get("relation_status"),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
