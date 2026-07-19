@@ -96,6 +96,30 @@ class TemporalTests(unittest.TestCase):
         self.assertEqual([candidate["chunk_id"] for candidate in candidates], ["c-old", "c-new"])
         self.assertTrue(diagnostics["searches_full_temporal_projection"])
         self.assertEqual(candidates[0]["temporal_provenance"][0]["anchor_id"], "a-old")
+        latest, _, _ = _temporal_candidates(
+            connection=connection, config=self.config, chunk_rows=rows,
+            layer={"mode": "latest", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 10},
+            lexical_queries=["alpha"], semantic_queries=[], literal_terms=[], scope_filters={}, embedding_backend=_UnavailableEmbedding(),
+        )
+        before, _, _ = _temporal_candidates(
+            connection=connection, config=self.config, chunk_rows=rows,
+            layer={"mode": "before", "before": "2021", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 10},
+            lexical_queries=["alpha"], semantic_queries=[], literal_terms=[], scope_filters={}, embedding_backend=_UnavailableEmbedding(),
+        )
+        after, _, _ = _temporal_candidates(
+            connection=connection, config=self.config, chunk_rows=rows,
+            layer={"mode": "after", "after": "2021", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 10},
+            lexical_queries=["alpha"], semantic_queries=[], literal_terms=[], scope_filters={}, embedding_backend=_UnavailableEmbedding(),
+        )
+        between, _, _ = _temporal_candidates(
+            connection=connection, config=self.config, chunk_rows=rows,
+            layer={"mode": "between", "start": "2020", "end": "2020-12-31T23:59:59.999999Z", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 10},
+            lexical_queries=["alpha"], semantic_queries=[], literal_terms=[], scope_filters={}, embedding_backend=_UnavailableEmbedding(),
+        )
+        self.assertEqual(latest[0]["chunk_id"], "c-new")
+        self.assertEqual([item["chunk_id"] for item in before], ["c-old"])
+        self.assertEqual([item["chunk_id"] for item in after], ["c-new"])
+        self.assertEqual([item["chunk_id"] for item in between], ["c-old"])
         connection.close()
 
     def test_ingest_persists_temporal_projection_and_manifest_diagnostics(self) -> None:
