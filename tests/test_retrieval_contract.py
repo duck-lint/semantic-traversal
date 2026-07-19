@@ -240,6 +240,59 @@ class RetrievalContractTests(unittest.TestCase):
         self.assertEqual(merged[0]["semantic_query_provenance"], ["alpha", "beta"])
         self.assertEqual(merged[0]["vector_query_scores"], [{"query": "alpha", "similarity": 0.7}, {"query": "beta", "similarity": 0.6}])
 
+    def test_characterization_current_global_fill_can_exceed_source_budget(self) -> None:
+        candidates = [
+            {"chunk_id": "lex-a", "note_id": "n1", "chunk_hash": "lex-a", "selection_source": "lexical", "source_layers": ["lexical"], "score": 4.0},
+            {"chunk_id": "lex-b", "note_id": "n2", "chunk_hash": "lex-b", "selection_source": "lexical", "source_layers": ["lexical"], "score": 3.0},
+            {"chunk_id": "vec-a", "note_id": "n3", "chunk_hash": "vec-a", "selection_source": "vector", "source_layers": ["vector"], "score": 2.0},
+            {"chunk_id": "vec-b", "note_id": "n4", "chunk_hash": "vec-b", "selection_source": "vector", "source_layers": ["vector"], "score": 1.0},
+        ]
+        selected = _select_retrieval_chunks(
+            merged_candidates=candidates,
+            max_chunks=4,
+            selection_policy={"budgets": {"exact": 0, "lexical": 1, "vector": 0, "graph": 0}},
+        )
+        # Characterizes the current behavior: the budget pass takes one lexical
+        # item, then the unrestricted global fill takes the remaining candidates.
+        self.assertEqual(sum("lexical" in item["source_layers"] for item in selected), 2)
+        self.assertEqual(len(selected), 4)
+
+    def test_characterization_current_selection_can_fill_one_note(self) -> None:
+        candidates = [
+            {"chunk_id": f"a-{index}", "note_id": "seed", "chunk_hash": f"a-{index}", "selection_source": "graph", "source_layers": ["graph"], "score": 1.0}
+            for index in range(4)
+        ] + [
+            {"chunk_id": "z-neighbor", "note_id": "neighbor", "chunk_hash": "z-neighbor", "selection_source": "graph", "source_layers": ["graph"], "score": 1.0}
+        ]
+        selected = _select_retrieval_chunks(merged_candidates=candidates, max_chunks=4)
+        # No final per-note cap exists yet; a single traversed note can consume
+        # the packet even when another note has an eligible candidate.
+        self.assertEqual([item["note_id"] for item in selected], ["seed"] * 4)
+
+    def test_characterization_current_ranking_compares_executor_scores_directly(self) -> None:
+        exact = [{"chunk_id": "exact", "note_id": "n1", "chunk_hash": "exact", "selection_source": "exact", "source_layers": ["exact"], "score": 4.1}]
+        vector = [{"chunk_id": "vector", "note_id": "n2", "chunk_hash": "vector", "selection_source": "vector", "source_layers": ["vector"], "score": 3.2}]
+        graph = [{"chunk_id": "graph", "note_id": "n3", "chunk_hash": "graph", "selection_source": "graph", "source_layers": ["graph"], "score": 3.1}]
+        merged = _merge_candidates([], vector, graph, config=self.config, exact_candidates=exact)
+        self.assertEqual([item["chunk_id"] for item in merged], ["exact", "vector", "graph"])
+        self.assertEqual([item["selection_source"] for item in merged], ["exact", "vector", "graph"])
+
+    def test_characterization_current_lexical_limit_precedes_preferred_scope_annotation(self) -> None:
+        rows = [
+            {"chunk_id": "c1", "note_id": "n1", "source_root_label": "vault", "source_root_path": "", "relative_path": "concept.md", "note_title": "Concept", "frontmatter_semantics_json": '{"note_type":"concept"}', "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "c1"},
+            {"chunk_id": "c2", "note_id": "n2", "source_root_label": "vault", "source_root_path": "", "relative_path": "journal.md", "note_title": "Journal", "frontmatter_semantics_json": '{"note_type":"journal_entry"}', "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "c2"},
+        ]
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata)")
+        connection.executemany("INSERT INTO chunks_fts VALUES (?, ?, ?, ?, ?, ?)", [("c1", "alpha", "Concept", "Body", "concept.md", rows[0]["frontmatter_semantics_json"]), ("c2", "alpha", "Journal", "Body", "journal.md", rows[1]["frontmatter_semantics_json"])])
+        candidates, _, diagnostics = _lexical_candidates(rows, ["alpha"], connection=connection, limit=1, config=self.config, mode="any_tokens", return_diagnostics=True)
+        # The preferred journal candidate remains in scoped/raw counts but is
+        # absent from the bounded lexical pool available to later annotation.
+        self.assertEqual([item["chunk_id"] for item in candidates], ["c1"])
+        self.assertEqual(diagnostics["raw_match_count"], 2)
+        self.assertEqual(diagnostics["returned_candidate_count"], 1)
+
     def test_lexical_manifest_statuses_distinguish_input_mode_and_index(self) -> None:
         rows = [{"chunk_id": "c1", "note_id": "n1", "source_root_label": "vault", "source_root_path": "", "relative_path": "idea.md", "note_title": "Idea", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "alpha", "chunk_hash": "h"}]
         connection = sqlite3.connect(":memory:")

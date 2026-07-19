@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 4C vector identity, thresholds, and diversity.
-- Next action: verify index/query embedding compatibility, add YAML-owned similarity and diversity controls, and demonstrate independent multi-query contribution at corpus scale.
+- Current work: Seam 5 fusion, deterministic selection, and bounded packets.
+- Next action: approve a fusion ADR grounded in executor contracts and corpus UAT before modifying production ranking.
 
 ## Completed Repair Status
 
@@ -28,6 +28,7 @@
 | 2026-07-18 | Coordinator | Completed Seam 4A graph executor direction and representative-corpus gate | Controlled complete `Journal -> Concept -> Reading` topology demonstrated outbound, inbound, and `both`; added canonical adjacency ordering, bounded structured hop provenance, submitted/matched/selected/unique note diagnostics, and packet propagation; 118-test suite, graph/config focused tests, compileall, diff check, and repeated representative UAT pass; prompt/YAML hashes preserved | Advance to Seam 4B only; keep FTS freshness, vector thresholds/diversity, fusion, temporal, inventory, compiler/schema, final synthesis, and plugin readiness open |
 | 2026-07-19 | Coordinator | Completed Seam 4B FTS5 freshness, failure atomicity, and packet-scale evidence | Added candidate-database activation, lexical projection validation, preserved latest-success artifacts, staged failure diagnostics, and explicit FTS index/raw/scoped/returned counts; lifecycle, corruption, failure-stage, lexical-mode, and deterministic-order tests pass; full configured-vault disposable ingest produced 1,078 notes and 14,576 chunks with a valid 14,576-row FTS projection; operator manually verified CI for commit `7cad93683773c20e5bc0ff299c4842e95fa78ada` (no registered check artifact was used) | Advance to Seam 4C vector identity/threshold/diversity; keep fusion, temporal, inventory, compiler/schema, final synthesis, and plugin readiness open |
 | 2026-07-19 | Coordinator | Completed Seam 4C vector identity, thresholds, and diversity | Added canonical embedding identity persistence/validation and changed-content invalidation; YAML-owned minimum similarity `0.5`, per-query cap `50`, per-note cap `4`, and global vector cap `200`; independent multi-query execution, deterministic query ordering, round-robin allocation, per-query score provenance, malformed-row diagnostics, and runtime compatibility diagnostics; focused vector/ingest/config tests pass; full suite 133 pass; complete configured-vault disposable ingest produced 1,078 notes, 14,577 chunks, and 14,577 compatible vectors; repeated corpus probes were deterministic | Advance to Seam 5 fusion/selection; keep temporal, inventory, compiler/schema, final synthesis, and plugin readiness open |
+| 2026-07-19 | Coordinator | Opened Seam 5 architecture-decision phase | Audited current merge/rank/selection behavior; recorded supplied 24-chunk/4-note genealogy counterexample; added four current-behavior characterization tests; proposed bounded-hybrid ADR with rank-based fusion, required reservations, preferred reservoir, hard note/source/byte bounds, and deterministic redundancy controls; pre-change baseline 133, post-characterization suite 137 pass | Await explicit approval of `implementation-07-seam-5-fusion-ADR.md`; do not modify production ranking |
 
 ## Work Status
 
@@ -42,7 +43,7 @@
 | Seam 4A: graph executor | Coordinator | complete | Directed complete-representative topology; outbound/inbound/`both`, depth 2, cycle/self-link, reciprocal, insertion-order, scope, edge/node controls, fairness, required contribution, and provenance tests; full suite 118 pass; compileall/diff check pass | Graph direction and bounded path provenance are verified. A full configured-corpus direction run remains optional evidence, not a blocker for the complete representative gate. |
 | Seam 4B: lexical FTS5 executor | Coordinator | complete | 5 FTS5 mode coverage; freshness/update/rename/delete/unchanged lifecycle tests; corruption validator; initial/refresh/schema/validation/activation failure preservation tests; full suite 126 pass; compileall and diff check pass; disposable full configured-vault ingest and deterministic packet-scale lexical UAT | Candidate activation is atomic at the database-file boundary; FTS projection alignment and bounded lexical attrition are manifest-visible. |
 | Seam 4C: vector executor | Coordinator | complete | Identity reuse/invalidation, malformed-index diagnostics, threshold/per-query/per-note caps, deterministic multi-query round-robin, score provenance, complete configured-corpus ingest, repeated corpus probes; full suite 133 pass; compileall and diff check pass | Canonical vector identity and bounded diversity are manifest-visible. General fusion/selection remains open. |
-| Seam 5: fusion/selection | Coordinator | proposed | pending | Depends on 4A/4B/4C |
+| Seam 5: fusion/selection | Coordinator | design proposed | ADR created; four current-behavior characterization tests; full suite 137 pass; compileall/diff check pass; prompt/YAML hashes unchanged | Await approval before production fusion implementation |
 | Seam 6A: temporal substrate | Coordinator | proposed | pending | Depends on 1A |
 | Seam 7: persisted inventory | Coordinator | proposed | pending | Depends on retrieval executors and 6A |
 | Seam 8: compiler/schema contract | Coordinator | proposed | pending | Depends on runtime support |
@@ -60,6 +61,12 @@
 
 - Seam 4C is complete for this slice. The next planned seam is Seam 5: fusion/selection. Do not archive implementation-07 yet; temporal substrate, persisted inventory, compiler/schema emission of preferred scope, final synthesis UAT, and plugin TypeScript readiness remain open.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
+
+Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-fusion-ADR.md` is proposed, not approved. It recommends a bounded hybrid centered on weighted reciprocal-rank fusion, required-evidence reservations, bounded preferred-scope reservoirs, hard note/source/byte ceilings, and deterministic normalized-text redundancy checks. No production fusion, ranking, selection, YAML, packet, or prompt code changed. Four characterization tests freeze current budget overflow, one-note concentration, unlike-score ordering, and preferred-scope loss after executor truncation.
+
+Final design-slice verification: pre-change full suite `133` passed; characterization-focused suite `4` passed; post-change full suite `137` passed; `compileall` and `git diff --check` passed. Prompt and YAML hashes remained unchanged.
+
+Operator-supplied visual GitHub Actions evidence: run title `complete seam 4c vector identity and diversity`, tests/run identifier `tests #94`, commit `ac4516f`, branch `codex/big-refactor-07.18.26`, passed, approximately 1m49s. No independently available run/job ID is claimed.
 
 Seam 4C record (2026-07-19): vector rows now carry canonical provider/model/dimension/normalization/encoding identity and an identity hash; changed or incompatible rows are re-embedded, and malformed or mixed rows are diagnosed. YAML owns `min_similarity: 0.5`, `per_query_max_candidates: 50`, `max_chunks_per_note: 4`, and `max_candidates: 200`. Each accepted query executes independently, with canonical query ordering, per-query score provenance, and deterministic round-robin allocation. Corpus calibration at `.2/.35/.5/.65` was recorded before selecting `.5` as a bounded tradeoff; this is not corpus-specific ranking logic.
 
