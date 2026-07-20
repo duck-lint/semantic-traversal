@@ -329,3 +329,45 @@ remains
 `854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`. No
 compiler/frontier prompt, preferred reservoir, sparse stopping, global date
 sort, or private corpus material changed.
+
+## Seam 7 persisted inventory UAT (2026-07-20)
+
+The active database path from the checked-in YAML was not accessible in this
+session, so it was not opened or mutated. The configured vault was available;
+a fresh disposable ingest used data root
+`C:\Users\madis\AppData\Local\Temp\seam7-uat-b1e25np3` and unavailable
+embeddings. It produced 1,083 notes and 14,608 chunks, one valid snapshot row,
+schema version 1, snapshot ID `snapshot-c8837a4f109ca9d591983f3b`, logical hash
+`c8837a4f109ca9d591983f3b1f5dff142c0390591e2b8e3d0bc751ff07b5afe6`, and
+inventory-policy hash
+`da32f05d48ffc2e64a666e0a62bb5ef38520f2775ac14316739499a9a43d7f8e`.
+The serialized payload was 17,690 bytes. Activation and snapshot validation
+passed.
+
+Observed source labels were `vault: 1,083`. The bounded note-type facet had
+14 observed values; creator had 16; title had 21; tags had 48 with deterministic
+32-value truncation; journal-entry-date had 505 with deterministic 32-value
+truncation. Path depth 2 observed 5 top-level and 19 second-level values with
+no truncation. FTS was valid at 14,608 rows. Vector table was present with zero
+rows and unavailable embeddings, so no vector arrays were persisted. Graph
+capabilities were 15,739 nodes and 32,142 edges: 3 node types and 4 edge
+types. Temporal capabilities were 506 `journal_entry` anchors, all
+`explicit_primary` and day precision, with zero conflicts/unresolved rows.
+
+An unchanged disposable reingest created a new ingest run
+`ingest-20260720T000528Z-1150258b`, retained exactly one active snapshot, and
+reproduced the same logical hash. Volatile source-run metadata changed while
+the logical inventory identity remained stable.
+
+Same-turn controlled UAT used the persisted database and a recording compiler.
+The compiler request and traversal manifest both reported source `persisted`,
+status `valid`, snapshot load count `1`, full inventory rebuilds `0`, and the
+same logical hash `c8837a4f109ca9d591983f3b1f5dff142c0390591e2b8e3d0bc751ff07b5afe6`.
+The controlled turn completed. A focused regression patches live inventory
+recomputation to fail and confirms traversal succeeds with the explicitly
+passed persisted summary.
+
+No observed field required an unresolved semantic decision. Values were
+recorded under configured frontmatter fields; scope aliases remained current
+YAML overlays. Normal compiler temporal activation and richer compiler/schema
+emission remain Seam 8 work.

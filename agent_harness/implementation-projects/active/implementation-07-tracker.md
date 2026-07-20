@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 7 persisted resource inventory (next seam; unopened).
-- Next action: define and verify persisted inventory reuse without beginning Seam 7 until the Seam 6A repair evidence is committed and pushed.
+- Current work: Seam 8 compiler/schema contract (next seam; unopened).
+- Next action: define the explicit compiler/schema changes required to expose supported retrieval intent; do not begin Seam 8 in the Seam 7 closeout slice.
 
 ## Completed Repair Status
 
@@ -31,6 +31,7 @@
 | 2026-07-19 | Coordinator | Opened Seam 5 architecture-decision phase | Audited current merge/rank/selection behavior; recorded supplied 24-chunk/4-note genealogy counterexample; added four current-behavior characterization tests; proposed bounded-hybrid ADR with rank-based fusion, required reservations, preferred reservoir, hard note/source/byte bounds, and deterministic redundancy controls; pre-change baseline 133, post-characterization suite 137 pass | Await explicit approval of `implementation-07-seam-5-fusion-ADR.md`; do not modify production ranking |
 | 2026-07-19 | Coordinator | Accepted and closed the bounded Seam 5 ordinal-fusion experiment on the target branch | Fast-forwarded `codex/big-refactor-07.18.26` from `b5883fb` to `3dd1579`; same-pool replay reduced selected-note concentration from 4 notes/max 13 chunks to 11 notes/max 4 chunks; full suite 142 pass; prompt guards and diff checks pass | Use the compact accepted ADR; historical full hybrid analysis is superseded and unapproved |
 | 2026-07-19 | Coordinator | Recovered the incomplete Seam 6A continuation | Reverted pushed commit `0b039ad` with normal revert `d6c770a`; it was temporal annotation/order, not temporal retrieval; prototype remains historical in Git only | Reopen Seam 6A as proposed; define typed anchors and retrieval operations; do not start Seam 7 |
+| 2026-07-20 | Coordinator | Implemented Seam 7 persisted resource inventory | Accepted ADR `a5e75da`; snapshot persistence/validation, YAML-owned inventory bounds, explicit legacy/stale/corrupt fallbacks, single-turn reuse, 156-test suite, compileall, diff check, and disposable configured-corpus UAT recorded below | Advance to Seam 8 compiler/schema contract only; keep it unopened |
 
 ## Work Status
 
@@ -47,7 +48,7 @@
 | Seam 4C: vector executor | Coordinator | complete | Identity reuse/invalidation, malformed-index diagnostics, threshold/per-query/per-note caps, deterministic multi-query round-robin, score provenance, complete configured-corpus ingest, repeated corpus probes; full suite 133 pass; compileall and diff check pass | Canonical vector identity and bounded diversity are manifest-visible. General fusion/selection remains open. |
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
 | Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; normal compiler temporal activation remains Seam 8 |
-| Seam 7: persisted inventory | Coordinator | proposed | pending | Depends on retrieval executors and 6A |
+| Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 remains unopened |
 | Seam 8: compiler/schema contract | Coordinator | proposed | pending | Depends on runtime support |
 | Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Depends on all behavioural seams |
 
@@ -200,6 +201,48 @@ The YAML hash before Seam 6A was
 final Seam 6A hash is
 `854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`.
 No temporal production surface from reverted `0b039ad` remains.
+
+## Seam 7 persisted inventory closeout (2026-07-20)
+
+The accepted ADR is `implementation-07-seam-7-persisted-inventory-ADR.md`
+(commit `a5e75da`). The implementation commit is `c2dfbdb`.
+
+The prior runtime scanned notes/chunks before compilation and rebuilt the
+inventory during traversal. Seam 7 adds one `resource_inventory_snapshots`
+row to the staged candidate database. It stores schema version, snapshot ID,
+source ingest run, generated time, inventory-policy hash, logical inventory
+hash, bounded observed payload, and validation status. Ingest builds it after
+FTS, vector, graph, and temporal projections exist, validates it against the
+candidate, and activates it atomically with the database.
+
+Observed facts remain separate from YAML policy. The payload records counts,
+source labels, configured semantic-frontmatter facet observations, path
+segments, and exact/FTS, vector, graph, and temporal capability facts. YAML
+owns schema version, path depth 2, facet bound 32, path bound 128, graph-type
+bound 32, and temporal-type bound 32. Scope aliases are overlaid from current
+YAML at runtime and are excluded from the logical hash. No note bodies, chunk
+text, vectors, or secrets are persisted.
+
+The valid runtime loader reports `source: persisted`, `status: valid`, one
+snapshot load, zero full inventory rebuilds, snapshot/source/policy/logical
+hashes, and passes the same summary to compiler request construction,
+resolver binding, and traversal. Legacy, stale, or corrupt snapshots use
+explicit recomputed fallback diagnostics without mutating the active database;
+config-only fallback remains explicit when recomputation is unavailable.
+
+Focused inventory/config/runtime tests pass (`89`); the complete local suite
+passes (`156`); compileall and `git diff --check` pass. Prompt hashes remain
+compiler `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`
+and frontier
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`. YAML
+changed from `854418104a07946075d919a647af3bf4ac785c5844dbd6be4773e19387f99324`
+to `6b63f82e5bb1b626cc688ebba34dee37c23474f7b00005635ef17f323b07dd1f` for
+the explicit inventory controls.
+
+Operator-supplied visual CI evidence is recorded for the preceding closeout:
+run title `docs(seam6a): close temporal repair evidence`, tests identifier
+`tests #101`, commit `7871514`, branch `codex/big-refactor-07.18.26`, passed in
+approximately 1 minute 37 seconds. No workflow run ID is claimed.
 
 ## Seam 6A completion repair (2026-07-19)
 
