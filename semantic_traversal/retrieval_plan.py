@@ -112,8 +112,6 @@ KNOWN_PLANNER_FIELDS = {
     "lexical_queries",
     "graph_seeds",
     "retrieval_layers",
-    "selection_policy",
-    "claim_policy",
 }
 
 
@@ -390,9 +388,6 @@ def build_default_retrieval_plan(
         layers.append(_retrieval_layer("vector_search", limit=planner_defaults["vector_limit"]))
         layers.append(_retrieval_layer("graph_expand", depth=planner_defaults["graph_depth"]))
 
-    selection_policy = planner_defaults["selection_policy"]
-    claim_policy = planner_defaults["claim_policy"]
-
     return {
         "intent_type": intent_type,
         "scope_requests": list(dict.fromkeys(scope_requests)),
@@ -403,15 +398,6 @@ def build_default_retrieval_plan(
         "lexical_queries": list(dict.fromkeys(lexical_queries)),
         "graph_seeds": list(dict.fromkeys(graph_seeds)),
         "retrieval_layers": layers,
-        "selection_policy": {
-            "max_chunks": selection_policy["max_chunks"],
-            "preserve_required_layers": selection_policy["preserve_required_layers"],
-            "budgets": dict(selection_policy["budgets"]),
-        },
-        "claim_policy": {
-            "coverage_claims_allowed": bool(search_intent),
-            "negative_claims_require_exact_layer": claim_policy["negative_claims_require_exact_layer"],
-        },
     }
 
 
@@ -458,7 +444,7 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
             try:
                 layer["depth"] = max(0, int(entry["depth"]))
             except (TypeError, ValueError):
-                pass
+                layer["depth"] = entry.get("depth")
         if "return_total_count" in entry:
             layer["return_total_count"] = bool(entry.get("return_total_count"))
         if "mode" in entry:
@@ -473,39 +459,6 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
             layer["include_unresolved"] = bool(entry.get("include_unresolved"))
         layers.append(layer)
     return layers or list(fallback)
-
-
-def _coerce_selection_policy(value: Any, fallback: dict[str, Any], planner_defaults: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return dict(fallback)
-    raw_budgets = value.get("budgets") if isinstance(value.get("budgets"), dict) else {}
-    fallback_budgets = fallback.get("budgets") if isinstance(fallback.get("budgets"), dict) else planner_defaults["selection_policy"]["budgets"]
-    budgets: dict[str, int] = {}
-    for key in ("exact", "lexical", "vector", "graph"):
-        raw_value = raw_budgets.get(key, fallback_budgets.get(key, planner_defaults["selection_policy"]["budgets"][key]))
-        try:
-            budgets[key] = max(0, int(raw_value))
-        except (TypeError, ValueError):
-            budgets[key] = planner_defaults["selection_policy"]["budgets"][key]
-    return {
-        "max_chunks": max(
-            0,
-            int(value.get("max_chunks", fallback.get("max_chunks", planner_defaults["selection_policy"]["max_chunks"])))
-        ),
-        "preserve_required_layers": bool(
-            value.get("preserve_required_layers", fallback.get("preserve_required_layers", planner_defaults["selection_policy"]["preserve_required_layers"]))
-        ),
-        "budgets": budgets,
-    }
-
-
-def _coerce_claim_policy(value: Any, fallback: dict[str, Any], planner_defaults: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return dict(fallback)
-    return {
-        "coverage_claims_allowed": bool(value.get("coverage_claims_allowed", fallback.get("coverage_claims_allowed", False))),
-        "negative_claims_require_exact_layer": bool(value.get("negative_claims_require_exact_layer", fallback.get("negative_claims_require_exact_layer", planner_defaults["claim_policy"]["negative_claims_require_exact_layer"]))),
-    }
 
 
 def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner_defaults: dict[str, Any], raw_user_input: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -525,9 +478,15 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
             result["lexical_queries"] = lexical_queries
         return result, diagnostics
 
-    unknown_fields = sorted(set(value) - KNOWN_PLANNER_FIELDS)
+    retired_fields = sorted(set(value) & {"selection_policy", "claim_policy"})
+    unknown_fields = sorted(set(value) - KNOWN_PLANNER_FIELDS - set(retired_fields))
     if unknown_fields:
         diagnostics["ignored_planner_fields"] = unknown_fields
+    if retired_fields:
+        diagnostics["retired_planner_fields"] = [
+            {"field": field, "action": "retired", "reason": "compiler does not own runtime selection or claim policy"}
+            for field in retired_fields
+        ]
 
     result = {
         "intent_type": str(value.get("intent_type") or fallback.get("intent_type") or "semantic_traversal"),
@@ -539,8 +498,6 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
         "lexical_queries": coerce_string_list(value.get("lexical_queries")) or coerce_string_list(fallback.get("lexical_queries")),
         "graph_seeds": coerce_string_list(value.get("graph_seeds")) or coerce_string_list(fallback.get("graph_seeds")),
         "retrieval_layers": _coerce_retrieval_layers(value.get("retrieval_layers"), fallback.get("retrieval_layers", [])),
-        "selection_policy": _coerce_selection_policy(value.get("selection_policy"), fallback.get("selection_policy", {}), planner_defaults),
-        "claim_policy": _coerce_claim_policy(value.get("claim_policy"), fallback.get("claim_policy", {}), planner_defaults),
     }
     if raw_user_input:
         literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry["term"] for entry in result["literal_terms"]])

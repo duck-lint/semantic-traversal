@@ -182,24 +182,19 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
                 }
                 and key not in INTERNAL_COMPILER_ECHO_FIELDS
             }
-        )
+        ),
+        "retired_planner_fields": list(planner_diagnostics.get("retired_planner_fields") or []),
     }
     return result
 
 
 def _render_ollama_prompt(*, packet: dict[str, Any], template: str, planner_defaults: dict[str, Any]) -> str:
     rendered_template = template
-    selection_policy = planner_defaults["selection_policy"]
-    budgets = selection_policy["budgets"]
     replacements = {
         "{semantic_compiler_lexical_limit}": planner_defaults["lexical_limit"],
         "{semantic_compiler_vector_limit}": planner_defaults["vector_limit"],
         "{semantic_compiler_graph_depth}": planner_defaults["graph_depth"],
-        "{semantic_compiler_max_chunks}": selection_policy["max_chunks"],
-        "{semantic_compiler_exact_budget}": budgets["exact"],
-        "{semantic_compiler_lexical_budget}": budgets["lexical"],
-        "{semantic_compiler_vector_budget}": budgets["vector"],
-        "{semantic_compiler_graph_budget}": budgets["graph"],
+        "{resource_inventory_summary}": json.dumps(packet.get("resource_inventory_summary", {}), ensure_ascii=True, indent=2),
     }
     for marker, value in replacements.items():
         rendered_template = rendered_template.replace(marker, str(value))

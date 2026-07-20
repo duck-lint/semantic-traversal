@@ -65,13 +65,6 @@ retrieval:
       preserve_required_layers: true
     claim_policy:
       negative_claims_require_exact_layer: true
-  compiler_compatibility:
-    selection_policy_budgets:
-      exact: 12
-      lexical: 6
-      vector: 6
-      graph: 4
-
 runtime_conversation:
   stop_words: [a, an, and, are, as, at, be, but, by, about, do, for, from, how, i, if, in, into, is, it, my, of, "on", or, our, retrieve, retrieved, retrieves, retrieving, note, notes, regarding, search, the, find, found, locate, mention, mentions, show, to, with, you, your]
   referential_surface_words: [it, that, this, those, they, them]
@@ -147,11 +140,17 @@ prompts:
   semantic_compiler:
     template: |
       Return JSON only.
-      Compile a soft retrieval plan for deterministic resolution and retrieval execution. Do not answer the user.
+      Compile a semantic retrieval request for deterministic runtime resolution and retrieval execution. Do not answer the user.
       Do not emit planner_diagnostics; runtime adds diagnostics.
-      Separate conversational meaning into distinct roles: scope requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
-      Treat search/find/list/mentions/occurrences requests as exact-search requests when possible.
-      Treat words like journal or daily as soft scope requests when the user asks for journal material; do not emit note_type, path, or source filters.
+      Separate conversational meaning into scope alias requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
+      Use only scope aliases present in the supplied resource inventory summary. Never emit raw note_type, path, source, author, book, or filesystem filters.
+      Treat explicit search/find/list/mention/occurrence/count or absence requests as exact-search requests when possible. A quoted concept alone does not require exact search.
+      For exact search, preserve each literal term, its requested case-sensitive or case-insensitive substring match mode, required flag, and return_total_count when exhaustive counts or absence are requested.
+      Preserve lexical mode when the user requests a lexical operator. Preserve graph depth when traversal is explicit. Do not emit graph direction; runtime/YAML owns it.
+      Request temporal retrieval when chronology, earliest/latest, before/after/between, development ordering, origin, precursors, what came before, or autobiographical development is constitutive of the question. For an origin or precursor question, use temporal_retrieve with an appropriate ordered/earliest mode and required true when chronology is necessary to answer; do not treat conceptual resemblance as chronology. Do not infer temporal retrieval from current, old, or history alone. Do not invent dates or causal influence.
+      When the inventory presents an available alias for the requested autobiographical or chronological evidence, emit that alias in scope_requests; runtime decides whether it is hard or preferred.
+      Requiredness is sparse: exact exhaustive search, strict temporal relations, and explicitly requested graph traversal may be required; otherwise prefer optional layers.
+      The compiler requests operators and bounded limits only. Do not emit selection_policy, budgets, max_chunks, preserve_required_layers, claim_policy, coverage flags, or negative-claim permission.
       Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.
       Preserve the raw user input exactly.
       Use this exact canonical shape:
@@ -172,15 +171,24 @@ prompts:
           "lexical_queries": [],
           "graph_seeds": [],
           "retrieval_layers": [
-            {"operator": "lexical_chunk_search", "required": false, "limit": {semantic_compiler_lexical_limit}},
+            {"operator": "lexical_chunk_search", "required": false, "limit": {semantic_compiler_lexical_limit}, "mode": "any_tokens"},
             {"operator": "vector_search", "required": false, "limit": {semantic_compiler_vector_limit}},
             {"operator": "graph_expand", "required": false, "depth": {semantic_compiler_graph_depth}}
-          ],
-          "selection_policy": {"max_chunks": {semantic_compiler_max_chunks}, "preserve_required_layers": true, "budgets": {"exact": {semantic_compiler_exact_budget}, "lexical": {semantic_compiler_lexical_budget}, "vector": {semantic_compiler_vector_budget}, "graph": {semantic_compiler_graph_budget}}},
-          "claim_policy": {"coverage_claims_allowed": false, "negative_claims_require_exact_layer": true}
+          ]
         },
         "limitations": []
       }
+
+      Generic request examples:
+      - exact count: literal_terms with required true and return_total_count true;
+      - broad conceptual: optional lexical and vector layers, no invented exact term;
+      - graph relation: graph_expand with explicit seeds and requested depth;
+      - temporal development: temporal_retrieve with mode ordered or earliest when chronology is constitutive;
+      - preferred inventory alias: scope_requests containing an available alias, leaving hard/preferred binding to runtime;
+      - narrow factual: concise semantic/vector request without unnecessary temporal or graph operators.
+
+      Resource inventory summary:
+      {resource_inventory_summary}
 
       Packet:
       {packet}

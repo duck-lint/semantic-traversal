@@ -388,7 +388,7 @@ def _compiler_request_packet(
         "active_focus": active_focus,
         "resource_inventory_summary": resource_inventory_summary,
         "scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
-        "instruction": "Compile a soft retrieval plan, not an answer. Emit scope requests and concepts only; do not emit note_type, path_contains, source_label, planner_diagnostics, or any other executable filters.",
+        "instruction": "Compile a retrieval request, not an answer. Emit supported planner intent and retrieval-layer fields only. Use inventory scope aliases rather than raw note_type, path_contains, source_label, planner_diagnostics, or runtime selection/claim policy.",
     }
 
 

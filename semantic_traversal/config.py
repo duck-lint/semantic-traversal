@@ -72,9 +72,6 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
                 "negative_claims_require_exact_layer": bool,
             },
         },
-        "compiler_compatibility": {
-            "selection_policy_budgets": dict,
-        },
         "scope_aliases": dict,
         "scope_policy": {
             "exact_request_mode": str,
@@ -352,14 +349,7 @@ class RuntimeConfig:
 
     @property
     def retrieval_planner_defaults(self) -> dict[str, Any]:
-        defaults = deepcopy(self.raw["retrieval"]["planner_defaults"])
-        compatibility = self.raw["retrieval"].get("compiler_compatibility", {})
-        legacy_budgets = compatibility.get("selection_policy_budgets", {}) if isinstance(compatibility, dict) else {}
-        # The frozen compiler packet still emits this legacy field. Keep its
-        # explicit compatibility values available to packet canonicalization,
-        # while runtime binding retires it from ordinary selection authority.
-        defaults.setdefault("selection_policy", {})["budgets"] = dict(legacy_budgets)
-        return defaults
+        return deepcopy(self.raw["retrieval"]["planner_defaults"])
 
     @property
     def graph_traversal_enabled(self) -> bool:

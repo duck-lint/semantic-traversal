@@ -35,6 +35,11 @@ class RuntimeConfigTests(unittest.TestCase):
         config = load_runtime_config(repo_root=REPO_ROOT)
         self.assertEqual(config.data_root, config.vault_root / ".semantic-traversal")
 
+    def test_compiler_compatibility_budget_surface_is_retired(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        self.assertNotIn("compiler_compatibility", config.raw["retrieval"])
+        self.assertNotIn("budgets", config.retrieval_planner_defaults["selection_policy"])
+
     def test_invalid_graph_direction_is_rejected_during_config_loading(self) -> None:
         source = (REPO_ROOT / "semantic_traversal.runtime.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temp_dir:

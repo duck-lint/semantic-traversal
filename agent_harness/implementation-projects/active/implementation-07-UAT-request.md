@@ -244,6 +244,48 @@ recorded 1,083 notes, 14,608 chunks, and 506 valid anchors. All anchors were
 and conflict counts were zero. Projection validation passed and activation
 completed atomically.
 
+## Seam 8 compiler/schema contract (2026-07-20)
+
+The accepted bounded contract is recorded in
+`implementation-07-seam-8-compiler-schema-ADR.md`. The model request shape now
+contains semantic intent and supported retrieval-layer requests only. Compiler
+selection/claim policy, ordinary budgets, max-chunks, coverage, and negative
+claim fields are excluded from the canonical plan. Legacy payloads containing
+those fields produce structured `retired` diagnostics and do not affect runtime
+binding. The obsolete `retrieval.compiler_compatibility.selection_policy_budgets`
+YAML surface was removed. The frontier prompt was not changed.
+
+Controlled compiler UAT used the valid persisted inventory snapshot
+`snapshot-bf02d87301f66393cba2374f` with logical inventory hash
+`bf02d87301f66393cba2374f6394235103544edcf303f822678b1128e9545a56` and one
+snapshot load. Generic cases covered exact exhaustive count, broad conceptual,
+graph relation/depth, earliest and before temporal modes, preferred alias,
+narrow factual, and unrelated control requests. Canonical plans preserved
+requested exact match mode/requiredness/count reporting, lexical mode, graph
+depth, temporal mode, and scope alias fields. Duplicate inputs were stable;
+unknown and invalid values remained diagnostic. Binding a controlled
+`journal` alias produced `scope_resolution.preferred: ["journal"]` and a
+`bound_to_preferred_scope` adjustment; temporal defaults and limits were then
+runtime-bound from YAML.
+
+Normal live compiler UAT used configured `qwen3:8b` against the persisted
+inventory. A bounded first probe timed out at 12 seconds while the endpoint was
+loading; a configured 120-second retry succeeded. The genealogy-shaped query
+returned a schema-valid request with a required `temporal_retrieve` layer,
+mode `ordered`, limit 24, plus optional lexical, vector, and graph layers. It
+did not emit a preferred scope alias in that particular run. This is recorded
+as a compiler-output limitation, not repaired with query-specific inference;
+controlled alias emission and runtime preferred binding remain proven. The
+live compiler prompt hash for that request was
+`39c82008f046012a7cf1b1a98a6f8b0e888bf13c7b8827b9c8f4938ace657d23`.
+
+The normal live run did not synthesize an answer or claim historical causation.
+The compiler gate is therefore limited to request activation and schema
+truthfulness; final chronology and causal interpretation remain downstream
+retrieval/synthesis concerns. Preferred admission before executor truncation,
+reservoir behavior, and sparse stopping remain deferred as recorded in the
+accepted Seam 5 decision.
+
 For the controlled earliest-relevant `semantic geometry` comparison, ordinary
 lexical retrieval returned 50 candidates from 5 notes after its cap. Direct
 temporal relevance admission scanned the full FTS projection, then applied
@@ -315,7 +357,7 @@ selected chunks, 12 selected notes, and maximum concentration 4. The answer
 was epistemically cautious and explicitly described chronology as suggestive,
 not demonstrated, because no temporal traversal or exact search ran. This is
 not a Seam 6A failure; it confirms that normal compiler temporal activation
-remains Seam 8.
+was deferred to Seam 8, whose bounded activation is recorded below.
 
 Repair verification is committed as `77645ae` (`fix(seam6a): enforce
 mode-correct anchors and relation ranking`). Focused temporal tests run 8 and
@@ -370,4 +412,4 @@ passed persisted summary.
 No observed field required an unresolved semantic decision. Values were
 recorded under configured frontmatter fields; scope aliases remained current
 YAML overlays. Normal compiler temporal activation and richer compiler/schema
-emission remain Seam 8 work.
+emission were deferred to Seam 8 and are recorded above.

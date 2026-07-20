@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 8 compiler/schema contract (next seam; unopened).
-- Next action: define the explicit compiler/schema changes required to expose supported retrieval intent; do not begin Seam 8 in the Seam 7 closeout slice.
+- Current work: Seam 8 compiler/schema contract.
+- Next action: verify the accepted bounded compiler request schema, inventory-aware intent, and runtime authority boundary before advancing to Seam 9.
 
 ## Completed Repair Status
 
@@ -31,7 +31,8 @@
 | 2026-07-19 | Coordinator | Opened Seam 5 architecture-decision phase | Audited current merge/rank/selection behavior; recorded supplied 24-chunk/4-note genealogy counterexample; added four current-behavior characterization tests; proposed bounded-hybrid ADR with rank-based fusion, required reservations, preferred reservoir, hard note/source/byte bounds, and deterministic redundancy controls; pre-change baseline 133, post-characterization suite 137 pass | Await explicit approval of `implementation-07-seam-5-fusion-ADR.md`; do not modify production ranking |
 | 2026-07-19 | Coordinator | Accepted and closed the bounded Seam 5 ordinal-fusion experiment on the target branch | Fast-forwarded `codex/big-refactor-07.18.26` from `b5883fb` to `3dd1579`; same-pool replay reduced selected-note concentration from 4 notes/max 13 chunks to 11 notes/max 4 chunks; full suite 142 pass; prompt guards and diff checks pass | Use the compact accepted ADR; historical full hybrid analysis is superseded and unapproved |
 | 2026-07-19 | Coordinator | Recovered the incomplete Seam 6A continuation | Reverted pushed commit `0b039ad` with normal revert `d6c770a`; it was temporal annotation/order, not temporal retrieval; prototype remains historical in Git only | Reopen Seam 6A as proposed; define typed anchors and retrieval operations; do not start Seam 7 |
-| 2026-07-20 | Coordinator | Implemented Seam 7 persisted resource inventory | Accepted ADR `a5e75da`; snapshot persistence/validation, YAML-owned inventory bounds, explicit legacy/stale/corrupt fallbacks, single-turn reuse, 156-test suite, compileall, diff check, and disposable configured-corpus UAT recorded below | Advance to Seam 8 compiler/schema contract only; keep it unopened |
+| 2026-07-20 | Coordinator | Implemented Seam 7 persisted resource inventory | Accepted ADR `a5e75da`; snapshot persistence/validation, YAML-owned inventory bounds, explicit legacy/stale/corrupt fallbacks, single-turn reuse, 156-test suite, compileall, diff check, and disposable configured-corpus UAT recorded below | Seam 8 compiler/schema follow-up recorded below |
+| 2026-07-20 | Coordinator | Implemented the accepted bounded Seam 8 compiler/schema contract | Added inventory-aware compiler request prompt, removed compiler-owned selection/claim/budget fields, classified legacy policy fields as retired diagnostics, preserved exact/lexical/vector/graph/temporal requests, and added schema/config regressions; controlled compiler matrix and normal qwen3:8b temporal activation passed; full local suite 163 after final guard | Advance to Seam 9 cleanup/docs/UAT only; do not reopen runtime retrieval seams |
 
 ## Work Status
 
@@ -47,10 +48,10 @@
 | Seam 4B: lexical FTS5 executor | Coordinator | complete | 5 FTS5 mode coverage; freshness/update/rename/delete/unchanged lifecycle tests; corruption validator; initial/refresh/schema/validation/activation failure preservation tests; full suite 126 pass; compileall and diff check pass; disposable full configured-vault ingest and deterministic packet-scale lexical UAT | Candidate activation is atomic at the database-file boundary; FTS projection alignment and bounded lexical attrition are manifest-visible. |
 | Seam 4C: vector executor | Coordinator | complete | Identity reuse/invalidation, malformed-index diagnostics, threshold/per-query/per-note caps, deterministic multi-query round-robin, score provenance, complete configured-corpus ingest, repeated corpus probes; full suite 133 pass; compileall and diff check pass | Canonical vector identity and bounded diversity are manifest-visible. General fusion/selection remains open. |
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
-| Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; normal compiler temporal activation remains Seam 8 |
-| Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 remains unopened |
-| Seam 8: compiler/schema contract | Coordinator | proposed | pending | Depends on runtime support |
-| Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Depends on all behavioural seams |
+| Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; compiler temporal activation was deferred to Seam 8 and is now recorded below |
+| Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 follow-up is recorded below |
+| Seam 8: compiler/schema contract | Coordinator | complete | Accepted ADR, 7 compiler-schema tests, 163-test suite, controlled request matrix, normal qwen3:8b temporal activation, prompt/YAML hash guards | Compiler preferred-scope alias emission is supported; runtime remains authoritative; no compiler policy fields are accepted |
+| Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Next bounded seam; not started |
 
 ## Blockers
 
@@ -58,11 +59,11 @@
 | --- | --- | --- | --- |
 | Deferred delegated-agent inventory was not inspected before implementation | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; the completed work was therefore coordinator-executed. |
 | Final corpus-wide UAT remains required | evidence boundary | Operator/user | Exact UAT is recorded; later inbound/both, vector, temporal, and final synthesis evidence remain open | Do not archive until the remaining bundle gates are recorded |
-| Compiler did not emit journal preference for genealogy query | compiler/schema boundary | Coordinator | Actual compiler emitted `idea_origin` and `precursor_concepts`; runtime did not infer journal scope; controlled supported-scope UAT separately demonstrated the runtime contract. | Keep Seam 8 open; do not hardcode query-specific scope inference |
+| Compiler did not emit a preferred alias in the normal genealogy probe | compiler/schema boundary | Coordinator | Normal qwen3:8b emitted required temporal retrieval but no scope alias; controlled supported-alias UAT demonstrated canonical alias emission and runtime preferred binding. No query-specific inference was added. | Keep preferred admission/reservoir deferred; reassess only with corpus evidence |
 
 ## Closeout Note
 
-- Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A is reopened/proposed after reverting `0b039ad`, and Seam 7 has not begun.
+- Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A, Seam 7, and Seam 8 are complete for their accepted bounded contracts; Seam 9 is next and unopened.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
 
 Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-accepted-ADR.md` is the accepted compact contract: unweighted ordinal per-surface fusion, required-evidence reservations, retirement of ordinary layer budgets, breadth-before-depth by `note_id`, global configured `max_chunks` ceiling, and deterministic diagnostics. `implementation-07-seam-5-fusion-ADR.md` is superseded historical analysis and unapproved; preferred reservoirs, sparse stopping, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and weighted RRF are not routine planned Seam 5 work.
@@ -274,4 +275,18 @@ was not mutated. A complete representative multi-anchor fixture demonstrates
 different earliest/latest governing anchors and relevance-first relation
 ordering; the configured corpus has one journal anchor per note and therefore
 cannot prove the multi-anchor distinction itself. Seam 6A is complete for the
-accepted bounded contract. Seam 7 is next but unopened.
+accepted bounded contract. At that historical closeout point, Seam 7 was next
+but unopened; subsequent Seam 7 and Seam 8 records supersede that next-action
+statement.
+
+Seam 8 hash closeout (2026-07-20): the pre-change rendered compiler fixture
+hash was `21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4`;
+the accepted schema/prompt update renders
+`0dac541e440fce3f383c929da3a63cffc891fb67a9111f1810aec6cb0c1b6ea8` and the
+source template hash is `12bed437a12417bf7040726a135308da18a5be92cc15887785c0970321c3af1e`.
+The frontier hash is unchanged at
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.
+YAML changed from pre-Seam8 `6b63f82e5bb1b626cc688ebba34dee37c23474f7b00005635ef17f323b07dd1f`
+to `7c0c370f5ff25fe7c20705c0d85c23623cb80337e8c378e7041405913112f5dc` to
+retire the duplicate compiler compatibility surface and update the compiler
+request contract.
