@@ -15,6 +15,11 @@ INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics"}
 
 
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+IDENTIFIER_QUERY_RE = re.compile(r"^[a-z0-9]+(?:[_-][a-z0-9]+)*$")
+INTENT_ONLY_TERMS = {
+    "origin", "development", "precursor", "precursors", "history", "relation",
+    "comparison", "compare", "graph", "temporal", "query",
+}
 COMPILER_STOP_WORDS = {
     "a",
     "an",
@@ -76,6 +81,139 @@ def collect_compiler_terms(text: str) -> list[str]:
     return terms
 
 
+def _clean_subject_values(value: Any) -> list[str]:
+    values: list[str] = []
+    if not isinstance(value, list):
+        return values
+    for item in value:
+        if isinstance(item, dict):
+            item = item.get("label") or item.get("resolved_to") or item.get("surface_form") or item.get("value")
+        text = str(item or "").strip()
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def _subject_values(*, planner_payload: Any, result: dict[str, Any], query: str, raw_user_input: str) -> tuple[list[str], str]:
+    """Select subject-bearing fallback material without topic-specific rules."""
+    if isinstance(planner_payload, dict):
+        concepts = _clean_subject_values(planner_payload.get("concepts"))
+        if concepts:
+            return concepts, "planner_concepts"
+        referents = _clean_subject_values(planner_payload.get("resolved_referents"))
+        if referents:
+            return referents, "planner_resolved_referents"
+    for key, source in (("resolved_referents", "resolved_referents"), ("entities", "entities"), ("relations", "relations")):
+        values = _clean_subject_values(result.get(key))
+        if values:
+            return values, source
+    query_terms = collect_compiler_terms(query) if not _is_identifier_or_intent_only(query) else []
+    if query_terms:
+        return query_terms, "query_tokens"
+    raw_terms = collect_compiler_terms(raw_user_input)
+    return raw_terms, "raw_user_input_tokens"
+
+
+def _is_identifier_or_intent_only(text: str) -> bool:
+    cleaned = str(text or "").strip().lower()
+    if not cleaned:
+        return True
+    if IDENTIFIER_QUERY_RE.fullmatch(cleaned):
+        return True
+    return cleaned in INTENT_ONLY_TERMS
+
+
+def _subject_text(subjects: list[str]) -> str:
+    return " ".join(subjects[:6]).strip()
+
+
+def _canonical_query_text(candidate: str, subjects: list[str], raw_user_input: str) -> tuple[str, str]:
+    subject = _subject_text(subjects)
+    query = str(candidate or "").strip()
+    if subject:
+        lowered = query.lower()
+        if query and not _is_identifier_or_intent_only(query) and subject.lower() in lowered:
+            return query, "model_query"
+        if query and not _is_identifier_or_intent_only(query):
+            return f"{query} regarding {subject}", "query_plus_subject"
+        if query:
+            natural_intent = query.replace("_", " ").replace("-", " ").strip()
+            return f"{natural_intent} of {subject}", "subject_repaired_query"
+        return f"development of {subject}", "subject_default_query"
+    if query and not _is_identifier_or_intent_only(query):
+        return query, "model_query"
+    raw = str(raw_user_input or "").strip()
+    return raw, "raw_user_input"
+
+
+def _subject_bearing_fallback_plan(
+    *,
+    raw_user_input: str,
+    query: str,
+    subjects: list[str],
+    scope_requests: list[str],
+    resolved_referents: list[str],
+    planner_defaults: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    natural_query, query_source = _canonical_query_text(query, subjects, raw_user_input)
+    subject = _subject_text(subjects)
+    fallback_concepts = list(dict.fromkeys(subjects or collect_compiler_terms(natural_query) or collect_compiler_terms(raw_user_input)))
+    fallback_graph_seeds = [subject] if subject else []
+    fallback = build_default_retrieval_plan(
+        raw_user_input=raw_user_input,
+        query=natural_query,
+        concepts=fallback_concepts,
+        scope_requests=scope_requests,
+        graph_seeds=fallback_graph_seeds,
+        resolved_referents=resolved_referents,
+        planner_defaults=planner_defaults,
+    )
+    return fallback, {"query": query_source, "concepts": "subject_candidates" if subjects else "natural_query"}
+
+
+def _subject_preservation_status(plan: dict[str, Any], subjects: list[str]) -> dict[str, Any]:
+    lowered_subjects = [item.lower() for item in subjects if item.strip()]
+    def contains_subject(values: Any) -> bool:
+        return any(subject in str(value).lower() for value in values or [] for subject in lowered_subjects)
+    semantic_ok = contains_subject(plan.get("semantic_queries")) if lowered_subjects else bool(plan.get("semantic_queries"))
+    lexical_ok = contains_subject(plan.get("lexical_queries")) if lowered_subjects else bool(plan.get("lexical_queries"))
+    graph_requested = any(isinstance(layer, dict) and layer.get("operator") == "graph_expand" for layer in plan.get("retrieval_layers", []))
+    graph_ok = contains_subject(plan.get("graph_seeds")) if graph_requested and lowered_subjects else bool(plan.get("graph_seeds")) if graph_requested else True
+    return {
+        "status": "subject_preserved" if semantic_ok and lexical_ok and graph_ok else "incomplete",
+        "target_concepts_present": bool(lowered_subjects),
+        "semantic_queries_subject_bearing": semantic_ok,
+        "lexical_queries_subject_bearing": lexical_ok,
+        "graph_seeds_subject_bearing": graph_ok,
+        "graph_requested": graph_requested,
+    }
+
+
+def _repair_subject_bearing_queries(plan: dict[str, Any], subjects: list[str]) -> list[dict[str, Any]]:
+    """Apply only structural repairs to non-empty intent-labelled query lists."""
+    subject = _subject_text(subjects)
+    if not subject:
+        return []
+    adjustments: list[dict[str, Any]] = []
+    for field in ("semantic_queries", "lexical_queries", "graph_seeds"):
+        values = plan.get(field)
+        if not isinstance(values, list) or not values:
+            continue
+        repaired: list[str] = []
+        for value in values:
+            text = str(value).strip()
+            if not text:
+                continue
+            if subject.lower() not in text.lower():
+                replacement = f"{text.replace('_', ' ').replace('-', ' ')} regarding {subject}"
+                adjustments.append({"field": field, "requested": text, "effective": replacement, "action": "subject_preserved_structurally"})
+                text = replacement
+            if text not in repaired:
+                repaired.append(text)
+        plan[field] = repaired
+    return adjustments
+
+
 def _deterministic_compiler_packet(raw_user_input: str, *, planner_defaults: dict[str, Any]) -> dict[str, Any]:
     query = raw_user_input.strip()
     concepts = collect_compiler_terms(raw_user_input)
@@ -115,7 +253,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     result = dict(fallback)
     result["raw_user_input"] = raw_user_input
     result["intent"] = str(payload.get("intent") or result["intent"]).strip() or result["intent"]
-    result["query"] = str(payload.get("query") or result["query"]).strip() or result["query"]
+    model_query = payload.get("query") if isinstance(payload.get("query"), str) else ""
     for key in ("entities", "relations", "resolved_referents"):
         value = payload.get(key)
         if isinstance(value, list):
@@ -128,8 +266,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
                 text = str(candidate).strip()
                 if text and text not in cleaned:
                     cleaned.append(text)
-            if cleaned:
-                result[key] = cleaned
+            result[key] = cleaned
     limitations_value = payload.get("limitations")
     if isinstance(limitations_value, list):
         cleaned_limitations = []
@@ -147,21 +284,34 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     carry_focus_terms = _is_referential_input(raw_user_input) or is_comparison_intent(raw_user_input)
     if carry_focus_terms and focus_terms:
         result["resolved_referents"] = list(dict.fromkeys([*result["resolved_referents"], *focus_terms]))
-    fallback_plan = build_default_retrieval_plan(
+    planner_payload = payload.get("planner_retrieval_plan")
+    subjects, subject_source = _subject_values(
+        planner_payload=planner_payload,
+        result=result,
+        query=model_query,
         raw_user_input=raw_user_input,
-        query=result["query"],
-        concepts=collect_compiler_terms(result["query"]),
-        scope_requests=scope_requests_from_text(result["query"]),
-        graph_seeds=[result["query"]] if result["query"].strip() else [],
+    )
+    natural_query, query_source = _canonical_query_text(model_query, subjects, raw_user_input)
+    result["query"] = natural_query
+    if isinstance(planner_payload, dict) and isinstance(planner_payload.get("scope_requests"), list):
+        fallback_scope_requests = [str(item).strip() for item in planner_payload["scope_requests"] if str(item).strip()]
+    else:
+        fallback_scope_requests = scope_requests_from_text(natural_query)
+    fallback_plan, fallback_sources = _subject_bearing_fallback_plan(
+        raw_user_input=raw_user_input,
+        query=natural_query,
+        subjects=subjects,
+        scope_requests=fallback_scope_requests,
         resolved_referents=list(result["resolved_referents"]),
         planner_defaults=planner_defaults,
     )
-    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, planner_defaults=planner_defaults, raw_user_input=raw_user_input)
+    canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(planner_payload, fallback=fallback_plan, planner_defaults=planner_defaults, raw_user_input=raw_user_input)
     if carry_focus_terms and focus_terms:
         canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *focus_terms]))
         comparison_query = " ".join([result["query"], *focus_terms[:6]]).strip()
         if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
             canonical_plan["semantic_queries"].append(comparison_query)
+    subject_query_adjustments = _repair_subject_bearing_queries(canonical_plan, subjects)
     result["planner_retrieval_plan"] = canonical_plan
     result["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(
@@ -184,6 +334,16 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
             }
         ),
         "retired_planner_fields": list(planner_diagnostics.get("retired_planner_fields") or []),
+        "defaulted_missing_fields": list(planner_diagnostics.get("defaulted_missing_fields") or []),
+        "invalid_planner_fields": list(planner_diagnostics.get("invalid_planner_fields") or []),
+        "explicit_empty_fields": list(planner_diagnostics.get("explicit_empty_fields") or []),
+        "fallback_query_sources": {
+            **fallback_sources,
+            "subject_candidates": subject_source,
+            "canonical_query": query_source,
+        },
+        "subject_preservation_status": _subject_preservation_status(canonical_plan, subjects),
+        "subject_query_adjustments": subject_query_adjustments,
     }
     return result
 

@@ -413,3 +413,46 @@ No observed field required an unresolved semantic decision. Values were
 recorded under configured frontmatter fields; scope aliases remained current
 YAML overlays. Normal compiler temporal activation and richer compiler/schema
 emission were deferred to Seam 8 and are recorded above.
+
+## Seam 8 completion repair UAT (2026-07-20)
+
+The operator-supplied live thread `thread-67608780055b` is the principal
+counterexample. It used valid persisted inventory and emitted
+`scope_requests: ["journal"]` plus required ordered temporal retrieval, but
+the top-level query was `origin_of_idea`, semantic queries were bare intent
+words, lexical queries were empty, and graph seeds were empty. Canonicalization
+then supplied fallback lexical and graph values from the poor query. Runtime
+returned 24 temporal chunks across 19 notes with 101 temporal lexical-relevance
+matches; vector and graph returned no candidates. This was successful temporal,
+alias, inventory, and runtime-authority activation, but incomplete
+subject-preserving decomposition—not a temporal, fusion, or inventory failure.
+
+The repair adds generic prompt rules and structural canonicalization. Controlled
+cases show that explicit empty `semantic_queries`, `lexical_queries`,
+`graph_seeds`, and `retrieval_layers` remain empty; missing lists use fallback
+and report `defaulted_missing_fields`; invalid list types report
+`invalid_planner_fields`; fallback sources prefer planner concepts, resolved
+referents, entities/relations, natural query, then raw input; identifier-like
+queries become human-readable subject-bearing text; non-empty intent-labelled
+semantic/lexical/graph values receive subject context; and explicit empty graph
+seeds never become an intent label.
+
+A fresh repaired runtime replay against the active persisted index reported
+`source: persisted`, `status: valid`, `snapshot_load_count: 1`, and zero full
+inventory rebuilds. Its canonical compiler request was subject-bearing:
+`query: origin of semantic geometry`, semantic queries included origin and
+precursors to the subject, lexical queries included the subject, and graph
+seeds were subject-bearing. It requested required ordered temporal retrieval.
+Executor evidence was lexical 50 candidates, vector 8, graph 0, temporal 10;
+selection was 24 chunks with selected support counts lexical 16, vector 7,
+temporal 5. The active index was read only; no synthesis or causal claim was
+made. This replay did not emit a scope alias.
+
+Additional fresh qwen3:8b compiler probes varied: one emitted `journal` but
+omitted temporal and used an explicit empty lexical list; another emitted an
+invalid corpus-like scope phrase and omitted temporal. The supplied live thread
+proves that journal alias and temporal activation can co-occur, but no single
+post-repair normal replay in this run jointly reproduced all acceptance fields.
+The Seam 8 repair therefore remains live-UAT gated; no query-specific Python
+inference, hidden alias default, temporal executor change, fusion change,
+preferred reservoir, or sparse stopping was introduced.

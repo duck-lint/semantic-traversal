@@ -118,3 +118,28 @@ scope. Compiler preferred-scope emission is completed only when a live or
 controlled compiler UAT demonstrates supported alias emission; runtime scope
 semantics remain a separate authority contract.
 
+## Completion-repair contract (2026-07-20)
+
+Canonicalization preserves the distinction between an absent planner list, an
+explicit valid empty list, and an invalid list type. Missing fields use the
+documented fallback and append `defaulted_missing_fields`; explicit empty
+lists remain empty and append `explicit_empty_fields`; invalid types append
+`invalid_planner_fields` and use the conservative fallback where necessary.
+The diagnostic packet also reports `fallback_query_sources` and a bounded
+`subject_preservation_status` without claiming semantic truth beyond structural
+presence.
+
+The top-level query and non-empty semantic, lexical, and graph query lists are
+subject-bearing human-readable retrieval text. Identifier-like or intent-only
+query labels receive generic structural subject context when model concepts or
+resolved referents are available. Explicit empty lexical and graph lists are
+never populated by this repair. Graph execution therefore retains the existing
+`skipped_no_input` / `completed_no_candidates` contract.
+
+The supplied live thread `thread-67608780055b` remains operator evidence of
+temporal and journal-alias activation but exposed the subject-loss defect. A
+fresh repaired runtime replay recovered subject-bearing queries, required
+temporal retrieval, vector candidates, and persisted-inventory reuse, while
+separate fresh qwen runs varied on whether they emitted the alias and temporal
+layer together. Seam 8 completion remains gated on a stable normal live replay;
+no query-specific alias or temporal inference is added.

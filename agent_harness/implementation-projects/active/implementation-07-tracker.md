@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 8 compiler/schema contract.
-- Next action: verify the accepted bounded compiler request schema, inventory-aware intent, and runtime authority boundary before advancing to Seam 9.
+- Current work: Seam 8 completion repair: subject-preserving compiler decomposition and explicit-empty canonicalization.
+- Next action: obtain one stable normal qwen3:8b replay showing subject-bearing queries, temporal activation, and a valid preferred scope alias before advancing to Seam 9.
 
 ## Completed Repair Status
 
@@ -33,6 +33,7 @@
 | 2026-07-19 | Coordinator | Recovered the incomplete Seam 6A continuation | Reverted pushed commit `0b039ad` with normal revert `d6c770a`; it was temporal annotation/order, not temporal retrieval; prototype remains historical in Git only | Reopen Seam 6A as proposed; define typed anchors and retrieval operations; do not start Seam 7 |
 | 2026-07-20 | Coordinator | Implemented Seam 7 persisted resource inventory | Accepted ADR `a5e75da`; snapshot persistence/validation, YAML-owned inventory bounds, explicit legacy/stale/corrupt fallbacks, single-turn reuse, 156-test suite, compileall, diff check, and disposable configured-corpus UAT recorded below | Seam 8 compiler/schema follow-up recorded below |
 | 2026-07-20 | Coordinator | Implemented the accepted bounded Seam 8 compiler/schema contract | Added inventory-aware compiler request prompt, removed compiler-owned selection/claim/budget fields, classified legacy policy fields as retired diagnostics, preserved exact/lexical/vector/graph/temporal requests, and added schema/config regressions; controlled compiler matrix and normal qwen3:8b temporal activation passed; full local suite 163 after final guard | Advance to Seam 9 cleanup/docs/UAT only; do not reopen runtime retrieval seams |
+| 2026-07-20 | Coordinator | Repaired Seam 8 subject preservation and explicit-empty canonicalization | Added generic subject-bearing prompt rules, human-readable query normalization, subject-preserving fallback source order, explicit missing/invalid/empty diagnostics, and 7 additional compiler tests; full local suite 170, compileall, and diff check pass; live replay evidence is mixed across qwen runs and remains gated | Repeat stable normal live compiler/runtime UAT; do not advance to Seam 9 |
 
 ## Work Status
 
@@ -50,8 +51,8 @@
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
 | Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; compiler temporal activation was deferred to Seam 8 and is now recorded below |
 | Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 follow-up is recorded below |
-| Seam 8: compiler/schema contract | Coordinator | complete | Accepted ADR, 7 compiler-schema tests, 163-test suite, controlled request matrix, normal qwen3:8b temporal activation, prompt/YAML hash guards | Compiler preferred-scope alias emission is supported; runtime remains authoritative; no compiler policy fields are accepted |
-| Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Next bounded seam; not started |
+| Seam 8: compiler/schema contract | Coordinator | repair verification pending | Accepted ADR; subject-preservation/explicit-empty repair, 14 compiler-schema tests, 170-test suite, controlled matrix, mixed normal qwen3:8b replay evidence | Do not advance until one normal replay jointly demonstrates subject-bearing queries, temporal activation, and valid preferred alias |
+| Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Blocked by Seam 8 repair verification; not started |
 
 ## Blockers
 
@@ -59,11 +60,11 @@
 | --- | --- | --- | --- |
 | Deferred delegated-agent inventory was not inspected before implementation | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; the completed work was therefore coordinator-executed. |
 | Final corpus-wide UAT remains required | evidence boundary | Operator/user | Exact UAT is recorded; later inbound/both, vector, temporal, and final synthesis evidence remain open | Do not archive until the remaining bundle gates are recorded |
-| Compiler did not emit a preferred alias in the normal genealogy probe | compiler/schema boundary | Coordinator | Normal qwen3:8b emitted required temporal retrieval but no scope alias; controlled supported-alias UAT demonstrated canonical alias emission and runtime preferred binding. No query-specific inference was added. | Keep preferred admission/reservoir deferred; reassess only with corpus evidence |
+| Normal qwen3:8b replay varied across fresh runs | compiler/schema boundary | Coordinator | One repaired replay emitted subject-bearing queries plus required temporal retrieval and vector candidates but no alias; another emitted `journal` but omitted temporal; the supplied `thread-67608780055b` emitted both before repair. Canonicalization remains conservative and does not synthesize either field. | Obtain one stable jointly passing replay; do not add query-specific inference |
 
 ## Closeout Note
 
-- Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A, Seam 7, and Seam 8 are complete for their accepted bounded contracts; Seam 9 is next and unopened.
+- Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A and Seam 7 are complete; Seam 8’s accepted contract is implemented but its completion repair remains live-UAT gated. Seam 9 is next in plan but unopened.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
 
 Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-accepted-ADR.md` is the accepted compact contract: unweighted ordinal per-surface fusion, required-evidence reservations, retirement of ordinary layer budgets, breadth-before-depth by `note_id`, global configured `max_chunks` ceiling, and deterministic diagnostics. `implementation-07-seam-5-fusion-ADR.md` is superseded historical analysis and unapproved; preferred reservoirs, sparse stopping, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and weighted RRF are not routine planned Seam 5 work.
@@ -290,3 +291,14 @@ YAML changed from pre-Seam8 `6b63f82e5bb1b626cc688ebba34dee37c23474f7b00005635ef
 to `7c0c370f5ff25fe7c20705c0d85c23623cb80337e8c378e7041405913112f5dc` to
 retire the duplicate compiler compatibility surface and update the compiler
 request contract.
+
+Seam 8 completion-repair hashes (2026-07-20): pre-repair rendered compiler
+fixture `0dac541e440fce3f383c929da3a63cffc891fb67a9111f1810aec6cb0c1b6ea8`,
+source template `12bed437a12417bf7040726a135308da18a5be92cc15887785c0970321c3af1e`,
+and YAML `7c0c370f5ff25fe7c20705c0d85c23623cb80337e8c378e7041405913112f5dc`.
+Current repaired rendered compiler fixture is
+`bb767c9fc4a60cf5678f81b7b880b1f9586e4f5832998ca355af571082a0bda7`, source
+template `cd5c4a7cece251ee5ee82b7434dae3a3309753183cf63d06f1131d1b6c37b0cb`,
+and YAML `cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
+The frontier hash remains
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.

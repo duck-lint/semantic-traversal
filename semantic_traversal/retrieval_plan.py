@@ -419,7 +419,7 @@ def _coerce_literal_terms(value: Any, fallback: list[dict[str, Any]]) -> list[di
             required = False
         if term and not any(item["term"] == term for item in terms):
             terms.append({"term": term, "match": match, "required": required})
-    return terms or list(fallback)
+    return terms
 
 
 def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -458,13 +458,57 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
         if "include_unresolved" in entry:
             layer["include_unresolved"] = bool(entry.get("include_unresolved"))
         layers.append(layer)
-    return layers or list(fallback)
+    return layers
+
+
+_PLANNER_LIST_FIELDS = (
+    "scope_requests",
+    "concepts",
+    "resolved_referents",
+    "literal_terms",
+    "semantic_queries",
+    "lexical_queries",
+    "graph_seeds",
+    "retrieval_layers",
+)
+
+
+def _canonicalize_planner_list_field(
+    *,
+    value: dict[str, Any],
+    field: str,
+    fallback: Any,
+    diagnostics: dict[str, Any],
+) -> Any:
+    """Preserve explicit empty lists while diagnosing absent and invalid fields."""
+    if field not in value:
+        diagnostics["defaulted_missing_fields"].append(field)
+        return list(fallback) if isinstance(fallback, list) else fallback
+    raw_value = value[field]
+    if not isinstance(raw_value, list):
+        diagnostics["invalid_planner_fields"].append(
+            {"field": field, "reason": "expected_list", "received_type": type(raw_value).__name__}
+        )
+        return list(fallback) if isinstance(fallback, list) else fallback
+    if not raw_value:
+        diagnostics["explicit_empty_fields"].append(field)
+    if field == "literal_terms":
+        return _coerce_literal_terms(raw_value, fallback if isinstance(fallback, list) else [])
+    if field == "retrieval_layers":
+        return _coerce_retrieval_layers(raw_value, fallback if isinstance(fallback, list) else [])
+    return coerce_string_list(raw_value)
 
 
 def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner_defaults: dict[str, Any], raw_user_input: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    diagnostics: dict[str, Any] = {"ignored_planner_fields": []}
+    diagnostics: dict[str, Any] = {
+        "ignored_planner_fields": [],
+        "defaulted_missing_fields": [],
+        "invalid_planner_fields": [],
+        "explicit_empty_fields": [],
+    }
     if not isinstance(value, dict):
         result = dict(fallback)
+        diagnostics["defaulted_missing_fields"] = list(_PLANNER_LIST_FIELDS)
         if raw_user_input:
             literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry.get("term", "") for entry in result.get("literal_terms", []) if isinstance(entry, dict)])
             if demoted:
@@ -490,15 +534,17 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
 
     result = {
         "intent_type": str(value.get("intent_type") or fallback.get("intent_type") or "semantic_traversal"),
-        "scope_requests": coerce_string_list(value.get("scope_requests")) or coerce_string_list(fallback.get("scope_requests")),
-        "concepts": coerce_string_list(value.get("concepts")) or coerce_string_list(fallback.get("concepts")),
-        "resolved_referents": coerce_string_list(value.get("resolved_referents")) or coerce_string_list(fallback.get("resolved_referents")),
-        "literal_terms": _coerce_literal_terms(value.get("literal_terms"), fallback.get("literal_terms", [])),
-        "semantic_queries": coerce_string_list(value.get("semantic_queries")) or coerce_string_list(fallback.get("semantic_queries")),
-        "lexical_queries": coerce_string_list(value.get("lexical_queries")) or coerce_string_list(fallback.get("lexical_queries")),
-        "graph_seeds": coerce_string_list(value.get("graph_seeds")) or coerce_string_list(fallback.get("graph_seeds")),
-        "retrieval_layers": _coerce_retrieval_layers(value.get("retrieval_layers"), fallback.get("retrieval_layers", [])),
+        "scope_requests": _canonicalize_planner_list_field(value=value, field="scope_requests", fallback=coerce_string_list(fallback.get("scope_requests")), diagnostics=diagnostics),
+        "concepts": _canonicalize_planner_list_field(value=value, field="concepts", fallback=coerce_string_list(fallback.get("concepts")), diagnostics=diagnostics),
+        "resolved_referents": _canonicalize_planner_list_field(value=value, field="resolved_referents", fallback=coerce_string_list(fallback.get("resolved_referents")), diagnostics=diagnostics),
+        "literal_terms": _canonicalize_planner_list_field(value=value, field="literal_terms", fallback=fallback.get("literal_terms", []), diagnostics=diagnostics),
+        "semantic_queries": _canonicalize_planner_list_field(value=value, field="semantic_queries", fallback=coerce_string_list(fallback.get("semantic_queries")), diagnostics=diagnostics),
+        "lexical_queries": _canonicalize_planner_list_field(value=value, field="lexical_queries", fallback=coerce_string_list(fallback.get("lexical_queries")), diagnostics=diagnostics),
+        "graph_seeds": _canonicalize_planner_list_field(value=value, field="graph_seeds", fallback=coerce_string_list(fallback.get("graph_seeds")), diagnostics=diagnostics),
+        "retrieval_layers": _canonicalize_planner_list_field(value=value, field="retrieval_layers", fallback=fallback.get("retrieval_layers", []), diagnostics=diagnostics),
     }
+    if isinstance(value.get("retrieval_layers"), list) and value["retrieval_layers"] and not result["retrieval_layers"]:
+        diagnostics["invalid_planner_fields"].append({"field": "retrieval_layers", "reason": "no_valid_layer_entries"})
     if raw_user_input:
         literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry["term"] for entry in result["literal_terms"]])
         if demoted:

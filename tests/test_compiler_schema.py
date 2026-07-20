@@ -117,6 +117,115 @@ class CompilerSchemaContractTests(unittest.TestCase):
             ["claim_policy", "selection_policy"],
         )
 
+    def test_explicit_empty_planner_lists_are_not_replaced(self) -> None:
+        plan, diagnostics = self.canonicalize({
+            "scope_requests": [],
+            "concepts": [],
+            "resolved_referents": [],
+            "literal_terms": [],
+            "semantic_queries": [],
+            "lexical_queries": [],
+            "graph_seeds": [],
+            "retrieval_layers": [],
+        })
+        for field in ("scope_requests", "concepts", "resolved_referents", "literal_terms", "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers"):
+            self.assertEqual(plan[field], [], field)
+        self.assertEqual(diagnostics["explicit_empty_fields"], [
+            "scope_requests", "concepts", "resolved_referents", "literal_terms",
+            "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers",
+        ])
+
+    def test_missing_lists_use_fallback_and_are_diagnosed(self) -> None:
+        plan, diagnostics = self.canonicalize({"intent_type": "semantic_traversal"})
+        self.assertTrue(plan["semantic_queries"])
+        self.assertTrue(plan["lexical_queries"])
+        self.assertTrue(plan["retrieval_layers"])
+        self.assertIn("semantic_queries", diagnostics["defaulted_missing_fields"])
+
+    def test_invalid_list_types_are_diagnosed_and_fall_back(self) -> None:
+        plan, diagnostics = self.canonicalize({
+            "semantic_queries": "origin",
+            "lexical_queries": {"term": "concept"},
+            "graph_seeds": 7,
+            "retrieval_layers": "vector_search",
+        })
+        self.assertTrue(plan["semantic_queries"])
+        self.assertTrue(plan["lexical_queries"])
+        self.assertTrue(plan["graph_seeds"])
+        self.assertEqual({item["field"] for item in diagnostics["invalid_planner_fields"]}, {
+            "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers",
+        })
+
+    def test_subject_bearing_fallback_uses_model_concepts_before_query_tokens(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Where did concept X come from?",
+            {
+                "query": "origin_of_idea",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X"],
+                    "semantic_queries": [],
+                    "lexical_queries": [],
+                    "graph_seeds": [],
+                    "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "ordered"}],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        self.assertIn("concept X", packet["query"])
+        self.assertEqual(packet["planner_retrieval_plan"]["semantic_queries"], [])
+        self.assertEqual(packet["planner_retrieval_plan"]["lexical_queries"], [])
+        self.assertEqual(packet["planner_retrieval_plan"]["graph_seeds"], [])
+        self.assertEqual(packet["planner_diagnostics"]["subject_preservation_status"]["status"], "incomplete")
+        self.assertEqual(packet["planner_diagnostics"]["fallback_query_sources"]["subject_candidates"], "planner_concepts")
+
+    def test_non_subject_intent_queries_receive_structural_subject_context(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Explain concept X development",
+            {
+                "query": "origin_of_idea",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X"],
+                    "semantic_queries": ["origin", "development"],
+                    "lexical_queries": ["precursor"],
+                    "graph_seeds": ["origin_of_idea"],
+                    "retrieval_layers": [{"operator": "graph_expand"}],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        plan = packet["planner_retrieval_plan"]
+        self.assertTrue(all("concept X" in value for value in plan["semantic_queries"] + plan["lexical_queries"] + plan["graph_seeds"]))
+        self.assertEqual(packet["planner_diagnostics"]["subject_preservation_status"]["status"], "subject_preserved")
+        self.assertTrue(packet["planner_diagnostics"]["subject_query_adjustments"])
+
+    def test_empty_graph_seeds_do_not_manufacture_intent_seed(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Explain concept X origin",
+            {
+                "query": "origin_of_idea",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X"],
+                    "graph_seeds": [],
+                    "retrieval_layers": [{"operator": "graph_expand"}],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        self.assertEqual(packet["planner_retrieval_plan"]["graph_seeds"], [])
+        self.assertNotIn("origin_of_idea", packet["planner_retrieval_plan"]["graph_seeds"])
+
+    def test_prompt_contract_mentions_subject_preservation_and_rejects_identifiers(self) -> None:
+        from semantic_traversal.semantic_compiler import _render_ollama_prompt
+        prompt = _render_ollama_prompt(
+            packet={"raw_user_input": "subject probe", "resource_inventory_summary": {}},
+            template=self.config.semantic_compiler_prompt_template,
+            planner_defaults=self.defaults,
+        )
+        self.assertIn("human-readable retrieval text", prompt)
+        self.assertIn("preserves the principal subject", prompt)
+        self.assertIn("origin_of_idea", prompt)
+        self.assertIn("concept X origin", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
