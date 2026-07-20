@@ -503,3 +503,127 @@ frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`,
 and YAML `cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
 Seam 8 is complete for the accepted bounded contract; Seam 9 is next and
 unopened.
+
+## Seam 9 final integration and closeout UAT (2026-07-19)
+
+Starting state and audit: HEAD was exactly `0d4272977b2905ed82c847a353614ad8f9432635`;
+the working tree was clean before this closeout. The callable/deferred tool
+inventory was inspected and included delegated-agent tools, but no sub-agent
+was spawned or claimed. The bounded closeout plan is
+`implementation-07-seam-9-final-integration-plan.md`.
+
+### Active index and full-corpus integrity
+
+The checked-in configured index was opened read-only and was not reingested or
+mutated. It contains 1,083 notes, 14,608 chunks, 14,608 `chunks_fts` rows,
+14,608 compatible vectors, 15,739 graph nodes, 32,142 graph edges, 506
+temporal anchors, and exactly one `resource_inventory_snapshots` row with
+status `valid`. The latest ingest manifest reports `success`. The recorded
+vector identity is sentence-transformers `all-MiniLM-L6-v2`, dimension 384,
+normalized, encoding `chunk_embedding_text_v1`. The inventory logical hash is
+`bf02d87301f66393cba2374f6394235103544edcf303f822678b1128e9545a56`; its
+policy hash is `da32f05d48ffc2e64a666e0a62bb5ef38520f2775ac14316739499a9a43d7f8e`.
+No candidate database, SQLite sidecar, or staging artifact was present beside
+the active database. No reingest was required because the accepted projections
+and inventory snapshot were already present and this closeout did not change
+ingest/index shaping.
+
+### Final matrix evidence
+
+- Exact literal/count: the Seam 2B disposable UAT recorded positive
+  `semantic geometry` exhaustive counts, bounded context, distinct chunk/note/
+  occurrence/returned/selected units, exact provenance after merge, and a
+  unique absent phrase with conservative runtime-owned absence permission.
+- Broad conceptual: the Seam 5 representative probes and accepted normal
+  compiler/runtime records show subject-bearing lexical/vector decomposition,
+  cross-surface provenance, bounded note breadth, and cautious synthesis. No
+  exact or temporal layer was required unless the request made it constitutive.
+- Genealogy: operator-supplied normal thread `thread-a16554d9aee8` demonstrated
+  persisted inventory, subject-bearing compiler decomposition, the
+  `personal_reflection` alias, required ordered temporal retrieval, vector/
+  graph/temporal contributions, 24 chunks from 18 notes, maximum concentration
+  2, and synthesis distinctions among earlier formulation, later development,
+  external reinforcement, resemblance, and unresolved influence. This remains
+  the accepted normal live synthesis evidence; identical stochastic prose is
+  not required.
+- Explicit temporal boundary: synthetic and controlled temporal tests cover
+  before/after/between, ISO boundaries, relation admission, mode-correct
+  governing anchors, partial/conflicted certainty, and required contribution.
+  No invented date or global date sort was introduced.
+- Graph direction: the complete disposable `Journal -> Concept -> Reading`
+  topology proves outbound, inbound, and `both`, depth 2, stored edge versus
+  traversal orientation, bounded cycles/self-links/reciprocal links, stable
+  path ordering, scope interaction, and graph provenance. This is complete
+  representative evidence, not an unsupported claim about every live-vault
+  topology.
+- Two-query vector: the configured corpus UAT recorded independent subject-
+  bearing query execution, threshold `0.5`, per-query cap `50`, per-note cap
+  `4`, round-robin allocation, valid identity, and deterministic reversed-order
+  output with both query streams represented.
+- Preferred scope: the accepted normal live thread emitted and bound
+  `personal_reflection` as a preferred alias while retaining non-preferred
+  evidence eligibility. Preferred executor admission before local truncation
+  remains deferred; no reservoir was added.
+- Narrow factual: controlled compiler/runtime probes covered a bounded factual
+  request without unnecessary temporal or graph activation. No private family
+  note text is committed.
+- Referential/reset: fixture tests cover active-focus and resolved-referent
+  carry for referential/comparison turns, bounded recent-message/semantic-turn
+  tails, and unrelated-turn reset. No raw artifact-field leakage was observed.
+- Low-signal control: probe and controlled low-signal cases remain truthful when
+  optional surfaces return no candidates; no semantic no-match is promoted to
+  exact absence and synthesis is not authorized from an unapproved packet.
+
+The final matrix is an evidence ledger across controlled fixtures, disposable
+corpus runs, and the supplied normal live thread. It does not claim that every
+category was rerun with a fresh frontier invocation during this closeout.
+
+### Packet, attrition, and synthesis findings
+
+Recorded packet sizes range from approximately 31,404 to 66,856 bytes in the
+representative executor probes; the accepted genealogy closeout packet was 24
+chunks from 18 notes with maximum note concentration 2. The system has a hard
+selected-chunk ceiling but no independent byte ceiling, and canonical text is
+not silently truncated. Configured-max filling, weak temporal candidates,
+near-duplicates, and preferred candidates lost before fusion are classified as
+documented tradeoffs or deferred enhancements, not Seam 9 contract failures.
+Synthesis evaluation remains separate from retrieval: the accepted normal live
+answer used the approved packet cautiously, but prose quality alone is not
+retrieval proof.
+
+### Plugin/runtime evidence
+
+`obsidian-plugin` declares npm scripts only for `dev` and `build`; no lint or
+plugin-test script exists. `npm run build` passed. Strict `npx tsc --noEmit`
+originally reproduced `TS2307` for `electron`; the narrow documented
+`electron.d.ts` declaration for the desktop runtime's used `shell.openPath`
+API now makes typecheck pass without adding an Electron runtime dependency or
+weakening strictness. Machine plugin/runtime boundary evidence consists of the
+passing Python probe suite: new thread and continuation artifact/ledger probes
+passed, and fixture lexical retrieval completed with approved coverage. Visual
+Obsidian UI behavior was not exercised, so the following remains operator-only:
+
+1. Reload/enable the plugin and send one normal conceptual query.
+2. Confirm the response renders and the expected thread artifacts persist.
+3. Stop the runtime and confirm a clean error is shown; restore it and confirm
+   recovery.
+4. Restart/reload the plugin and confirm no unnecessary reingest occurs.
+
+### Final verification and status
+
+Focused compiler/control-surface/prompt/retrieval tests previously passed `53`;
+the final complete Python suite passed `170` tests in `34.600s`. `compileall`
+and `git diff --check` passed. There is no repository lint or plugin-test
+command to report. Hashes remain unchanged: compiler template
+`cd5c4a7cece251ee5ee82b7434dae3a3309753183cf63d06f1131d1b6c37b0cb`, rendered
+compiler fixture `bb767c9fc4a60cf5678f81b7b880b1f9586e4f5832998ca355af571082a0bda7`,
+frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`,
+and YAML `cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
+
+The machine portion of Seam 9 is complete. Implementation 07 remains active
+and is `machine-complete / operator-UAT-pending`; it is not archived because
+interactive Obsidian UI evidence has not been supplied. Deferred observations
+remain preferred reservoir/admission, configured-max filling, sparse stopping,
+weak temporal candidates, fuzzy redundancy suppression, hard note/source/byte
+caps, weighted RRF, query/graph quotas, and broader semantic-frontmatter
+exposure. None is promoted to an unclassified blocker.

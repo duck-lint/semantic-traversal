@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 9 cleanup/docs/UAT.
-- Next action: begin only the bounded Seam 9 closeout review; do not reopen completed behavioral seams.
+- Current work: Seam 9 final integration and operator UI gate.
+- Next action: complete the bounded Obsidian UI checklist; archive only after operator evidence or explicitly retain the machine-complete/operator-pending state.
 
 ## Completed Repair Status
 
@@ -35,15 +35,16 @@
 | 2026-07-20 | Coordinator | Implemented the accepted bounded Seam 8 compiler/schema contract | Added inventory-aware compiler request prompt, removed compiler-owned selection/claim/budget fields, classified legacy policy fields as retired diagnostics, preserved exact/lexical/vector/graph/temporal requests, and added schema/config regressions; controlled compiler matrix and normal qwen3:8b temporal activation passed; full local suite 163 after final guard | Advance to Seam 9 cleanup/docs/UAT only; do not reopen runtime retrieval seams |
 | 2026-07-20 | Coordinator | Repaired Seam 8 subject preservation and explicit-empty canonicalization | Added generic subject-bearing prompt rules, human-readable query normalization, subject-preserving fallback source order, explicit missing/invalid/empty diagnostics, and 7 additional compiler tests; full local suite 170, compileall, and diff check pass; live replay evidence is mixed across qwen runs and remains gated | Repeat stable normal live compiler/runtime UAT; do not advance to Seam 9 |
 | 2026-07-20 | Coordinator | Closed the Seam 8 normal live-UAT stability gate | Operator-supplied `thread-a16554d9aee8` jointly demonstrated persisted inventory reuse, subject-bearing compiler decomposition, `personal_reflection` alias binding, required ordered temporal retrieval, vector/graph/temporal contributions, 24 chunks from 18 notes with maximum concentration 2, and cautious synthesis distinctions; focused/full/compile/diff checks and unchanged hashes pass; operator-supplied visual CI evidence for `bce9270` reports tests #105 passed | Seam 9 is next and unopened; do not begin it in this commit |
+| 2026-07-19 | Coordinator | Completed Seam 9 machine closeout audit | Added bounded closeout plan, reconciled historical statuses, audited runtime/YAML/compiler authority, verified the active index read-only, corrected stale probe documentation, added the narrow Electron desktop-runtime type boundary, passed plugin build/typecheck, ran probes, and passed the 170-test suite, compileall, and diff check | Machine-complete; obtain bounded operator-only Obsidian UI evidence before archive |
 
 ## Work Status
 
 | Work | Owner Agent | Status | Verification | Notes |
 | --- | --- | --- | --- | --- |
-| Seam 0: baseline and drift guards | Coordinator | reviewing | compileall, 80-test baseline, hashes, diff check | Guard scripts and golden artifacts still need to be formalized |
-| Seam 1A: ingest/index integrity | Coordinator | proposed | pending | Depends on Seam 0 |
-| Seam 1B: plugin/tooling hygiene | Coordinator | proposed | pending | Independent, only if reproducible |
-| Seam 2A: scope model | Coordinator | reviewing | Hard/preferred fixture tests, deterministic repeated run, disposable corpus controlled-scope UAT; full suite 96 pass | Runtime contract is implemented; compiler emission of a journal preference remains open |
+| Seam 0: baseline and drift guards | Coordinator | superseded by later verified seams | Prompt/schema/hash/config guards, 170-test suite, compileall, and diff checks | No separate legacy guard script was needed; later seam guards cover the active contract |
+| Seam 1A: ingest/index integrity | Coordinator | superseded by later verified seams | Seams 4B, 4C, 6A, and 7 verify FTS, vectors, graph/atomic ingest, temporal projection, and persisted inventory | Historical row retained; no duplicate ingest seam is reopened |
+| Seam 1B: plugin/tooling hygiene | Coordinator | complete for machine gates | Plugin build and strict TypeScript typecheck pass after the documented Electron desktop-runtime declaration; no lint/test script is defined | Interactive Obsidian UI remains operator-only |
+| Seam 2A: scope model | Coordinator | complete | Hard/preferred fixture tests, deterministic repeated run, disposable corpus controlled-scope UAT, and normal live `personal_reflection` alias emission; full suite 170 pass | Runtime remains authoritative and preferred admission remains deferred |
 | Seam 2B: exact-search contract | Coordinator | complete | 14 focused retrieval-contract tests; full suite 104 pass; disposable corpus UAT | Required literal terms, count units, `return_total_count`, bounded context, exact evidence preservation, and conservative absence permission are implemented |
 | Seam 3: runtime authority/requiredness | Coordinator | complete | 18 focused retrieval-contract tests; required lexical/vector/graph integration fixtures; full suite 112 pass; compileall, diff check, and controlled disposable-corpus UAT pass | Structured non-exact statuses, YAML-owned policy binding, unsupported-operator blocking, and selected source contribution are implemented; broad non-exact requiredness remains outside this seam |
 | Seam 4A: graph executor | Coordinator | complete | Directed complete-representative topology; outbound/inbound/`both`, depth 2, cycle/self-link, reciprocal, insertion-order, scope, edge/node controls, fairness, required contribution, and provenance tests; full suite 118 pass; compileall/diff check pass | Graph direction and bounded path provenance are verified. A full configured-corpus direction run remains optional evidence, not a blocker for the complete representative gate. |
@@ -53,19 +54,19 @@
 | Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; compiler temporal activation was deferred to Seam 8 and is now recorded below |
 | Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 follow-up is recorded below |
 | Seam 8: compiler/schema contract | Coordinator | complete | Accepted ADR and subject-preservation/explicit-empty repair; 13 compiler-schema tests, 170-test suite, controlled matrix, and operator-supplied normal live thread `thread-a16554d9aee8` | Stability gate closed for the accepted contract; stochastic output is not required to be identical and no hidden query-specific inference is authorized |
-| Seam 9: cleanup/docs/UAT | Coordinator | proposed | pending | Next bounded seam; not started |
+| Seam 9: cleanup/docs/UAT | Coordinator | machine-complete / operator-UAT-pending | Closeout plan, audits, active-index health, final UAT matrix record, plugin build/typecheck, 170-test suite, compileall, diff check, hashes | Do not archive until the bounded operator UI checklist is supplied or explicitly accepted as the sole remaining gate |
 
 ## Blockers
 
 | Blocker | Boundary | Owner Agent | Resolution |
 | --- | --- | --- | --- |
 | Deferred delegated-agent inventory was not inspected before implementation | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; the completed work was therefore coordinator-executed. |
-| Final corpus-wide UAT remains required | evidence boundary | Operator/user | Exact UAT is recorded; later inbound/both, vector, temporal, and final synthesis evidence remain open | Do not archive until the remaining bundle gates are recorded |
+| Interactive Obsidian UI UAT remains open | operator boundary | Operator/user | Machine plugin/runtime checks pass; visual UI behavior was not exercised in this environment | Run the bounded plugin reload/query/artifact/error-recovery checklist before archive |
 | Normal qwen3:8b replay varied across fresh runs | compiler/schema boundary | Coordinator | Resolved as an accepted stochasticity boundary by operator-supplied normal live thread `thread-a16554d9aee8`, which jointly demonstrated the required compiler, runtime, and synthesis conditions. Stability means the accepted contract is demonstrated in a normal run and guarded by focused tests; it does not mean identical model output on every invocation. | Reassess only in later Seam 9 UAT if needed; do not add query-specific inference |
 
 ## Closeout Note
 
-- Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A, Seam 7, and Seam 8 are complete for their accepted bounded contracts. Seam 9 is next in plan and unopened.
+- Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A, Seam 7, and Seam 8 are complete for their accepted bounded contracts. Seam 9 is machine-complete, with only the bounded operator-only Obsidian UI gate open; the bundle remains active and is not archived.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
 
 Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-accepted-ADR.md` is the accepted compact contract: unweighted ordinal per-surface fusion, required-evidence reservations, retirement of ordinary layer budgets, breadth-before-depth by `note_id`, global configured `max_chunks` ceiling, and deterministic diagnostics. `implementation-07-seam-5-fusion-ADR.md` is superseded historical analysis and unapproved; preferred reservoirs, sparse stopping, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and weighted RRF are not routine planned Seam 5 work.
@@ -329,3 +330,56 @@ but are not a Seam 8 blocker. Operator-supplied visual CI evidence is recorded
 for `docs(seam8): correct repair test count`, tests #105, commit `bce9270`,
 passed in approximately 1 minute 39 seconds; no unreported run or job ID is
 claimed.
+
+## Seam 9 final integration audit (2026-07-19)
+
+Starting commit `0d4272977b2905ed82c847a353614ad8f9432635` was verified as
+the exact HEAD and as the ancestor of the working branch. The callable/deferred
+inventory was inspected; delegated-agent tools exist, but no delegation was
+used or claimed. The required closeout plan is
+`implementation-07-seam-9-final-integration-plan.md`.
+
+The active configured database was opened read-only and remained unmodified.
+It contains 1,083 notes, 14,608 chunks, 14,608 FTS rows, 14,608 compatible
+vectors, 15,739 graph nodes, 32,142 graph edges, 506 temporal anchors, and one
+`valid` persisted inventory snapshot. The latest ingest manifest is `success`;
+no candidate/staging/SQLite sidecar artifacts remain beside the active database.
+The recorded vector identity is sentence-transformers
+`all-MiniLM-L6-v2`, dimension 384, normalized, encoding
+`chunk_embedding_text_v1`. The snapshot logical hash is
+`bf02d87301f66393cba2374f6394235103544edcf303f822678b1128e9545a56` and the
+inventory-policy hash is `da32f05d48ffc2e64a666e0a62bb5ef38520f2775ac14316739499a9a43d7f8e`.
+
+The final UAT matrix is recorded in the active UAT request. Exact positive and
+negative count/context evidence, broad conceptual retrieval, the accepted
+genealogy live thread `thread-a16554d9aee8`, explicit temporal-boundary and
+relation ordering fixtures, the complete outbound/inbound/`both` topology,
+two-query vector corpus evidence, preferred-scope alias binding, narrow
+factual/low-signal controlled cases, and referential carry/reset fixture tests
+are all represented. Normal live synthesis evidence is the operator-supplied
+genealogy thread; no new synthesis run was claimed without an available
+frontier credential. Probe-mode thread creation/continuation and fixture
+lexical retrieval passed.
+
+No dead `retrieval_scoring.source_priority` consumer remains. Executor-local
+bonuses remain legitimate local ordering evidence; cross-surface selection uses
+ordinal ranks. Compiler policy fields remain retired/non-authoritative and YAML
+runtime policy remains the execution authority. The prompt template, rendered
+compiler fixture, frontier prompt, and YAML hashes are respectively
+`cd5c4a7cece251ee5ee82b7434dae3a3309753183cf63d06f1131d1b6c37b0cb`,
+`bb767c9fc4a60cf5678f81b7b880b1f9586e4f5832998ca355af571082a0bda7`,
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`, and
+`cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
+
+Plugin `npm run build` and strict `npx tsc --noEmit` pass. The historical
+Electron type failure was repaired with a documented minimal declaration for
+the desktop runtime's actually used `shell.openPath` API; no Electron runtime
+dependency or broad dependency upgrade was added. No plugin lint or test
+script is declared. Visual Obsidian UI behavior remains the sole operator gate.
+
+Deferred observations remain bounded post-Implementation-07 enhancements:
+preferred admission/reservoir, configured-max filling, sparse stopping, weak
+temporal candidates, fuzzy redundancy suppression, hard note/source/byte caps,
+weighted RRF, query/graph quotas, and broader semantic-frontmatter exposure.
+None was promoted to a Seam 9 contract defect. The bundle is machine-complete
+but remains active and operator-UAT-pending; it must not be archived yet.
