@@ -180,3 +180,53 @@ claimed. Local closeout verification passed: 53 focused tests, 170 full tests,
 compileall, and `git diff --check`. The compiler template, rendered compiler,
 frontier, and YAML hashes remain unchanged from `bce9270`; full values are
 recorded in the UAT record.
+## Post-Seam-9 canonicalization repair (2026-07-20)
+
+The persisted operator payload from `thread-a65a4751fb1a` demonstrated a
+generic overlap defect in the accepted Python canonicalizer. Model output was
+already subject-bearing, but canonicalization required one concatenated phrase
+containing every concept. It consequently appended repeated `regarding`
+clauses to valid semantic and lexical queries and to the meaningful graph seed
+`Geometry of Meaning`. This was a canonicalization defect, not a prompt,
+inventory, retrieval, fusion, temporal, ingest, synthesis, or plugin defect.
+
+The bounded repair retains the accepted prompt/schema contract and implements:
+
+1. ordered, deterministically deduplicated subject candidates with source
+   priority for planner referents, planner concepts, top-level referents,
+   entities, explicit relation subjects, and only then natural-query/raw-input
+   fallback;
+2. an overlap-aware minimal subject basis used only when a repair is needed;
+3. any-candidate subject detection for semantic and lexical queries;
+4. byte-for-byte preservation of already subject-bearing non-empty queries;
+5. preservation of meaningful graph seeds without requiring the principal
+   subject to occur in the seed;
+6. conservative repair or rejection of only empty, identifier-like, or
+   intent-only graph seeds; and
+7. idempotent canonicalization.
+
+The canonicalizer does not append every concept to an existing query, does not
+rewrite graph seeds as prose, and does not introduce query-specific inference.
+Diagnostics record the candidate set, minimal basis, overlaps, preserved and
+repaired fields, and graph-seed decisions. The persisted payload replay passed
+without regenerating candidates. A read-only active-index replay preserved the
+original scope and layer requests, returned 50 lexical, 8 vector, 0 graph,
+and 10 temporal candidates, and selected 24 chunks from 13 notes. The graph
+seed remained usable as a submitted seed; the configured graph index still
+returned no match because no exact `Geometry of Meaning` note node exists and
+the configured token-overlap threshold is 3. This is recorded as index
+evidence, not compensated with a corpus-specific rule.
+
+The direct fresh qwen3:8b compiler probe emitted concise subject-bearing
+queries and the unchanged meaningful graph seed, but stochastic output did not
+include the temporal layer or a scope alias. The previously accepted normal
+live thread `thread-a16554d9aee8` remains the live stability evidence for those
+conditions. Stability means the accepted contract is demonstrated in a normal
+run and structurally guarded by tests; it does not require identical stochastic
+model output and does not authorize hidden query-specific inference.
+
+This is a narrow post-closeout repair. Seam 9's historical machine closeout is
+preserved; Implementation 07 is machine-complete/operator-UAT-pending until
+new CI and the operator UI gate are supplied. Preferred admission/reservoir,
+configured-max filling, sparse stopping, and weak temporal-candidate review
+remain deferred. No prompt or YAML hash changed.

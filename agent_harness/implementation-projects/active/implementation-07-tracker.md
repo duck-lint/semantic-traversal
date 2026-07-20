@@ -3,8 +3,8 @@
 ## Status
 
 - State: active
-- Current work: Seam 9 final integration and operator UI gate.
-- Next action: complete the bounded Obsidian UI checklist; archive only after operator evidence or explicitly retain the machine-complete/operator-pending state.
+- Current work: Seam 8 post-closeout compiler canonicalization repair.
+- Next action: obtain new CI evidence and the bounded operator UI UAT; archive only after those remaining gates are supplied.
 
 ## Completed Repair Status
 
@@ -36,6 +36,7 @@
 | 2026-07-20 | Coordinator | Repaired Seam 8 subject preservation and explicit-empty canonicalization | Added generic subject-bearing prompt rules, human-readable query normalization, subject-preserving fallback source order, explicit missing/invalid/empty diagnostics, and 7 additional compiler tests; full local suite 170, compileall, and diff check pass; live replay evidence is mixed across qwen runs and remains gated | Repeat stable normal live compiler/runtime UAT; do not advance to Seam 9 |
 | 2026-07-20 | Coordinator | Closed the Seam 8 normal live-UAT stability gate | Operator-supplied `thread-a16554d9aee8` jointly demonstrated persisted inventory reuse, subject-bearing compiler decomposition, `personal_reflection` alias binding, required ordered temporal retrieval, vector/graph/temporal contributions, 24 chunks from 18 notes with maximum concentration 2, and cautious synthesis distinctions; focused/full/compile/diff checks and unchanged hashes pass; operator-supplied visual CI evidence for `bce9270` reports tests #105 passed | Seam 9 is next and unopened; do not begin it in this commit |
 | 2026-07-19 | Coordinator | Completed Seam 9 machine closeout audit | Added bounded closeout plan, reconciled historical statuses, audited runtime/YAML/compiler authority, verified the active index read-only, corrected stale probe documentation, added the narrow Electron desktop-runtime type boundary, passed plugin build/typecheck, ran probes, and passed the 170-test suite, compileall, and diff check | Machine-complete; obtain bounded operator-only Obsidian UI evidence before archive |
+| 2026-07-20 | Coordinator | Repaired the post-Seam-9 overlapping-subject canonicalization defect | Replayed persisted `thread-a65a4751fb1a`; valid subject-bearing queries and `Geometry of Meaning` are preserved, subjectless fields use a minimal basis, repeated canonicalization is idempotent, and 18 compiler-schema tests pass; controlled active-index replay remains read-only and shows no canonicalizer-induced repetition | Restore machine-complete/operator-UAT-pending after full verification; obtain new CI and operator UI evidence |
 
 ## Work Status
 
@@ -53,7 +54,7 @@
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
 | Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; compiler temporal activation was deferred to Seam 8 and is now recorded below |
 | Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 follow-up is recorded below |
-| Seam 8: compiler/schema contract | Coordinator | complete | Accepted ADR and subject-preservation/explicit-empty repair; 13 compiler-schema tests, 170-test suite, controlled matrix, and operator-supplied normal live thread `thread-a16554d9aee8` | Stability gate closed for the accepted contract; stochastic output is not required to be identical and no hidden query-specific inference is authorized |
+| Seam 8: compiler/schema contract | Coordinator | machine-complete / operator-UAT-pending after narrow repair | Accepted ADR, overlapping-subject repair, explicit-empty contract, 18 compiler-schema tests, 175-test suite, persisted-payload replay, controlled read-only active-index replay, and operator-supplied normal live thread `thread-a16554d9aee8` | Repair preserves valid model coordinates without query-specific inference; new CI and final operator UI evidence remain open |
 | Seam 9: cleanup/docs/UAT | Coordinator | machine-complete / operator-UAT-pending | Closeout plan, audits, active-index health, final UAT matrix record, plugin build/typecheck, 170-test suite, compileall, diff check, hashes | Do not archive until the bounded operator UI checklist is supplied or explicitly accepted as the sole remaining gate |
 
 ## Blockers
@@ -63,11 +64,24 @@
 | Deferred delegated-agent inventory was not inspected before implementation | execution model | Coordinator | Delegated-agent tools were available in deferred inventory but were not discovered before implementation; the completed work was therefore coordinator-executed. |
 | Interactive Obsidian UI UAT remains open | operator boundary | Operator/user | Machine plugin/runtime checks pass; visual UI behavior was not exercised in this environment | Run the bounded plugin reload/query/artifact/error-recovery checklist before archive |
 | Normal qwen3:8b replay varied across fresh runs | compiler/schema boundary | Coordinator | Resolved as an accepted stochasticity boundary by operator-supplied normal live thread `thread-a16554d9aee8`, which jointly demonstrated the required compiler, runtime, and synthesis conditions. Stability means the accepted contract is demonstrated in a normal run and guarded by focused tests; it does not mean identical model output on every invocation. | Reassess only in later Seam 9 UAT if needed; do not add query-specific inference |
+| Post-closeout CI for this repair is not yet independently available | verification boundary | Coordinator/operator | The operator supplied queued, not passed, runs for commits `0d42729` and `78ca8aa`; this repair requires a new CI result and does not treat queued evidence as success | Inspect the new commit's CI state when available; do not fabricate a run or job ID |
 
 ## Closeout Note
 
 - Seam 5 is complete for the accepted bounded ordinal-fusion contract in `implementation-07-seam-5-accepted-ADR.md`. The original full weighted-RRF/hybrid ADR is superseded, historical, and unapproved; it is not routine planned Seam 5 work. Seam 6A, Seam 7, and Seam 8 are complete for their accepted bounded contracts. Seam 9 is machine-complete, with only the bounded operator-only Obsidian UI gate open; the bundle remains active and is not archived.
 - Seam 4B production changes were coordinator-executed. Deferred delegated-agent tools were available but were not discovered before implementation; no delegation was used and none is claimed.
+
+Post-Seam-9 canonicalization repair (2026-07-20): the operator payload from
+`thread-a65a4751fb1a` exposed a generic overlap bug in which all planner
+concepts were concatenated into every query and graph seed. The repair uses an
+ordered subject-candidate set, a minimal overlap-aware basis, any-candidate
+subject detection, byte-for-byte preservation of valid semantic/lexical
+queries, preservation of meaningful graph seeds, conservative repair of only
+subjectless fields, and idempotent canonicalization. The repair did not alter
+prompts, YAML, runtime executors, fusion, temporal, inventory, ingest, or
+synthesis. It is machine-complete after local verification but remains
+operator-UAT-pending; Seam 9 remains historically machine-complete and is not
+reopened as an architecture seam.
 
 Seam 5 architecture decision (2026-07-19): `agent_harness/implementation-projects/active/implementation-07-seam-5-accepted-ADR.md` is the accepted compact contract: unweighted ordinal per-surface fusion, required-evidence reservations, retirement of ordinary layer budgets, breadth-before-depth by `note_id`, global configured `max_chunks` ceiling, and deterministic diagnostics. `implementation-07-seam-5-fusion-ADR.md` is superseded historical analysis and unapproved; preferred reservoirs, sparse stopping, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and weighted RRF are not routine planned Seam 5 work.
 

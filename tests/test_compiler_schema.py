@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -213,6 +214,106 @@ class CompilerSchemaContractTests(unittest.TestCase):
         )
         self.assertEqual(packet["planner_retrieval_plan"]["graph_seeds"], [])
         self.assertNotIn("origin_of_idea", packet["planner_retrieval_plan"]["graph_seeds"])
+
+    def test_overlapping_subject_candidates_preserve_valid_queries_and_related_seed(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Explain concept X development",
+            {
+                "query": "origin of concept X",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X", "precursors of concept X"],
+                    "semantic_queries": ["origin of concept X", "development of concept X"],
+                    "lexical_queries": ["concept X", "precursor concepts"],
+                    "graph_seeds": ["Framework Y"],
+                    "retrieval_layers": [{"operator": "graph_expand"}],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        plan = packet["planner_retrieval_plan"]
+        self.assertEqual(plan["semantic_queries"], ["origin of concept X", "development of concept X"])
+        self.assertEqual(plan["lexical_queries"], ["concept X", "precursor concepts regarding concept X"])
+        self.assertEqual(plan["graph_seeds"], ["Framework Y"])
+        diagnostics = packet["planner_diagnostics"]
+        self.assertEqual(diagnostics["subject_candidates"], ["concept X", "precursors of concept X"])
+        self.assertEqual(diagnostics["minimal_subject_basis"], ["concept X"])
+        self.assertEqual(diagnostics["preserved_graph_seeds"], ["Framework Y"])
+        self.assertEqual(diagnostics["overlapping_subject_candidates"][0]["shorter"], "concept X")
+
+    def test_already_subject_bearing_queries_are_preserved_byte_for_byte(self) -> None:
+        semantic = "Concept X early formulation"
+        lexical = "precursors of concept X"
+        packet = _canonicalize_response_payload(
+            "Explain concept X",
+            {
+                "query": "development of concept X",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X", "precursors of concept X"],
+                    "semantic_queries": [semantic],
+                    "lexical_queries": [lexical],
+                    "graph_seeds": ["Source Title"],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        self.assertEqual(packet["planner_retrieval_plan"]["semantic_queries"], [semantic])
+        self.assertEqual(packet["planner_retrieval_plan"]["lexical_queries"], [lexical])
+        self.assertEqual(packet["planner_retrieval_plan"]["graph_seeds"], ["Source Title"])
+        self.assertEqual(packet["planner_diagnostics"]["repaired_subjectless_fields"], [])
+
+    def test_subjectless_queries_use_minimal_basis_once_and_are_idempotent(self) -> None:
+        payload = {
+            "query": "origin_of_idea",
+            "planner_retrieval_plan": {
+                "concepts": ["concept X", "precursors of concept X"],
+                "semantic_queries": ["origin"],
+                "lexical_queries": ["precursor concepts"],
+                "graph_seeds": ["origin_of_idea"],
+                "retrieval_layers": [{"operator": "graph_expand"}],
+            },
+        }
+        first = _canonicalize_response_payload("Explain concept X origin", payload, planner_defaults=self.defaults)
+        second = _canonicalize_response_payload("Explain concept X origin", first, planner_defaults=self.defaults)
+        first_plan = first["planner_retrieval_plan"]
+        self.assertEqual(first_plan["semantic_queries"], ["origin regarding concept X"])
+        self.assertEqual(first_plan["lexical_queries"], ["precursor concepts regarding concept X"])
+        self.assertEqual(first_plan["graph_seeds"], ["concept X"])
+        self.assertNotIn("regarding concept X regarding", json.dumps(first_plan))
+        self.assertEqual(second["planner_retrieval_plan"], first_plan)
+
+    def test_graph_seed_empty_remains_empty_but_intent_seed_is_repaired(self) -> None:
+        empty = _canonicalize_response_payload(
+            "Explain concept X",
+            {"planner_retrieval_plan": {"concepts": ["concept X"], "graph_seeds": []}},
+            planner_defaults=self.defaults,
+        )
+        self.assertEqual(empty["planner_retrieval_plan"]["graph_seeds"], [])
+        repaired = _canonicalize_response_payload(
+            "Explain concept X",
+            {"planner_retrieval_plan": {"concepts": ["concept X"], "graph_seeds": ["graph_relation"]}},
+            planner_defaults=self.defaults,
+        )
+        self.assertEqual(repaired["planner_retrieval_plan"]["graph_seeds"], ["concept X"])
+        self.assertEqual(repaired["planner_diagnostics"]["rejected_or_repaired_graph_seeds"][0]["action"], "repaired_graph_seed")
+
+    def test_independent_relation_subjects_remain_represented(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Compare concept X and concept Y",
+            {
+                "intent": "comparison",
+                "query": "relation between concept X and concept Y",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X", "concept Y"],
+                    "semantic_queries": ["relation between concept X and concept Y"],
+                    "lexical_queries": ["concept X and concept Y"],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        plan = packet["planner_retrieval_plan"]
+        self.assertEqual(plan["semantic_queries"], ["relation between concept X and concept Y"])
+        self.assertEqual(plan["lexical_queries"], ["concept X and concept Y"])
+        self.assertEqual(packet["planner_diagnostics"]["minimal_subject_basis"], ["concept X", "concept Y"])
 
     def test_prompt_contract_mentions_subject_preservation_and_rejects_identifiers(self) -> None:
         from semantic_traversal.semantic_compiler import _render_ollama_prompt

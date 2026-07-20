@@ -94,24 +94,51 @@ def _clean_subject_values(value: Any) -> list[str]:
     return values
 
 
+def _normalize_subject_for_comparison(value: str) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _deduplicate_subject_candidates(values: list[str]) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = " ".join(str(value or "").split())
+        normalized = _normalize_subject_for_comparison(text)
+        if text and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(text)
+    return candidates
+
+
+def _normalized_phrase_contains(container: str, contained: str) -> bool:
+    container_tokens = _normalize_subject_for_comparison(container).split()
+    contained_tokens = _normalize_subject_for_comparison(contained).split()
+    if not contained_tokens or len(contained_tokens) > len(container_tokens):
+        return False
+    return any(
+        container_tokens[start : start + len(contained_tokens)] == contained_tokens
+        for start in range(len(container_tokens) - len(contained_tokens) + 1)
+    )
+
+
 def _subject_values(*, planner_payload: Any, result: dict[str, Any], query: str, raw_user_input: str) -> tuple[list[str], str]:
     """Select subject-bearing fallback material without topic-specific rules."""
     if isinstance(planner_payload, dict):
-        concepts = _clean_subject_values(planner_payload.get("concepts"))
-        if concepts:
-            return concepts, "planner_concepts"
         referents = _clean_subject_values(planner_payload.get("resolved_referents"))
         if referents:
-            return referents, "planner_resolved_referents"
+            return _deduplicate_subject_candidates(referents), "planner_resolved_referents"
+        concepts = _clean_subject_values(planner_payload.get("concepts"))
+        if concepts:
+            return _deduplicate_subject_candidates(concepts), "planner_concepts"
     for key, source in (("resolved_referents", "resolved_referents"), ("entities", "entities"), ("relations", "relations")):
         values = _clean_subject_values(result.get(key))
         if values:
-            return values, source
+            return _deduplicate_subject_candidates(values), source
     query_terms = collect_compiler_terms(query) if not _is_identifier_or_intent_only(query) else []
     if query_terms:
-        return query_terms, "query_tokens"
+        return _deduplicate_subject_candidates(query_terms), "query_tokens"
     raw_terms = collect_compiler_terms(raw_user_input)
-    return raw_terms, "raw_user_input_tokens"
+    return _deduplicate_subject_candidates(raw_terms), "raw_user_input_tokens"
 
 
 def _is_identifier_or_intent_only(text: str) -> bool:
@@ -123,16 +150,61 @@ def _is_identifier_or_intent_only(text: str) -> bool:
     return cleaned in INTENT_ONLY_TERMS
 
 
+def _minimal_subject_basis(subjects: list[str]) -> tuple[list[str], list[dict[str, str]]]:
+    """Return the smallest deterministic basis without losing independent subjects."""
+    basis: list[str] = []
+    overlaps: list[dict[str, str]] = []
+    for candidate in subjects:
+        normalized = _normalize_subject_for_comparison(candidate)
+        if not normalized:
+            continue
+        contained_by_existing = False
+        replacements: list[tuple[int, str]] = []
+        for index, existing in enumerate(basis):
+            existing_normalized = _normalize_subject_for_comparison(existing)
+            if normalized == existing_normalized:
+                contained_by_existing = True
+                break
+            if len(normalized.split()) < len(existing_normalized.split()) and _normalized_phrase_contains(existing_normalized, normalized):
+                replacements.append((index, existing))
+                overlaps.append({"shorter": candidate, "contained_in": existing})
+            elif len(existing_normalized.split()) < len(normalized.split()) and _normalized_phrase_contains(normalized, existing_normalized):
+                contained_by_existing = True
+                overlaps.append({"shorter": existing, "contained_in": candidate})
+            if contained_by_existing:
+                break
+        if contained_by_existing:
+            continue
+        for index, _ in reversed(replacements):
+            basis.pop(index)
+        basis.append(candidate)
+    return basis, overlaps
+
+
 def _subject_text(subjects: list[str]) -> str:
-    return " ".join(subjects[:6]).strip()
+    basis, _ = _minimal_subject_basis(subjects)
+    return " ".join(basis[:6]).strip()
+
+
+def _query_contains_subject(query: str, subjects: list[str]) -> bool:
+    normalized_query = _normalize_subject_for_comparison(query)
+    return bool(normalized_query) and any(
+        _normalized_phrase_contains(normalized_query, subject)
+        for subject in subjects
+        if _normalize_subject_for_comparison(subject)
+    )
+
+
+def _graph_seed_is_meaningful(seed: str) -> bool:
+    text = str(seed or "").strip()
+    return bool(text) and not _is_identifier_or_intent_only(text)
 
 
 def _canonical_query_text(candidate: str, subjects: list[str], raw_user_input: str) -> tuple[str, str]:
     subject = _subject_text(subjects)
     query = str(candidate or "").strip()
     if subject:
-        lowered = query.lower()
-        if query and not _is_identifier_or_intent_only(query) and subject.lower() in lowered:
+        if query and not _is_identifier_or_intent_only(query) and _query_contains_subject(query, subjects):
             return query, "model_query"
         if query and not _is_identifier_or_intent_only(query):
             return f"{query} regarding {subject}", "query_plus_subject"
@@ -172,16 +244,15 @@ def _subject_bearing_fallback_plan(
 
 
 def _subject_preservation_status(plan: dict[str, Any], subjects: list[str]) -> dict[str, Any]:
-    lowered_subjects = [item.lower() for item in subjects if item.strip()]
     def contains_subject(values: Any) -> bool:
-        return any(subject in str(value).lower() for value in values or [] for subject in lowered_subjects)
-    semantic_ok = contains_subject(plan.get("semantic_queries")) if lowered_subjects else bool(plan.get("semantic_queries"))
-    lexical_ok = contains_subject(plan.get("lexical_queries")) if lowered_subjects else bool(plan.get("lexical_queries"))
+        return any(_query_contains_subject(str(value), subjects) for value in values or [])
+    semantic_ok = contains_subject(plan.get("semantic_queries")) if subjects else bool(plan.get("semantic_queries"))
+    lexical_ok = contains_subject(plan.get("lexical_queries")) if subjects else bool(plan.get("lexical_queries"))
     graph_requested = any(isinstance(layer, dict) and layer.get("operator") == "graph_expand" for layer in plan.get("retrieval_layers", []))
-    graph_ok = contains_subject(plan.get("graph_seeds")) if graph_requested and lowered_subjects else bool(plan.get("graph_seeds")) if graph_requested else True
+    graph_ok = all(_graph_seed_is_meaningful(str(seed)) for seed in plan.get("graph_seeds", [])) if graph_requested else True
     return {
         "status": "subject_preserved" if semantic_ok and lexical_ok and graph_ok else "incomplete",
-        "target_concepts_present": bool(lowered_subjects),
+        "target_concepts_present": bool(subjects),
         "semantic_queries_subject_bearing": semantic_ok,
         "lexical_queries_subject_bearing": lexical_ok,
         "graph_seeds_subject_bearing": graph_ok,
@@ -195,7 +266,7 @@ def _repair_subject_bearing_queries(plan: dict[str, Any], subjects: list[str]) -
     if not subject:
         return []
     adjustments: list[dict[str, Any]] = []
-    for field in ("semantic_queries", "lexical_queries", "graph_seeds"):
+    for field in ("semantic_queries", "lexical_queries"):
         values = plan.get(field)
         if not isinstance(values, list) or not values:
             continue
@@ -204,13 +275,37 @@ def _repair_subject_bearing_queries(plan: dict[str, Any], subjects: list[str]) -
             text = str(value).strip()
             if not text:
                 continue
-            if subject.lower() not in text.lower():
+            if not _query_contains_subject(text, subjects):
                 replacement = f"{text.replace('_', ' ').replace('-', ' ')} regarding {subject}"
                 adjustments.append({"field": field, "requested": text, "effective": replacement, "action": "subject_preserved_structurally"})
                 text = replacement
             if text not in repaired:
                 repaired.append(text)
         plan[field] = repaired
+    return adjustments
+
+
+def _repair_graph_seeds(plan: dict[str, Any], subjects: list[str]) -> list[dict[str, Any]]:
+    values = plan.get("graph_seeds")
+    if not isinstance(values, list) or not values:
+        return []
+    subject = _subject_text(subjects)
+    repaired: list[str] = []
+    adjustments: list[dict[str, Any]] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if _graph_seed_is_meaningful(text):
+            repaired.append(text)
+            adjustments.append({"field": "graph_seeds", "requested": text, "effective": text, "action": "preserved_graph_seed"})
+            continue
+        if subject:
+            repaired.append(subject)
+            adjustments.append({"field": "graph_seeds", "requested": text, "effective": subject, "action": "repaired_graph_seed"})
+        else:
+            adjustments.append({"field": "graph_seeds", "requested": text, "effective": None, "action": "rejected_graph_seed"})
+    plan["graph_seeds"] = list(dict.fromkeys(repaired))
     return adjustments
 
 
@@ -312,6 +407,14 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
             canonical_plan["semantic_queries"].append(comparison_query)
     subject_query_adjustments = _repair_subject_bearing_queries(canonical_plan, subjects)
+    graph_seed_adjustments = _repair_graph_seeds(canonical_plan, subjects)
+    minimal_subject_basis, overlapping_subject_candidates = _minimal_subject_basis(subjects)
+    preserved_subject_bearing_fields = [
+        field
+        for field in ("semantic_queries", "lexical_queries")
+        if any(_query_contains_subject(str(value), subjects) for value in canonical_plan.get(field, []))
+    ]
+    repaired_subjectless_fields = [item["field"] for item in subject_query_adjustments]
     result["planner_retrieval_plan"] = canonical_plan
     result["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(
@@ -344,6 +447,13 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         },
         "subject_preservation_status": _subject_preservation_status(canonical_plan, subjects),
         "subject_query_adjustments": subject_query_adjustments,
+        "subject_candidates": subjects,
+        "minimal_subject_basis": minimal_subject_basis,
+        "overlapping_subject_candidates": overlapping_subject_candidates,
+        "preserved_subject_bearing_fields": list(dict.fromkeys(preserved_subject_bearing_fields)),
+        "repaired_subjectless_fields": list(dict.fromkeys(repaired_subjectless_fields)),
+        "preserved_graph_seeds": [item["requested"] for item in graph_seed_adjustments if item["action"] == "preserved_graph_seed"],
+        "rejected_or_repaired_graph_seeds": [item for item in graph_seed_adjustments if item["action"] != "preserved_graph_seed"],
     }
     return result
 

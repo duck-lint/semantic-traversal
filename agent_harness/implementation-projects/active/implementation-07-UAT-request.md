@@ -627,3 +627,67 @@ remain preferred reservoir/admission, configured-max filling, sparse stopping,
 weak temporal candidates, fuzzy redundancy suppression, hard note/source/byte
 caps, weighted RRF, query/graph quotas, and broader semantic-frontmatter
 exposure. None is promoted to an unclassified blocker.
+## Post-Seam-9 Seam 8 canonicalization repair (2026-07-20)
+
+The operator-supplied persisted thread `thread-a65a4751fb1a` is the
+post-closeout counterexample. The raw qwen payload was already structurally
+reasonable: it retained `semantic geometry` and `precursors of semantic
+geometry` as concepts, subject-bearing semantic and lexical queries, and the
+meaningful graph seed `Geometry of Meaning`. The old canonicalizer incorrectly
+joined all concepts into one required phrase and rewrote those valid fields
+with repeated `regarding ...` prose. The old artifact therefore submitted no
+matching graph seed and recorded zero graph candidates.
+
+The repair replayed the same raw payload without regenerating candidates. The
+effective plan now preserves:
+
+- semantic queries: `origin of semantic geometry`; `development of semantic geometry`;
+- lexical query `semantic geometry` byte-for-byte and repairs only the
+  subjectless `precursor concepts` query to `precursor concepts regarding
+  semantic geometry`;
+- graph seed `Geometry of Meaning` byte-for-byte;
+- the original scope requests and retrieval layers, including required ordered
+  temporal retrieval;
+- no concatenated subject phrase and no repeated `regarding` clause.
+
+Diagnostics expose `subject_candidates`, `minimal_subject_basis`,
+`overlapping_subject_candidates`, preserved/repaired fields, preserved graph
+seeds, and rejected/repaired graph seeds. Reapplying canonicalization produces
+the identical planner plan.
+
+The controlled active-index replay was read-only. Persisted inventory remained
+`source: persisted`, `status: valid`, `snapshot_load_count: 1`, and
+`full_inventory_rebuilds: 0`. The repaired plan produced 50 lexical
+candidates, 8 vector candidates, 0 graph candidates, and 10 temporal
+candidates; selection produced 24 chunks from 13 notes, with selected counts
+of lexical 13, vector 5, graph 0, and temporal 10. The old artifact had 50
+lexical, 8 vector, 0 graph, and 10 temporal candidates and selected 24 chunks
+from 7 notes, with graph seed text damaged by canonicalization. The repaired
+packet was approximately 57,192 bytes versus the old artifact's 58,254 bytes.
+The graph index contains note labels including `Geometry of Meaning` only as
+part of longer source titles and has `min_token_overlap: 3`; an exact
+`Geometry of Meaning` note node was not present, so the remaining zero graph
+result is recorded as index evidence, not repaired with a corpus-specific
+seed.
+
+An active-index normal CLI replay could not create a fresh thread because the
+configured desktop data root was not writable in this environment. A direct
+fresh qwen3:8b compiler call was available and parsed successfully; it emitted
+subject-bearing `origin of semantic geometry`, `semantic geometry`, and
+`Geometry of Meaning`, with no canonicalizer repetition. That stochastic call
+did not emit the temporal layer or a configured scope alias, so it is recorded
+as supporting compiler evidence, not as a replacement for the accepted normal
+live thread `thread-a16554d9aee8`.
+
+The earlier normal live thread remains the accepted Seam 8 stability evidence:
+it demonstrated persisted inventory reuse, preferred alias binding, required
+temporal retrieval, vector/graph/temporal contributions, and cautious
+synthesis. The new repair is a narrow post-closeout operator-UAT repair, not a
+retrieval, fusion, temporal, inventory, ingest, synthesis, or prompt failure.
+
+Status after local verification: machine-complete / operator-UAT-pending.
+Implementation 07 remains active; the final interactive Obsidian UI gate and
+new CI evidence remain open. Operator screenshots for tests #106 (commit
+`0d42729`) and #107 (commit `78ca8aa`) showed queued runs, not passed runs;
+neither is recorded as CI success. No query-specific inference, preferred
+reservoir, sparse stopping, or production executor change was introduced.

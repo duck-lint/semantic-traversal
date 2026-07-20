@@ -93,3 +93,45 @@ The branch is ready for operator UI UAT, not yet ready for final archive or a
 fully machine-independent merge recommendation. After the bounded UI
 checklist is supplied, update the active tracker/UAT records and archive only
 if all gates remain satisfied. Do not create Implementation 08 automatically.
+
+## Post-Seam-9 Seam 8 canonicalization repair addendum (2026-07-20)
+
+The operator payload in `thread-a65a4751fb1a` exposed a generic canonicalizer
+bug: overlapping concepts were collapsed into one concatenated subject phrase,
+so already-valid semantic and lexical queries and the meaningful graph seed
+were rewritten with repetitive `regarding` clauses. The repair uses an ordered
+subject-candidate set, overlap-aware minimal basis, any-candidate preservation,
+meaningful graph-seed preservation, conservative subjectless repair, and
+idempotence. It does not alter the compiler prompt, YAML, runtime executors,
+fusion, temporal, inventory, ingest, synthesis, or plugin behavior.
+
+Persisted raw-payload replay produced unchanged subject-bearing semantic
+queries, preserved `semantic geometry` lexically, minimally repaired only
+`precursor concepts`, and preserved `Geometry of Meaning` exactly. The
+read-only active-index replay retained persisted inventory validity and
+returned 50 lexical, 8 vector, 0 graph, and 10 temporal candidates; selection
+was 24 chunks from 13 notes. The graph index has no exact
+`Geometry of Meaning` note node and requires token overlap 3, so zero graph
+matches is recorded as index evidence rather than repaired with a topic rule.
+The old artifact selected 24 chunks from 7 notes after the damaged seed and
+the repaired replay selected from 13 notes; this comparison is evidence about
+canonicalizer-induced damage, not a fixed acceptance count.
+
+A direct fresh qwen3:8b compiler probe was available and emitted concise
+subject-bearing queries and the unchanged graph seed, but stochastic output did
+not include temporal activation or a scope alias. The accepted normal live
+thread `thread-a16554d9aee8` remains the stability evidence for those fields.
+The normal CLI could not create a fresh thread because the configured desktop
+data root was not writable in this environment. No final operator UI evidence
+was claimed.
+
+The repair is machine-complete and operator-UAT-pending. The historical Seam 9
+machine closeout remains valid and was not rewritten. New CI evidence is also
+pending: operator screenshots for tests #106 and #107 showed queued runs, not
+passed runs. Local verification after the repair: 18 compiler-schema tests,
+175 full Python tests, compileall, and `git diff --check` passed. Hashes remain
+unchanged: compiler template
+`cd5c4a7cece251ee5ee82b7434dae3a3309753183cf63d06f1131d1b6c37b0cb`, rendered
+compiler `bb767c9fc4a60cf5678f81b7b880b1f9586e4f5832998ca355af571082a0bda7`,
+frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`,
+and YAML `cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
