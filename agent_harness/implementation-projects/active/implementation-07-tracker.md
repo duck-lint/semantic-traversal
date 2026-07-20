@@ -180,7 +180,8 @@ Operator-supplied visual CI evidence is recorded for recovery: run title
 approximately 1m35s; no independently available run ID is claimed.
 
 Seam 6A is complete for this bounded typed-anchor/temporal-retrieval contract.
-Seam 7 remains unopened; no persisted resource-inventory work has begun.
+At the time of this earlier Seam 6A closeout note, Seam 7 remained unopened;
+the current tracker status below records its subsequent completion.
 
 Operator live-UAT aggregates: the genealogy run produced the strongest
 conceptual-development reconstruction observed so far, but did not establish
