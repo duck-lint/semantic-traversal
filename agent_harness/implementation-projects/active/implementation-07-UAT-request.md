@@ -456,3 +456,50 @@ post-repair normal replay in this run jointly reproduced all acceptance fields.
 The Seam 8 repair therefore remains live-UAT gated; no query-specific Python
 inference, hidden alias default, temporal executor change, fusion change,
 preferred reservoir, or sparse stopping was introduced.
+
+## Seam 8 live-UAT gate closeout (2026-07-20)
+
+The operator-supplied normal live thread `thread-a16554d9aee8` closes the
+remaining Seam 8 gate. It demonstrated persisted inventory source `persisted`,
+status `valid`, snapshot load count `1`, and `0` full inventory rebuilds. The
+compiler emitted the human-readable subject-bearing query `origin of semantic
+geometry concept`, preferred scope alias `personal_reflection`, retained the
+concept and resolved referent, subject-bearing semantic and lexical queries,
+and a subject-bearing graph seed. It requested required ordered temporal
+retrieval and emitted no compiler-owned selection or claim policy.
+
+Runtime completed vector retrieval with `21` candidates and `14` selected
+contributions, graph retrieval with `24` candidates and `7` selected
+contributions, and temporal retrieval with `24` candidates and `4` selected
+contributions; required temporal contribution was satisfied. The final packet
+contained `24` chunks from `18` notes with maximum note concentration `2`,
+representing current explicit conceptual notes, earlier dated personal
+evidence, graph-linked material, and external formal sources. Synthesis
+distinguished early documented formulations, later development, external formal
+reinforcement, and structural resemblance, did not treat Gärdenfors as the
+sole origin, and limited causal and exhaustive claims.
+
+This is a successful normal live demonstration of the accepted prompt/schema/
+runtime contract and closes the live-UAT stability gate. Stability means the
+contract is demonstrated in a normal live run and structurally guarded by
+focused tests. It does not require identical stochastic model output on every
+invocation and does not justify hidden query-specific inference. Preferred
+admission/reservoir remains deferred; configured-maximum filling remains an
+observation; sparse stopping remains unapproved; weak temporal candidates can
+be reviewed in final Seam 9 UAT but are not a Seam 8 blocker. No production
+behavior changed in this record-only closeout.
+
+Operator-supplied visual CI evidence is recorded: title
+`docs(seam8): correct repair test count`, tests #105, commit `bce9270`, passed,
+approximately 1 minute 39 seconds. No run or job ID beyond the supplied tests
+identifier is claimed.
+
+Closeout verification passed locally: focused compiler/schema/control-surface/
+prompt/retrieval tests `53`, full Python suite `170`, compileall, and
+`git diff --check`. Hashes were unchanged from `bce9270`: compiler template
+`cd5c4a7cece251ee5ee82b7434dae3a3309753183cf63d06f1131d1b6c37b0cb`, rendered
+compiler fixture `bb767c9fc4a60cf5678f81b7b880b1f9586e4f5832998ca355af571082a0bda7`,
+frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`,
+and YAML `cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
+Seam 8 is complete for the accepted bounded contract; Seam 9 is next and
+unopened.

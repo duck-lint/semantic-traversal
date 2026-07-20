@@ -143,3 +143,40 @@ temporal retrieval, vector candidates, and persisted-inventory reuse, while
 separate fresh qwen runs varied on whether they emitted the alias and temporal
 layer together. Seam 8 completion remains gated on a stable normal live replay;
 no query-specific alias or temporal inference is added.
+
+## Live-UAT gate closeout (2026-07-20)
+
+The operator-supplied normal live thread `thread-a16554d9aee8` closes the
+remaining Seam 8 gate. It demonstrated persisted inventory source/status
+`persisted`/`valid`, snapshot load count `1`, zero full rebuilds, the
+subject-bearing query `origin of semantic geometry concept`, the
+`personal_reflection` preferred-scope alias, retained concepts/referents,
+subject-bearing semantic/lexical queries and graph seed, required ordered
+temporal retrieval, and no compiler-owned selection or claim policy.
+
+Runtime completed vector retrieval with `21` candidates and `14` selected
+contributions, graph retrieval with `24` and `7`, and temporal retrieval with
+`24` and `4`; required temporal contribution was satisfied. The packet held
+`24` chunks from `18` notes, with maximum concentration `2`, representing
+current conceptual notes, earlier dated personal evidence, graph-linked
+material, and external formal sources. Synthesis separated early documented
+formulations, later development, external formal reinforcement, and structural
+resemblance; it did not assign sole origin to Gärdenfors and limited causal
+and exhaustive claims.
+
+Status: accepted and complete for the bounded Seam 8 contract. This stability
+gate means the accepted prompt/schema/runtime contract has been demonstrated in
+a normal live run and is guarded structurally by focused tests. It does not
+mean stochastic model output will be identical on every invocation, and it does
+not permit hidden query-specific inference. Preferred admission/reservoir,
+configured-maximum filling, and sparse stopping remain deferred observations
+or unapproved changes; weak temporal candidates may be reviewed in Seam 9
+final UAT but are not a Seam 8 blocker. Seam 9 is next and unopened.
+
+Operator-supplied visual CI evidence is recorded for
+`docs(seam8): correct repair test count`, tests #105, commit `bce9270`, passed,
+approximately 1 minute 39 seconds. No additional run or job identifier is
+claimed. Local closeout verification passed: 53 focused tests, 170 full tests,
+compileall, and `git diff --check`. The compiler template, rendered compiler,
+frontier, and YAML hashes remain unchanged from `bce9270`; full values are
+recorded in the UAT record.
