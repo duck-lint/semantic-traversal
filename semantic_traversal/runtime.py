@@ -19,7 +19,7 @@ from .embeddings import (
 )
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
-from .resource_inventory import build_resource_inventory
+from .resource_inventory import build_resource_inventory, load_persisted_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan
 from .text_filters import is_low_signal_apparatus_text
@@ -2379,6 +2379,7 @@ def _semantic_traversal(
     semantic_compiler_packet: dict[str, Any],
     prior_thread_state: dict[str, Any],
     embedding_backend: EmbeddingBackend,
+    resource_inventory_summary: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
@@ -2392,7 +2393,8 @@ def _semantic_traversal(
             planner_defaults=config.retrieval_planner_defaults,
         )
 
-    resource_inventory_summary = build_resource_inventory(connection=connection, config=config)
+    if resource_inventory_summary is None:
+        resource_inventory_summary = build_resource_inventory(connection=connection, config=config)
     bound_retrieval_plan, resolver_adjustments, resource_inventory_summary = bind_retrieval_plan(
         planner_retrieval_plan=planner_retrieval_plan,
         inventory_summary=resource_inventory_summary,
@@ -2783,6 +2785,7 @@ def _semantic_traversal(
         "bound_retrieval_plan": bound_retrieval_plan,
         "resolver_adjustments": resolver_adjustments,
         "resource_inventory_summary": resource_inventory_summary,
+        "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
         "execution": execution,
         "candidate_counts": {
             "exact": len(exact_candidates),
@@ -3222,11 +3225,11 @@ def run_thread_turn(
     turn_root.mkdir(parents=True, exist_ok=True)
 
     database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
-    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "scope_aliases": resolved_config.retrieval_scope_aliases}
+    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "scope_aliases": resolved_config.retrieval_scope_aliases, "inventory_diagnostics": {"source": "config_only_fallback", "status": "unavailable", "snapshot_load_count": 0, "full_inventory_rebuilds": 0}}
     if database_path.exists():
         try:
             with sqlite3.connect(database_path) as inventory_connection:
-                resource_inventory_summary = build_resource_inventory(connection=inventory_connection, config=resolved_config)
+                resource_inventory_summary, _ = load_persisted_inventory(connection=inventory_connection, config=resolved_config)
         except sqlite3.Error:
             resource_inventory_summary = build_resource_inventory(connection=None, config=resolved_config)
 
@@ -3292,6 +3295,7 @@ def run_thread_turn(
                 semantic_compiler_packet=semantic_compiler_packet,
                 prior_thread_state=prior_thread_state,
                 embedding_backend=embedding_backend,
+                resource_inventory_summary=resource_inventory_summary,
             )
         finally:
             connection.close()
@@ -3307,6 +3311,7 @@ def run_thread_turn(
             "bound_retrieval_plan": bound_retrieval_plan,
             "resolver_adjustments": resolver_adjustments,
             "resource_inventory_summary": resource_inventory_summary,
+            "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
             "execution": {"layers_executed": [], "layers_skipped": []},
             "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
             "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},

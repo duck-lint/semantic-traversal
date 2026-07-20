@@ -56,6 +56,12 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "min_similarity"):
                 load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
 
+    def test_inventory_controls_are_yaml_owned(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        self.assertEqual(config.retrieval_resource_inventory["schema_version"], 1)
+        self.assertEqual(config.retrieval_resource_inventory["path_depth"], 2)
+        self.assertGreater(config.retrieval_resource_inventory["max_values_per_facet"], 0)
+
 
 
 if __name__ == "__main__":

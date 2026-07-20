@@ -80,6 +80,14 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "exact_request_mode": str,
             "semantic_request_mode": str,
         },
+        "resource_inventory": {
+            "schema_version": int,
+            "path_depth": int,
+            "max_values_per_facet": int,
+            "max_path_values": int,
+            "max_graph_types": int,
+            "max_temporal_types": int,
+        },
     },
     "runtime_conversation": {
         "stop_words": [str],
@@ -328,6 +336,11 @@ class RuntimeConfig:
         if not isinstance(policy, dict):
             return {}
         return {str(key): str(value) for key, value in policy.items()}
+
+    @property
+    def retrieval_resource_inventory(self) -> dict[str, int]:
+        values = self.raw["retrieval"]["resource_inventory"]
+        return {str(key): int(value) for key, value in values.items()}
 
     @property
     def runtime_conversation(self) -> dict[str, Any]:
@@ -708,6 +721,12 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         "graph.default_depth",
         "graph.max_depth",
         "graph.max_candidates",
+        "resource_inventory.schema_version",
+        "resource_inventory.path_depth",
+        "resource_inventory.max_values_per_facet",
+        "resource_inventory.max_path_values",
+        "resource_inventory.max_graph_types",
+        "resource_inventory.max_temporal_types",
     ):
         current: Any = parsed["retrieval"]
         for part in field.split("."):

@@ -26,6 +26,7 @@ from .embeddings import (
 from .hashing import sha256_json, sha256_text
 from .text_filters import is_low_signal_apparatus_text
 from .temporal import TemporalAnchor, build_temporal_anchors, temporal_diagnostics
+from .resource_inventory import build_inventory_snapshot, persist_inventory_snapshot, validate_inventory_snapshot
 
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -292,6 +293,7 @@ def run_ingest(
     lexical_index: dict[str, Any] | None = None
     vector_index: dict[str, Any] | None = None
     temporal_index: dict[str, Any] | None = None
+    resource_inventory: dict[str, Any] | None = None
     try:
         _clone_active_database(
             active_database_path=active_database_path,
@@ -332,6 +334,22 @@ def run_ingest(
                 raise RuntimeError(
                     f"candidate temporal index validation failed: {temporal_index.get('failure_reason', 'invalid temporal index')}"
                 )
+            failure_stage = "inventory_build"
+            resource_inventory = build_inventory_snapshot(
+                connection=connection,
+                config=resolved_config,
+                source_ingest_run_id=run_id,
+                generated_at=generated_at,
+            )
+            resource_inventory["validation_status"] = "valid"
+            failure_stage = "inventory_persistence"
+            persist_inventory_snapshot(connection=connection, snapshot=resource_inventory)
+            failure_stage = "inventory_validation"
+            inventory_validation = validate_inventory_snapshot(connection=connection, config=resolved_config, deep=True)
+            if inventory_validation.get("status") != "valid":
+                raise RuntimeError(
+                    f"candidate resource inventory validation failed: {inventory_validation.get('errors', ['unknown failure'])}"
+                )
         finally:
             connection.close()
 
@@ -352,6 +370,7 @@ def run_ingest(
             lexical_index=lexical_index or {},
             vector_index=vector_index or {},
             temporal_index=temporal_index or {},
+            resource_inventory=resource_inventory or {},
         )
         manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
         _write_success_artifact(ingest_paths=ingest_paths, manifest_path=manifest_path, manifest=manifest)
@@ -1257,6 +1276,18 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
             metadata_json TEXT NOT NULL,
             last_ingested_run_id TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS resource_inventory_snapshots (
+            snapshot_key TEXT PRIMARY KEY,
+            snapshot_id TEXT NOT NULL,
+            inventory_schema_version INTEGER NOT NULL,
+            source_ingest_run_id TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            inventory_policy_hash TEXT NOT NULL,
+            logical_inventory_hash TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            validation_status TEXT NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_{vector_table}_content_hash ON {vector_table}(content_hash);
@@ -2283,6 +2314,7 @@ def _build_manifest(
     lexical_index: dict[str, Any],
     vector_index: dict[str, Any],
     temporal_index: dict[str, Any],
+    resource_inventory: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "status": "success",
@@ -2306,6 +2338,24 @@ def _build_manifest(
         "lexical_index": lexical_index,
         "vector_index": vector_index,
         "temporal_index": temporal_index,
+        "resource_inventory": {
+            "status": "valid" if resource_inventory.get("validation_status") == "valid" else resource_inventory.get("validation_status", "unknown"),
+            "schema_version": resource_inventory.get("inventory_schema_version"),
+            "snapshot_id": resource_inventory.get("snapshot_id"),
+            "source_ingest_run_id": resource_inventory.get("source_ingest_run_id"),
+            "logical_inventory_hash": resource_inventory.get("logical_inventory_hash"),
+            "inventory_policy_hash": resource_inventory.get("inventory_policy_hash"),
+            "note_count": (resource_inventory.get("payload") or {}).get("corpus_note_count"),
+            "chunk_count": (resource_inventory.get("payload") or {}).get("corpus_chunk_count"),
+            "path_depth": ((resource_inventory.get("payload") or {}).get("path_topology") or {}).get("path_depth"),
+            "capabilities": {
+                "exact_fts": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("exact_fts", {}),
+                "vector": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("vector", {}),
+                "graph": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("graph", {}),
+                "temporal": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("temporal", {}),
+            },
+            "validation": resource_inventory.get("validation_status"),
+        },
         "notes": [
             {
                 "note_id": note_record.note_id,
