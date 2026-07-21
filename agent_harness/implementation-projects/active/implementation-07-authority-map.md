@@ -11,6 +11,17 @@
 | Synthesis instructions | Frontier prompt in YAML | `config.py`, `runtime.py` | Prompt hash guard; prohibited outside Seam 8 |
 | Full traversal provenance | Manifest | `runtime.py` | Manifest structure tests |
 | Compact selected provenance | Retrieval packet | `runtime.py` | Packet-key/provenance tests |
+| Compiler-declared evidence requirements | Semantic compiler declaration checked against YAML operator mapping | `semantic_compiler.py`, `retrieval_resolver.py`, `runtime.py` | Completeness and bounded-repair tests |
+| Compiler-facing scope authority | YAML-configured scope aliases only; observed inventory is descriptive | `retrieval_resolver.py`, `resource_inventory.py` | Unauthorized observed-value scope regressions |
+
+## Forward-only clean-cutover invariant
+
+Implementation 07 uses forward-only clean-cutover development. Superseded
+authority branches are removed rather than retained for backward compatibility;
+all affected producers, binders, consumers, fallbacks, and tests are reconciled
+in the same seam. Historical artifacts may remain readable, but they do not
+preserve obsolete execution semantics. Rollback is Git-based or performed with
+a duplicated codebase; compatibility is opt-in and requires explicit approval.
 
 ## Seam file boundaries
 

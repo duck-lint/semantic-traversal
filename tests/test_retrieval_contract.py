@@ -9,7 +9,7 @@ from pathlib import Path
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, embedding_identity_hash
 from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _select_retrieval_chunks, _vector_candidates
-from semantic_traversal.retrieval_resolver import bind_retrieval_plan
+from semantic_traversal.retrieval_resolver import bind_retrieval_plan, validate_plan_completeness
 
 
 class _FakeEmbeddingBackend:
@@ -414,6 +414,79 @@ class RetrievalContractTests(unittest.TestCase):
         self.assertEqual(bound["retrieval_layers"][0]["limit_adjustment"], "clamped_to_max")
         self.assertTrue(any(item["action"] == "runtime_policy_override" for item in adjustments))
         self.assertTrue(any(item["action"] == "retired" and item["field"] == "selection_policy.budgets" for item in adjustments))
+
+    def test_observed_inventory_values_never_bind_scope_without_alias(self) -> None:
+        inventory = {
+            "frontmatter_facets": {"note_type": [{"value": "journal_entry"}]},
+            "observed_source_labels": ["vault"],
+            "path_topology": {"top_level": ["JOURNAL"], "second_level": ["JOURNAL/2025"]},
+        }
+        for value, action in (("journal_entry", "unauthorized_inventory_scope"), ("vault", "unauthorized_inventory_scope"), ("JOURNAL", "unauthorized_inventory_scope")):
+            plan = {
+                "intent_type": "semantic_traversal", "scope_requests": [value], "concepts": ["alpha"],
+                "literal_terms": [], "semantic_queries": ["alpha"], "lexical_queries": ["alpha"],
+                "graph_seeds": [], "retrieval_layers": [], "evidence_requirements": [],
+            }
+            bound, adjustments, _ = bind_retrieval_plan(planner_retrieval_plan=plan, inventory_summary=inventory, config=self.config, raw_user_input="alpha")
+            self.assertEqual(bound["scope_filters"], {"source_label": None, "note_type": [], "path_contains": []})
+            self.assertEqual(adjustments[0]["action"], action)
+            self.assertEqual(adjustments[0]["observed_inventory_match"] in {"note_type", "source_label", "path"}, True)
+
+    def test_valid_alias_remains_authoritative_when_raw_observed_value_is_mixed_in(self) -> None:
+        plan = {
+            "intent_type": "exact_search",
+            "scope_requests": ["journal", "journal_entry"],
+            "literal_terms": ["alpha"],
+            "retrieval_layers": [],
+            "evidence_requirements": [],
+        }
+        inventory = {
+            "frontmatter_facets": {"note_type": [{"value": "journal_entry"}]},
+            "observed_source_labels": [],
+            "path_topology": {"top_level": [], "second_level": []},
+        }
+        bound, adjustments, _ = bind_retrieval_plan(
+            planner_retrieval_plan=plan,
+            inventory_summary=inventory,
+            config=self.config,
+            raw_user_input="alpha",
+        )
+        self.assertEqual(bound["scope_filters"]["note_type"], ["journal_entry"])
+        self.assertTrue(any(item["action"] == "unauthorized_inventory_scope" for item in adjustments))
+        self.assertFalse(any(item["action"] == "bound_to_observed_note_type" for item in adjustments))
+
+    def test_requirement_mapping_is_yaml_owned_and_completeness_is_explicit(self) -> None:
+        self.assertEqual(self.config.retrieval_evidence_requirement_operators["chronology"], "temporal_retrieve")
+        complete = {
+            "evidence_requirements": ["chronology", "chronology"],
+            "retrieval_layers": [{"operator": "temporal_retrieve"}],
+        }
+        result = validate_plan_completeness(planner_retrieval_plan=complete, config=self.config)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["declared_requirements"], ["chronology"])
+
+    def test_plan_completeness_reports_missing_and_unknown_requirements(self) -> None:
+        result = validate_plan_completeness(
+            planner_retrieval_plan={
+                "evidence_requirements": ["chronology", "chronology", "unknown_requirement"],
+                "retrieval_layers": [{"operator": "lexical_chunk_search"}],
+            },
+            config=self.config,
+        )
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(result["declared_requirements"], ["chronology", "unknown_requirement"])
+        self.assertEqual(result["missing_operators"][0]["operator"], "temporal_retrieve")
+        self.assertIn("unknown_requirement", result["unsupported_requirements"])
+
+    def test_plan_completeness_accepts_surface_specific_requirements_without_all_surfaces(self) -> None:
+        result = validate_plan_completeness(
+            planner_retrieval_plan={
+                "evidence_requirements": ["lexical_relevance", "semantic_similarity"],
+                "retrieval_layers": [{"operator": "lexical_chunk_search"}, {"operator": "vector_search"}],
+            },
+            config=self.config,
+        )
+        self.assertEqual(result["status"], "complete")
 
     def test_required_exact_layer_blocks_when_terms_were_skipped(self) -> None:
         packet = {

@@ -326,6 +326,36 @@ class CompilerSchemaContractTests(unittest.TestCase):
         self.assertIn("preserves the principal subject", prompt)
         self.assertIn("origin_of_idea", prompt)
         self.assertIn("concept X origin", prompt)
+        self.assertIn("evidence_requirements", prompt)
+        self.assertIn("chronology", prompt)
+
+    def test_evidence_requirements_are_canonical_schema_fields(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Where did concept X develop?",
+            {
+                "query": "development of concept X",
+                "planner_retrieval_plan": {
+                    "concepts": ["concept X"],
+                    "evidence_requirements": ["chronology", "chronology"],
+                    "semantic_queries": ["development of concept X"],
+                    "lexical_queries": ["development of concept X"],
+                    "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "ordered"}],
+                },
+            },
+            planner_defaults=self.defaults,
+        )
+        plan = packet["planner_retrieval_plan"]
+        self.assertEqual(plan["evidence_requirements"], ["chronology"])
+        self.assertNotIn("selection_policy", plan)
+        self.assertNotIn("claim_policy", plan)
+
+    def test_unknown_evidence_requirement_is_structurally_diagnosed(self) -> None:
+        packet = _canonicalize_response_payload(
+            "Explain concept X",
+            {"planner_retrieval_plan": {"evidence_requirements": ["topic_specific_causality"]}},
+            planner_defaults=self.defaults,
+        )
+        self.assertTrue(any(item["reason"] == "unsupported_requirement_enum" for item in packet["planner_diagnostics"]["invalid_planner_fields"]))
 
 
 if __name__ == "__main__":

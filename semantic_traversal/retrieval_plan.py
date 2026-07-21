@@ -111,8 +111,17 @@ KNOWN_PLANNER_FIELDS = {
     "semantic_queries",
     "lexical_queries",
     "graph_seeds",
+    "evidence_requirements",
     "retrieval_layers",
 }
+
+SUPPORTED_EVIDENCE_REQUIREMENTS = (
+    "literal_exhaustive",
+    "lexical_relevance",
+    "semantic_similarity",
+    "graph_relation",
+    "chronology",
+)
 
 
 def _quoted_terms_from_text(text: str) -> list[str]:
@@ -366,6 +375,7 @@ def build_default_retrieval_plan(
     scope_requests: list[str],
     graph_seeds: list[str],
     resolved_referents: list[str] | None = None,
+    evidence_requirements: list[str] | None = None,
     planner_defaults: dict[str, Any],
 ) -> dict[str, Any]:
     search_intent = is_search_intent(raw_user_input)
@@ -388,11 +398,15 @@ def build_default_retrieval_plan(
         layers.append(_retrieval_layer("vector_search", limit=planner_defaults["vector_limit"]))
         layers.append(_retrieval_layer("graph_expand", depth=planner_defaults["graph_depth"]))
 
+    if evidence_requirements is None:
+        evidence_requirements = ["literal_exhaustive"] if search_intent else ["lexical_relevance", "semantic_similarity"]
+
     return {
         "intent_type": intent_type,
         "scope_requests": list(dict.fromkeys(scope_requests)),
         "concepts": list(dict.fromkeys(concepts)),
         "resolved_referents": list(dict.fromkeys(resolved_referents or [])),
+        "evidence_requirements": list(dict.fromkeys(str(value).strip() for value in evidence_requirements if str(value).strip())),
         "literal_terms": _literal_term_entries(literal_terms, required=search_intent),
         "semantic_queries": list(dict.fromkeys(semantic_queries)),
         "lexical_queries": list(dict.fromkeys(lexical_queries)),
@@ -469,6 +483,7 @@ _PLANNER_LIST_FIELDS = (
     "semantic_queries",
     "lexical_queries",
     "graph_seeds",
+    "evidence_requirements",
     "retrieval_layers",
 )
 
@@ -496,6 +511,8 @@ def _canonicalize_planner_list_field(
         return _coerce_literal_terms(raw_value, fallback if isinstance(fallback, list) else [])
     if field == "retrieval_layers":
         return _coerce_retrieval_layers(raw_value, fallback if isinstance(fallback, list) else [])
+    if field == "evidence_requirements":
+        return list(dict.fromkeys(str(item).strip() for item in raw_value if str(item).strip()))
     return coerce_string_list(raw_value)
 
 
@@ -541,8 +558,25 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
         "semantic_queries": _canonicalize_planner_list_field(value=value, field="semantic_queries", fallback=coerce_string_list(fallback.get("semantic_queries")), diagnostics=diagnostics),
         "lexical_queries": _canonicalize_planner_list_field(value=value, field="lexical_queries", fallback=coerce_string_list(fallback.get("lexical_queries")), diagnostics=diagnostics),
         "graph_seeds": _canonicalize_planner_list_field(value=value, field="graph_seeds", fallback=coerce_string_list(fallback.get("graph_seeds")), diagnostics=diagnostics),
+        # A parsed model request that predates this field cannot be assigned
+        # evidentiary intent by runtime. Preserve the missing-field diagnostic
+        # and leave the declared requirement set empty rather than inventing
+        # requirements from the operator list.
+        "evidence_requirements": _canonicalize_planner_list_field(value=value, field="evidence_requirements", fallback=[], diagnostics=diagnostics),
         "retrieval_layers": _canonicalize_planner_list_field(value=value, field="retrieval_layers", fallback=fallback.get("retrieval_layers", []), diagnostics=diagnostics),
     }
+    unsupported_requirements = [
+        value for value in result["evidence_requirements"]
+        if value not in SUPPORTED_EVIDENCE_REQUIREMENTS
+    ]
+    if unsupported_requirements:
+        diagnostics["invalid_planner_fields"].append(
+            {
+                "field": "evidence_requirements",
+                "reason": "unsupported_requirement_enum",
+                "values": unsupported_requirements,
+            }
+        )
     if isinstance(value.get("retrieval_layers"), list) and value["retrieval_layers"] and not result["retrieval_layers"]:
         diagnostics["invalid_planner_fields"].append({"field": "retrieval_layers", "reason": "no_valid_layer_entries"})
     if raw_user_input:

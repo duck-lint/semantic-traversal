@@ -135,3 +135,25 @@ unchanged: compiler template
 compiler `bb767c9fc4a60cf5678f81b7b880b1f9586e4f5832998ca355af571082a0bda7`,
 frontier `fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`,
 and YAML `cd0bc0b6036643a360ea689ffbb2df2b13d9a76a6a7f254a9d4c99a535b819e9`.
+
+The subsequent bounded scope/evidence repair intentionally changed the
+compiler template/rendered fixture/YAML hashes to
+`7c115b3441e5e2dda6805c1ad73f0718b67d329ea0ed92a6460707578c982537`,
+`d20b1973517cdd9b4705522c636160497972faf1c411d0ac0dd894e3880dc50f`, and
+`abe0f6aefbc3b96fcdb776c539ce57db55a3a1d2388f39e7767d90ae4efb3258`.
+The frontier hash remains
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.
+
+## Post-closeout scope and evidence-requirement repair
+
+This bounded repair removed a stale resolver bypass that treated raw observed
+inventory values as scope authority. YAML aliases are now the only
+compiler-facing scope controls; raw observed values remain diagnostic-only.
+It also added compiler-declared evidence requirements, a YAML-owned
+requirement-to-operator mapping, one bounded compiler repair attempt, and
+fail-closed completeness diagnostics. An incomplete repaired plan does not
+execute retrieval or synthesis and does not silently enable every surface.
+Focused resolver/compiler/runtime tests and the read-only operator replay cover
+these boundaries. This is a forward-only clean cutover, not a compatibility
+layer. Seam 9's historical machine closeout and its remaining operator UI/new
+CI gates are unchanged.

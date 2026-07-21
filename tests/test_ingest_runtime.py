@@ -180,6 +180,25 @@ class ResponseCompilerBackend:
         )
 
 
+class SequenceCompilerBackend:
+    mode_name = "sequence"
+
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        self.payloads = payloads
+        self.calls: list[dict[str, Any]] = []
+
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        self.calls.append(packet)
+        payload = self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)]
+        return SemanticCompilerResponse(
+            parsed_payload=payload,
+            raw_response="sequence raw response",
+            metadata={"backend_mode": self.mode_name},
+            diagnostics={},
+            status="parsed",
+        )
+
+
 class RecordingCompilerBackend:
     mode_name = "recording"
 
@@ -1995,7 +2014,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(result.semantic_traversal_manifest["coverage"]["exact_search_performed"])
         self.assertTrue(any("exact" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
 
-    def test_unknown_scope_request_demotes_in_resolver(self) -> None:
+    def test_unknown_scope_request_remains_non_authoritative(self) -> None:
         data_root = _prepare_data_root()
         compiler_backend = ResponseCompilerBackend(
             payload={
@@ -2036,7 +2055,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("philosophy", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
         self.assertTrue(result.semantic_traversal_manifest["resolver_adjustments"])
-        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "demoted_to_concept")
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "unavailable_scope_alias")
         self.assertIn("philosophy", result.semantic_traversal_manifest["planner_retrieval_plan"]["scope_requests"])
         self.assertIn("influence", result.semantic_traversal_manifest["planner_retrieval_plan"]["concepts"])
 
@@ -2180,7 +2199,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_alias")
         self.assertTrue(any(adjustment["action"] == "bound_to_alias_unobserved_in_inventory" for adjustment in result.semantic_traversal_manifest["resolver_adjustments"]))
 
-    def test_resolver_binds_observed_note_type_without_alias(self) -> None:
+    def test_resolver_rejects_observed_note_type_without_alias(self) -> None:
         data_root = _prepare_data_root()
         compiler_backend = ResponseCompilerBackend(
             payload={
@@ -2219,8 +2238,8 @@ class ThesisRuntimeTests(unittest.TestCase):
             semantic_compiler_backend=compiler_backend,
             embedding_backend=FakeEmbeddingBackend(),
         )
-        self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
-        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_observed_note_type")
+        self.assertNotIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "unauthorized_inventory_scope")
 
     def test_alias_bound_unobserved_inventory_values_are_explicit(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -2767,6 +2786,73 @@ class ThesisRuntimeTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8").lower()
             for term in banned_terms:
                 self.assertNotIn(term, text, f"retired vocabulary leaked into {path.name}: {term}")
+
+
+    def test_incomplete_declared_requirement_triggers_one_bounded_repair(self) -> None:
+        data_root = _prepare_data_root()
+        base = {
+            "raw_user_input": "Where did concept X develop?",
+            "intent": "development",
+            "query": "development of concept X",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+        }
+        incomplete = {
+            **base,
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "scope_requests": [], "concepts": ["concept X"],
+                "resolved_referents": [], "literal_terms": [], "evidence_requirements": ["chronology"],
+                "semantic_queries": ["development of concept X"], "lexical_queries": ["development of concept X"],
+                "graph_seeds": [], "retrieval_layers": [{"operator": "lexical_chunk_search", "required": False, "limit": 50}],
+            },
+        }
+        repaired = {
+            **base,
+            "planner_retrieval_plan": {
+                **incomplete["planner_retrieval_plan"],
+                "retrieval_layers": [
+                    {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                    {"operator": "temporal_retrieve", "required": False, "limit": 10, "mode": "ordered"},
+                ],
+            },
+        }
+        compiler = SequenceCompilerBackend([incomplete, repaired])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input=base["raw_user_input"],
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertIn("repair_context", compiler.calls[1])
+        self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_completeness"]["status"], "complete")
+        self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_repair"]["outcome"], "complete")
+        self.assertEqual(result.semantic_traversal_manifest["plan_completeness"]["status"], "complete")
+        self.assertTrue(any(layer["operator"] == "temporal_retrieve" for layer in result.semantic_traversal_manifest["bound_retrieval_plan"]["retrieval_layers"]))
+
+    def test_failed_plan_repair_blocks_without_executing_retrieval(self) -> None:
+        data_root = _prepare_data_root()
+        payload = {
+            "raw_user_input": "Where did concept X develop?",
+            "intent": "development",
+            "query": "development of concept X",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "scope_requests": [], "concepts": ["concept X"],
+                "resolved_referents": [], "literal_terms": [], "evidence_requirements": ["chronology"],
+                "semantic_queries": ["development of concept X"], "lexical_queries": ["development of concept X"],
+                "graph_seeds": [], "retrieval_layers": [{"operator": "lexical_chunk_search", "required": False, "limit": 50}],
+            },
+        }
+        compiler = SequenceCompilerBackend([payload, payload])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input=payload["raw_user_input"],
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertEqual(result.coverage_report["decision"], "blocked")
+        self.assertIn("compiler-declared evidence requirements are incomplete", result.coverage_report["blocking_reasons"])
+        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["lexical"], 0)
+        self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], [])
 
 
 if __name__ == "__main__":

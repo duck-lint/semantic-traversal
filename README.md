@@ -40,7 +40,9 @@ For each turn, the runtime:
 2. Loads the prior thread state and ledger parent.
 3. Sends the message and compact thread context to the configured semantic compiler.
 4. Canonicalizes the compiler response into `semantic_compiler_packet`.
-5. Binds soft scope requests to observed corpus metadata.
+5. Binds compiler scope requests only through configured YAML aliases; observed
+   inventory values remain descriptive context and never become executable
+   scope by themselves.
 6. Activates available lexical, vector, graph, and primary-corpus surfaces.
 7. Builds a `semantic_traversal_manifest` from those activation results.
 8. Materializes `retrieval_packet` only from traversal-selected chunks.

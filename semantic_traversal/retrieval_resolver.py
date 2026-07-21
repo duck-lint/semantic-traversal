@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import RuntimeConfig
-from .retrieval_plan import coerce_string_list, is_search_intent
+from .retrieval_plan import SUPPORTED_EVIDENCE_REQUIREMENTS, coerce_string_list, is_search_intent
 
 
 def _merge_unique(existing: list[str], new_values: list[str]) -> list[str]:
@@ -110,6 +110,46 @@ def _record_unobserved_alias_bindings(
     return adjustments
 
 
+def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config: RuntimeConfig) -> dict[str, Any]:
+    """Validate compiler-declared evidence against the YAML-owned operator map."""
+    mapping = config.retrieval_evidence_requirement_operators
+    declared: list[str] = []
+    for value in coerce_string_list(planner_retrieval_plan.get("evidence_requirements")):
+        if value not in declared:
+            declared.append(value)
+    layers = {
+        str(layer.get("operator") or "")
+        for layer in planner_retrieval_plan.get("retrieval_layers", [])
+        if isinstance(layer, dict)
+    }
+    unsupported = [value for value in declared if value not in SUPPORTED_EVIDENCE_REQUIREMENTS or value not in mapping]
+    missing_operators = [value for value in declared if value in mapping and mapping[value] not in layers]
+    unavailable_operators: list[dict[str, str]] = []
+    for requirement in declared:
+        operator = mapping.get(requirement)
+        if operator == "graph_expand" and not config.graph_traversal_enabled:
+            unavailable_operators.append({"requirement": requirement, "operator": operator, "reason": "graph traversal is disabled"})
+        elif operator == "temporal_retrieve" and not config.retrieval_temporal_enabled:
+            unavailable_operators.append({"requirement": requirement, "operator": operator, "reason": "temporal retrieval is disabled"})
+    invalid_operator_configuration = [
+        {"requirement": requirement, "operator": operator}
+        for requirement, operator in mapping.items()
+        if requirement in declared and operator not in {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+    ]
+    status = "complete" if not (unsupported or missing_operators or unavailable_operators or invalid_operator_configuration) else "incomplete"
+    return {
+        "declared_requirements": declared,
+        "satisfied_requirements": [value for value in declared if value not in unsupported and value not in missing_operators and not any(item["requirement"] == value for item in unavailable_operators)],
+        "missing_operators": [{"requirement": value, "operator": mapping.get(value)} for value in missing_operators],
+        "unsupported_requirements": unsupported,
+        "unavailable_operators": unavailable_operators,
+        "invalid_operator_configuration": invalid_operator_configuration,
+        "repair_attempted": False,
+        "repair_result": None,
+        "status": status,
+    }
+
+
 def bind_retrieval_plan(
     *,
     planner_retrieval_plan: dict[str, Any],
@@ -172,51 +212,24 @@ def bind_retrieval_plan(
             )
             continue
 
+        observed_kind = None
         if scope_request in observed_note_types:
-            scope_filters["note_type"] = _merge_unique(scope_filters["note_type"], [scope_request])
-            adjustments.append(
-                {
-                    "field": "scope_requests",
-                    "value": scope_request,
-                    "action": "bound_to_observed_note_type",
-                    "reason": "observed frontmatter facet value",
-                }
-            )
-            continue
-
-        if scope_request in observed_source_labels:
-            scope_filters["source_label"] = scope_request
-            adjustments.append(
-                {
-                    "field": "scope_requests",
-                    "value": scope_request,
-                    "action": "bound_to_observed_source_label",
-                    "reason": "observed source label",
-                }
-            )
-            continue
-
-        if scope_request in observed_paths:
-            scope_filters["path_contains"] = _merge_unique(scope_filters["path_contains"], [scope_request])
-            adjustments.append(
-                {
-                    "field": "scope_requests",
-                    "value": scope_request,
-                    "action": "bound_to_observed_path",
-                    "reason": "observed path topology value",
-                }
-            )
-            continue
-
-        concepts = _merge_unique(concepts, [scope_request])
-        if scope_request not in semantic_queries:
-            semantic_queries.append(scope_request)
+            observed_kind = "note_type"
+        elif scope_request in observed_source_labels:
+            observed_kind = "source_label"
+        elif scope_request in observed_paths:
+            observed_kind = "path"
         adjustments.append(
             {
                 "field": "scope_requests",
                 "value": scope_request,
-                "action": "demoted_to_concept",
-                "reason": "not a configured scope alias or observed resource scope",
+                "action": "unauthorized_inventory_scope" if observed_kind else "unavailable_scope_alias",
+                "reason": (
+                    f"observed inventory {observed_kind} values are descriptive only and cannot bind executable scope"
+                    if observed_kind
+                    else "scope request is not a configured YAML scope alias"
+                ),
+                "observed_inventory_match": observed_kind,
             }
         )
 
@@ -376,6 +389,7 @@ def bind_retrieval_plan(
         "preferred_scope_filters": preferred_scope_filters,
         "scope_resolution": scope_resolution,
         "literal_terms": literal_terms,
+        "evidence_requirements": coerce_string_list(planner_retrieval_plan.get("evidence_requirements")),
         "semantic_queries": semantic_queries,
         "lexical_queries": coerce_string_list(planner_retrieval_plan.get("lexical_queries")) or concepts,
         "graph_seeds": coerce_string_list(planner_retrieval_plan.get("graph_seeds")),

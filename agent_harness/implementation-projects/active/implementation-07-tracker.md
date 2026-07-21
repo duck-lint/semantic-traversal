@@ -3,7 +3,7 @@
 ## Status
 
 - State: active
-- Current work: Seam 8 post-closeout compiler canonicalization repair.
+- Current work: Seam 9 machine closeout with bounded operator-UAT gate remaining.
 - Next action: obtain new CI evidence and the bounded operator UI UAT; archive only after those remaining gates are supplied.
 
 ## Completed Repair Status
@@ -37,6 +37,7 @@
 | 2026-07-20 | Coordinator | Closed the Seam 8 normal live-UAT stability gate | Operator-supplied `thread-a16554d9aee8` jointly demonstrated persisted inventory reuse, subject-bearing compiler decomposition, `personal_reflection` alias binding, required ordered temporal retrieval, vector/graph/temporal contributions, 24 chunks from 18 notes with maximum concentration 2, and cautious synthesis distinctions; focused/full/compile/diff checks and unchanged hashes pass; operator-supplied visual CI evidence for `bce9270` reports tests #105 passed | Seam 9 is next and unopened; do not begin it in this commit |
 | 2026-07-19 | Coordinator | Completed Seam 9 machine closeout audit | Added bounded closeout plan, reconciled historical statuses, audited runtime/YAML/compiler authority, verified the active index read-only, corrected stale probe documentation, added the narrow Electron desktop-runtime type boundary, passed plugin build/typecheck, ran probes, and passed the 170-test suite, compileall, and diff check | Machine-complete; obtain bounded operator-only Obsidian UI evidence before archive |
 | 2026-07-20 | Coordinator | Repaired the post-Seam-9 overlapping-subject canonicalization defect | Replayed persisted `thread-a65a4751fb1a`; valid subject-bearing queries and `Geometry of Meaning` are preserved, subjectless fields use a minimal basis, repeated canonicalization is idempotent, and 18 compiler-schema tests pass; controlled active-index replay remains read-only and shows no canonicalizer-induced repetition | Restore machine-complete/operator-UAT-pending after full verification; obtain new CI and operator UI evidence |
+| 2026-07-20 | Coordinator | Repaired two bounded post-Seam-9 contract defects: removed observed-inventory scope binding and added declared evidence-requirement completeness | Raw `journal_entry` is diagnostic-only without a configured alias; YAML maps five requirement enums to operators; one compiler repair is attempted for an incomplete plan and a second incomplete result blocks without retrieval; focused resolver/compiler/runtime tests pass | Complete records, replay evidence, and full verification; retain operator UI and new CI as separate open gates |
 
 ## Work Status
 
@@ -54,7 +55,7 @@
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
 | Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; compiler temporal activation was deferred to Seam 8 and is now recorded below |
 | Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 follow-up is recorded below |
-| Seam 8: compiler/schema contract | Coordinator | machine-complete / operator-UAT-pending after narrow repair | Accepted ADR, overlapping-subject repair, explicit-empty contract, 18 compiler-schema tests, 175-test suite, persisted-payload replay, controlled read-only active-index replay, and operator-supplied normal live thread `thread-a16554d9aee8` | Repair preserves valid model coordinates without query-specific inference; new CI and final operator UI evidence remain open |
+| Seam 8: compiler/schema contract | Coordinator | machine-complete / operator-UAT-pending | Scope-authority cutover and evidence-requirement completeness repair; focused 138-test slice and full 184-test suite pass; read-only artifact/active-index replay recorded | No compiler-owned runtime policy; operator UI and new CI remain open |
 | Seam 9: cleanup/docs/UAT | Coordinator | machine-complete / operator-UAT-pending | Closeout plan, audits, active-index health, final UAT matrix record, plugin build/typecheck, 170-test suite, compileall, diff check, hashes | Do not archive until the bounded operator UI checklist is supplied or explicitly accepted as the sole remaining gate |
 
 ## Blockers
@@ -397,3 +398,18 @@ temporal candidates, fuzzy redundancy suppression, hard note/source/byte caps,
 weighted RRF, query/graph quotas, and broader semantic-frontmatter exposure.
 None was promoted to a Seam 9 contract defect. The bundle is machine-complete
 but remains active and operator-UAT-pending; it must not be archived yet.
+
+Bounded scope-authority and plan-completeness repair (2026-07-20): legacy
+resolver branches that bound raw observed `note_type`, `source_label`, or
+`relative_path` values were removed. Configured YAML aliases are now the sole
+compiler-facing scope authority; unmatched observed values remain diagnostic
+only and do not alter hard/preferred filters or become concepts or queries. A
+compiler-declared `evidence_requirements` list is canonicalized as an ordered,
+deduplicated enum list and checked against the YAML-owned requirement-to-operator
+map. One bounded compiler repair may add a missing operator or revise the
+requirement; an incomplete second result blocks retrieval and synthesis with
+structured diagnostics rather than enabling all surfaces. Missing parsed
+requirement fields remain explicit empty fields; deterministic fallback plans
+may declare their own requirements. This is a forward-only clean cutover: the
+superseded observed-value binders and incomplete-plan execution path are not
+retained for compatibility.

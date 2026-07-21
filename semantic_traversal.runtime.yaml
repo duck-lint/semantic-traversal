@@ -7,6 +7,12 @@ retrieval:
     personal_reflection:
       note_type:
         - journal_entry
+  evidence_requirement_operators:
+    literal_exhaustive: exact_chunk_search
+    lexical_relevance: lexical_chunk_search
+    semantic_similarity: vector_search
+    graph_relation: graph_expand
+    chronology: temporal_retrieve
   scope_policy:
     exact_request_mode: hard
     semantic_request_mode: preferred
@@ -143,6 +149,7 @@ prompts:
       Compile a semantic retrieval request for deterministic runtime resolution and retrieval execution. Do not answer the user.
       Do not emit planner_diagnostics; runtime adds diagnostics.
       Separate conversational meaning into scope alias requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
+      Declare evidence_requirements as an ordered, deduplicated list of supported constitutive evidence enums only: literal_exhaustive, lexical_relevance, semantic_similarity, graph_relation, or chronology. Use it to state what evidence is necessary for the interpreted request, not every optional surface that may help.
       Use only scope aliases present in the supplied resource inventory summary. Never emit raw note_type, path, source, author, book, or filesystem filters.
       Treat explicit search/find/list/mention/occurrence/count or absence requests as exact-search requests when possible. A quoted concept alone does not require exact search.
       For exact search, preserve each literal term, its requested case-sensitive or case-insensitive substring match mode, required flag, and return_total_count when exhaustive counts or absence are requested.
@@ -152,6 +159,7 @@ prompts:
       Request temporal retrieval when chronology, earliest/latest, before/after/between, development ordering, origin, precursors, what came before, or autobiographical development is constitutive of the question. For an origin or precursor question, use temporal_retrieve with an appropriate ordered/earliest mode and required true when chronology is necessary to answer; do not treat conceptual resemblance as chronology. Do not infer temporal retrieval from current, old, or history alone. Do not invent dates or causal influence.
       When the inventory presents an available alias for the requested autobiographical or chronological evidence, emit that alias in scope_requests; runtime decides whether it is hard or preferred.
       Requiredness is sparse: exact exhaustive search, strict temporal relations, and explicitly requested graph traversal may be required; otherwise prefer optional layers.
+      Before returning JSON, self-audit that every constitutive evidentiary aspect of the interpreted intent appears in evidence_requirements and every declared evidence requirement has a corresponding requested retrieval operator. Do not answer the user or emit prose for this audit.
       The compiler requests operators and bounded limits only. Do not emit selection_policy, budgets, max_chunks, preserve_required_layers, claim_policy, coverage flags, or negative-claim permission.
       Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.
       Preserve the raw user input exactly.
@@ -169,6 +177,7 @@ prompts:
           "concepts": [],
           "resolved_referents": [],
           "literal_terms": [],
+          "evidence_requirements": [],
           "semantic_queries": [],
           "lexical_queries": [],
           "graph_seeds": [],
@@ -188,6 +197,10 @@ prompts:
       - temporal development: temporal_retrieve with mode ordered or earliest when chronology is constitutive;
       - preferred inventory alias: scope_requests containing an available alias, leaving hard/preferred binding to runtime;
       - narrow factual: concise semantic/vector request without unnecessary temporal or graph operators.
+      - broad conceptual: evidence_requirements may include lexical_relevance and semantic_similarity when both forms of evidence are constitutive.
+      - exhaustive occurrence/count/absence: evidence_requirements includes literal_exhaustive.
+      - explicit relationship traversal: evidence_requirements includes graph_relation and retrieval_layers includes graph_expand.
+      - origin, development, earliest/latest, before/after/between, or chronology: evidence_requirements includes chronology and retrieval_layers includes temporal_retrieve.
       - origin/development of concept X: use a subject-bearing top-level query, subject-bearing semantic and lexical queries, an available chronology scope alias when present, and a required temporal_retrieve layer with mode ordered or earliest; absence of a supplied date does not remove the need for temporal retrieval when chronology is the question.
       For that origin/development shape, do not emit an explicit empty lexical query list or omit an available matching scope alias merely because the target has no date in the user wording; use the inventory projection to request the available evidence surface.
       Subject-bearing query shapes:

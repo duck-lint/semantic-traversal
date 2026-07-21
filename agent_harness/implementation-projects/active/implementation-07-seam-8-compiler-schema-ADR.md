@@ -230,3 +230,34 @@ preserved; Implementation 07 is machine-complete/operator-UAT-pending until
 new CI and the operator UI gate are supplied. Preferred admission/reservoir,
 configured-max filling, sparse stopping, and weak temporal-candidate review
 remain deferred. No prompt or YAML hash changed.
+
+The later bounded evidence-requirement repair is the explicit exception to that
+historical sentence: the compiler prompt and YAML changed narrowly to expose
+and bind `evidence_requirements`; the frontier prompt remained unchanged. The
+repair is machine-verified and operator-UAT-pending.
+
+### Post-closeout bounded repair (2026-07-20)
+
+Two generic contract defects were repaired without changing retrieval, fusion,
+temporal, inventory, ingest, or frontier behavior. Raw observed inventory
+values are no longer accepted as executable scope: only configured YAML
+aliases bind hard or preferred scope, while unmatched observed values remain
+visible as unauthorized-inventory-scope diagnostics.
+
+The compiler schema now accepts an ordered, deduplicated
+`evidence_requirements` list with the enums `literal_exhaustive`,
+`lexical_relevance`, `semantic_similarity`, `graph_relation`, and `chronology`.
+Runtime binds those enums through the YAML-owned
+`retrieval.evidence_requirement_operators` map and validates that every
+declared requirement has a corresponding accepted operator. A single bounded
+compiler repair may add the missing operator or revise the requirement while
+preserving raw input and valid fields. If the repaired plan remains
+incomplete, retrieval and synthesis are blocked with structured diagnostics;
+there is no all-surfaces fallback. Parsed model fields that omit the new list
+remain explicitly empty and diagnosed, rather than acquiring hidden semantic
+requirements. Deterministic fallback plans declare their own requirements.
+
+This is a forward-only clean cutover. Superseded observed-value scope binders
+and incomplete-plan execution behavior are not retained for compatibility. The
+accepted subject-preserving and explicit-empty contract remains intact, and
+the frontier prompt remains unchanged.

@@ -691,3 +691,42 @@ new CI evidence remain open. Operator screenshots for tests #106 (commit
 `0d42729`) and #107 (commit `78ca8aa`) showed queued runs, not passed runs;
 neither is recorded as CI success. No query-specific inference, preferred
 reservoir, sparse stopping, or production executor change was introduced.
+
+## Bounded scope-authority and evidence-requirement replay (2026-07-20)
+
+The persisted operator artifact `thread-9a0afd164966` was replayed read-only.
+Its raw `journal_entry` scope request no longer binds hard scope because that
+value is not a configured alias; the replay records an
+`unauthorized_inventory_scope` adjustment and leaves effective scope filters
+broad. The existing lexical, vector, and graph requests remain intact. The
+observed value was not demoted into concepts or queries.
+
+The same repair adds the compiler-facing `evidence_requirements` contract:
+`literal_exhaustive`, `lexical_relevance`, `semantic_similarity`,
+`graph_relation`, and `chronology`. YAML maps these requirements to their
+operators. A plan that declares chronology without `temporal_retrieve` gets
+one bounded compiler repair opportunity; if the repaired plan remains
+incomplete, retrieval is blocked with structured diagnostics and no
+all-surfaces fallback. Focused tests cover complete surface-specific plans,
+missing operators, unknown requirements, one successful repair, and failed
+repair blocking.
+
+The active-index replay was read-only and did not reingest or mutate the
+configured index. Persisted inventory remained valid and reused. No temporal
+or graph activation was inferred from the old raw payload merely because the
+question was genealogical; the new completeness contract uses only the
+compiler-declared requirements. A fresh direct qwen compiler probe remained
+subject-bearing but stochastic, so the accepted normal live UAT remains the
+separate evidence for temporal and alias activation.
+
+This is a forward-only clean cutover. Raw observed inventory values are
+diagnostic-only, configured YAML aliases are authoritative, and incomplete
+declared evidence is fail-closed after one repair attempt. Seam 9 remains
+machine-complete/operator-UAT-pending; no new CI success is claimed for the
+queued operator screenshots.
+
+Final local verification for this bounded repair: the focused compiler,
+resolver, and runtime slice passed 138 tests; the complete Python suite passed
+184 tests; compileall and `git diff --check` passed. The status is
+machine-complete/operator-UAT-pending. No new CI success is claimed for queued
+operator screenshots.

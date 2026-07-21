@@ -113,3 +113,15 @@ No observed field in the bounded contract requires semantic interpretation
 beyond configured field names, aliases, table identities, and existing schema
 contracts. Any future semantic alias decision remains an explicit Seam 8
 question rather than an ingest guess.
+
+### Scope-authority clarification (2026-07-20)
+
+The persisted inventory exposes observed note types, source labels, and paths
+as facts for diagnostics and alias validation. It does not grant those raw
+values compiler-facing scope authority. A legacy resolver path that directly
+bound an observed value such as `journal_entry` was a pre-Seam-7 cutover
+defect, not a consequence of persistence. The repair removes that path:
+configured YAML aliases remain the only executable hard/preferred scope
+authority, while unmatched observed values remain diagnostic-only. This is a
+forward-only clean cutover; no compatibility branch preserves the superseded
+binding behavior.

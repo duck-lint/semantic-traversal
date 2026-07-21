@@ -4,6 +4,7 @@ import json
 import math
 import re
 import sqlite3
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,7 +22,7 @@ from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .resource_inventory import build_resource_inventory, load_persisted_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
-from .retrieval_resolver import bind_retrieval_plan
+from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness
 from .text_filters import is_low_signal_apparatus_text
 from .temporal import parse_temporal_value, relation_for_anchor
 from .semantic_compiler import (
@@ -545,6 +546,117 @@ def _compiler_response_to_packet(
         ),
         "fallback",
     )
+
+
+def _repair_incomplete_compiler_plan(
+    *,
+    raw_user_input: str,
+    compiler_request: dict[str, Any],
+    compiler_backend: SemanticCompilerBackend,
+    compiler_response: SemanticCompilerResponse,
+    semantic_compiler_packet: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+    active_focus: dict[str, Any],
+    recent_semantic_turns: list[dict[str, Any]],
+    config: RuntimeConfig,
+    resource_inventory_summary: dict[str, Any],
+) -> tuple[dict[str, Any], str, SemanticCompilerResponse, dict[str, Any]]:
+    planner = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    initial_completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
+    if initial_completeness.get("status") == "complete":
+        semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = initial_completeness
+        return semantic_compiler_packet, "parsed", compiler_response, {"attempted": False, "outcome": "not_needed", "latency_ms": 0}
+
+    repair_request = dict(compiler_request)
+    repair_request["instruction"] = (
+        "Repair the compiler retrieval plan exactly once. Preserve raw_user_input, valid semantic fields, and valid layers. "
+        "For each declared evidence requirement, add its mapped supported operator or explicitly remove/revise the requirement "
+        "if the interpretation was wrong. Remove unauthorized raw note-type, path, or source scope values. Return JSON only; "
+        "do not answer the user, emit runtime policy, or make topic-specific inferences."
+    )
+    repair_request["repair_context"] = {
+        "original_compiler_payload": compiler_response.parsed_payload,
+        "canonical_plan": planner,
+        "completeness_diagnostics": initial_completeness,
+        "available_scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
+        "supported_evidence_requirements": list(config.retrieval_evidence_requirement_operators),
+        "requirement_operator_mapping": config.retrieval_evidence_requirement_operators,
+    }
+    started = time.perf_counter()
+    try:
+        repair_response = compiler_backend.compile_turn(repair_request)
+    except Exception as exc:  # noqa: BLE001
+        repair_response = SemanticCompilerResponse(
+            parsed_payload=None,
+            raw_response=None,
+            metadata={"backend_mode": getattr(compiler_backend, "mode_name", "unknown"), "error": str(exc)},
+            diagnostics={},
+            status="unavailable",
+        )
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
+    if repair_response.status == "parsed" and isinstance(repair_response.parsed_payload, dict):
+        repaired_packet, repaired_status = _compiler_response_to_packet(
+            raw_user_input=raw_user_input,
+            prior_thread_state=prior_thread_state,
+            active_focus=active_focus,
+            recent_semantic_turns=recent_semantic_turns,
+            config=config,
+            response=repair_response,
+        )
+    else:
+        repaired_packet, repaired_status = semantic_compiler_packet, "repair_failed"
+    repaired_plan = repaired_packet.get("planner_retrieval_plan") if isinstance(repaired_packet.get("planner_retrieval_plan"), dict) else {}
+    repaired_completeness = validate_plan_completeness(planner_retrieval_plan=repaired_plan, config=config)
+    repair_record = {
+        "attempted": True,
+        "latency_ms": latency_ms,
+        "outcome": "complete" if repaired_completeness.get("status") == "complete" else "incomplete",
+        "response_status": repair_response.status,
+    }
+    repaired_completeness["repair_attempted"] = True
+    repaired_completeness["repair_result"] = repair_record["outcome"]
+    repaired_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = repaired_completeness
+    repaired_packet["planner_diagnostics"]["plan_repair"] = repair_record
+    return repaired_packet, repaired_status, repair_response, repair_record
+
+
+def _incomplete_plan_artifacts(
+    *,
+    semantic_compiler_packet: dict[str, Any],
+    config: RuntimeConfig,
+    resource_inventory_summary: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    planner = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    bound, adjustments, inventory = bind_retrieval_plan(
+        planner_retrieval_plan=planner,
+        inventory_summary=resource_inventory_summary,
+        config=config,
+        raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
+    )
+    completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
+    note = "retrieval blocked: compiler-declared evidence requirements are incomplete"
+    manifest = {
+        "planner_retrieval_plan": planner,
+        "bound_retrieval_plan": bound,
+        "resolver_adjustments": adjustments,
+        "resource_inventory_summary": inventory,
+        "inventory_diagnostics": inventory.get("inventory_diagnostics", {}),
+        "execution": {"layers_executed": [], "layers_skipped": [{"reason": "incomplete plan"}]},
+        "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0, "temporal": 0},
+        "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0, "temporal": 0},
+        "selected_chunk_ids": [],
+        "layer_manifests": {},
+        "unsupported_layer_requests": [],
+        "plan_completeness": completeness,
+        "coverage": {"exact_search_performed": False, "exact_status": "not_requested", "scope": bound.get("scope_filters", {}), "literal_terms": [], "coverage_claims_allowed": False, "negative_claims_allowed": False, "required_layer_results": [], "plan_completeness": completeness},
+        "limits": ["Retrieval was not executed because the compiler plan was incomplete."],
+        "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
+        "scope_resolution": {"hard": bound.get("scope_filters", {}), "preferred": bound.get("preferred_scope_filters", {}), "bound_requests": bound.get("scope_resolution", {})},
+        "selection_notes": [note],
+    }
+    packet = {"bound_retrieval_plan": bound, "coverage": manifest["coverage"], "limits": manifest["limits"], "selected_chunks": [], "matched_chunk_count": 0, "retrieval_observation": "blocked_incomplete_plan", "assembled_from_traversal_manifest": True}
+    return manifest, packet
 
 
 def _semantic_compiler_diagnostic_packet(
@@ -2401,6 +2513,7 @@ def _semantic_traversal(
         config=config,
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
+    plan_completeness = validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
 
     scope_filters = bound_retrieval_plan.get("scope_filters") if isinstance(bound_retrieval_plan.get("scope_filters"), dict) else {}
     literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
@@ -2798,6 +2911,7 @@ def _semantic_traversal(
         "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
         "layer_manifests": layer_manifests,
         "unsupported_layer_requests": unsupported_layer_requests,
+        "plan_completeness": plan_completeness,
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
@@ -2874,6 +2988,10 @@ def _coverage_report(
         blocking_reasons.append(f"semantic compiler status is {semantic_compiler_status}; parsed compiler output is required")
     if not compiler_valid:
         blocking_reasons.append("semantic compiler packet is missing or malformed")
+    planner_diagnostics = semantic_compiler_packet.get("planner_diagnostics") if isinstance(semantic_compiler_packet, dict) else {}
+    plan_completeness = planner_diagnostics.get("plan_completeness") if isinstance(planner_diagnostics, dict) else None
+    if isinstance(plan_completeness, dict) and plan_completeness.get("status") != "complete":
+        blocking_reasons.append("compiler-declared evidence requirements are incomplete")
     bound_plan = traversal_manifest.get("bound_retrieval_plan") if isinstance(traversal_manifest.get("bound_retrieval_plan"), dict) else {}
     graph_seeds = list(bound_plan.get("graph_seeds") or [])
     semantic_queries = list(bound_plan.get("semantic_queries") or [])
@@ -2933,6 +3051,7 @@ def _coverage_report(
         "semantic_traversal_manifest_hash": sha256_json(traversal_manifest),
         "retrieval_packet_hash": sha256_json(retrieval_packet),
         "selected_chunk_count": selected_count,
+        "plan_completeness": plan_completeness,
     }
 
 
@@ -3261,11 +3380,29 @@ def run_thread_turn(
         response=compiler_response,
         config=resolved_config,
     )
+    planner_for_completeness = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    initial_completeness = validate_plan_completeness(planner_retrieval_plan=planner_for_completeness, config=resolved_config)
+    semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = initial_completeness
+    repair_record = {"attempted": False, "outcome": "not_needed", "latency_ms": 0}
+    if initial_completeness.get("status") != "complete" and compiler_response.status == "parsed":
+        semantic_compiler_packet, semantic_compiler_status, compiler_response, repair_record = _repair_incomplete_compiler_plan(
+            raw_user_input=user_input,
+            compiler_request=compiler_request,
+            compiler_backend=compiler_backend,
+            compiler_response=compiler_response,
+            semantic_compiler_packet=semantic_compiler_packet,
+            prior_thread_state=prior_thread_state,
+            active_focus=active_focus,
+            recent_semantic_turns=recent_semantic_turns,
+            config=resolved_config,
+            resource_inventory_summary=resource_inventory_summary,
+        )
     semantic_compiler_diagnostic = _semantic_compiler_diagnostic_packet(
         response=compiler_response,
         semantic_compiler_status=semantic_compiler_status,
         config=resolved_config,
     )
+    semantic_compiler_diagnostic["plan_repair"] = repair_record
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
         planner_retrieval_plan = build_default_retrieval_plan(
@@ -3283,7 +3420,15 @@ def run_thread_turn(
     bound_retrieval_plan = planner_retrieval_plan
     resolver_adjustments: list[dict[str, Any]] = []
 
-    if database_path.exists():
+    final_completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    if final_completeness.get("status") != "complete":
+        semantic_traversal_manifest, retrieval_packet = _incomplete_plan_artifacts(
+            semantic_compiler_packet=semantic_compiler_packet,
+            config=resolved_config,
+            resource_inventory_summary=resource_inventory_summary,
+            prior_thread_state=prior_thread_state,
+        )
+    elif database_path.exists():
         if embedding_backend is None:
             embedding_backend = resolve_embedding_backend(resolved_config)
         connection = sqlite3.connect(database_path)

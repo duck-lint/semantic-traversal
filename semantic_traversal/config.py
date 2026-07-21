@@ -73,6 +73,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             },
         },
         "scope_aliases": dict,
+        "evidence_requirement_operators": dict,
         "scope_policy": {
             "exact_request_mode": str,
             "semantic_request_mode": str,
@@ -333,6 +334,11 @@ class RuntimeConfig:
         if not isinstance(policy, dict):
             return {}
         return {str(key): str(value) for key, value in policy.items()}
+
+    @property
+    def retrieval_evidence_requirement_operators(self) -> dict[str, str]:
+        mapping = self.raw["retrieval"].get("evidence_requirement_operators", {})
+        return {str(key): str(value) for key, value in mapping.items()}
 
     @property
     def retrieval_resource_inventory(self) -> dict[str, int]:
@@ -701,6 +707,14 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
                 raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.{field} must be a list")
         if "source_label" in alias_payload and not isinstance(alias_payload["source_label"], (str, type(None))):
             raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.source_label must be a string or null")
+    requirement_mapping = parsed["retrieval"].get("evidence_requirement_operators", {})
+    supported_requirements = {"literal_exhaustive", "lexical_relevance", "semantic_similarity", "graph_relation", "chronology"}
+    supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+    for requirement, operator in requirement_mapping.items():
+        if str(requirement) not in supported_requirements:
+            raise ConfigError(f"Runtime config field retrieval.evidence_requirement_operators.{requirement} is unsupported")
+        if str(operator) not in supported_operators:
+            raise ConfigError(f"Runtime config field retrieval.evidence_requirement_operators.{requirement} must name a supported retrieval operator")
     for field in (
         "exact.max_matches",
         "exact.context_chars",
