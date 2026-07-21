@@ -93,7 +93,6 @@ graph_traversal:
   max_candidates: 24
   seed_sources:
     - graph_seeds
-    - active_focus
     - semantic_queries
   edge_type_allowlist:
     - note_links_note
@@ -160,11 +159,18 @@ prompts:
       When the inventory presents an available alias for the requested autobiographical or chronological evidence, emit that alias in scope_requests; runtime decides whether it is hard or preferred.
       Requiredness is sparse: exact exhaustive search, strict temporal relations, and explicitly requested graph traversal may be required; otherwise prefer optional layers.
       Before returning JSON, self-audit that every constitutive evidentiary aspect of the interpreted intent appears in evidence_requirements and every declared evidence requirement has a corresponding requested retrieval operator. Do not answer the user or emit prose for this audit.
+      The request includes a runtime-owned request_binding envelope. Echo request_binding exactly, byte-for-byte by field value; never invent, revise, or omit its thread_id, turn_id, compiler_request_id, or raw_user_input_sha256. Echo raw_user_input exactly as supplied. A response about another turn is invalid even when its JSON shape is otherwise correct.
       The compiler requests operators and bounded limits only. Do not emit selection_policy, budgets, max_chunks, preserve_required_layers, claim_policy, coverage flags, or negative-claim permission.
       Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.
       Preserve the raw user input exactly.
       Use this exact canonical shape:
       {
+        "request_binding": {
+          "thread_id": "",
+          "turn_id": 0,
+          "compiler_request_id": "",
+          "raw_user_input_sha256": ""
+        },
         "raw_user_input": "",
         "intent": "",
         "query": "",

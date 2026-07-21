@@ -20,7 +20,7 @@ from semantic_traversal.semantic_compiler import _render_ollama_prompt
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROMPT_BASELINE_SHA256 = "d20b1973517cdd9b4705522c636160497972faf1c411d0ac0dd894e3880dc50f"
+PROMPT_BASELINE_SHA256 = "258e274cf3a6677b2080d0356d51e29f8011782dde4c642d7c77a695a5e4f2df"
 FRONTIER_PROMPT_BASELINE_SHA256 = "fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776"
 
 

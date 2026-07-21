@@ -8,10 +8,30 @@ from urllib import error, request
 
 from .config import RuntimeConfig
 from .hashing import sha256_text
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, is_comparison_intent, _focus_carry_terms, scope_requests_from_text
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, scope_requests_from_text
 
 
-INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics"}
+INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics", "request_binding"}
+
+OLLAMA_COMPILER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["request_binding", "raw_user_input", "query", "planner_retrieval_plan"],
+    "properties": {
+        "request_binding": {
+            "type": "object",
+            "required": ["thread_id", "turn_id", "compiler_request_id", "raw_user_input_sha256"],
+            "properties": {
+                "thread_id": {"type": "string"},
+                "turn_id": {"type": "integer"},
+                "compiler_request_id": {"type": "string"},
+                "raw_user_input_sha256": {"type": "string"},
+            },
+        },
+        "raw_user_input": {"type": "string"},
+        "query": {"type": "string"},
+        "planner_retrieval_plan": {"type": "object"},
+    },
+}
 
 
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -336,16 +356,13 @@ def _deterministic_compiler_packet(raw_user_input: str, *, planner_defaults: dic
     return packet
 
 
-def _is_referential_input(text: str) -> bool:
-    lowered = text.lower()
-    return any(f" {surface} " in f" {lowered} " for surface in ("it", "that", "this", "those", "they", "them"))
-
-
 def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] | None, *, planner_defaults: dict[str, Any], packet: dict[str, Any] | None = None) -> dict[str, Any]:
     fallback = _deterministic_compiler_packet(raw_user_input, planner_defaults=planner_defaults)
     if not isinstance(payload, dict):
         return fallback
     result = dict(fallback)
+    if isinstance(payload.get("request_binding"), dict):
+        result["request_binding"] = dict(payload["request_binding"])
     result["raw_user_input"] = raw_user_input
     result["intent"] = str(payload.get("intent") or result["intent"]).strip() or result["intent"]
     model_query = payload.get("query") if isinstance(payload.get("query"), str) else ""
@@ -372,13 +389,6 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         result["limitations"] = cleaned_limitations
     else:
         result["limitations"] = []
-    focus_terms = _focus_carry_terms(
-        active_focus=packet.get("active_focus") if isinstance(packet, dict) and isinstance(packet.get("active_focus"), dict) else None,
-        recent_semantic_turns=packet.get("recent_semantic_turns") if isinstance(packet, dict) and isinstance(packet.get("recent_semantic_turns"), list) else None,
-    )
-    carry_focus_terms = _is_referential_input(raw_user_input) or is_comparison_intent(raw_user_input)
-    if carry_focus_terms and focus_terms:
-        result["resolved_referents"] = list(dict.fromkeys([*result["resolved_referents"], *focus_terms]))
     planner_payload = payload.get("planner_retrieval_plan")
     subjects, subject_source = _subject_values(
         planner_payload=planner_payload,
@@ -401,11 +411,6 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         planner_defaults=planner_defaults,
     )
     canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(planner_payload, fallback=fallback_plan, planner_defaults=planner_defaults, raw_user_input=raw_user_input)
-    if carry_focus_terms and focus_terms:
-        canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *focus_terms]))
-        comparison_query = " ".join([result["query"], *focus_terms[:6]]).strip()
-        if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
-            canonical_plan["semantic_queries"].append(comparison_query)
     subject_query_adjustments = _repair_subject_bearing_queries(canonical_plan, subjects)
     graph_seed_adjustments = _repair_graph_seeds(canonical_plan, subjects)
     minimal_subject_basis, overlapping_subject_candidates = _minimal_subject_basis(subjects)
@@ -493,7 +498,7 @@ class OllamaSemanticCompilerBackend:
             )
         prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template, planner_defaults=self._planner_defaults)
         prompt_hash = sha256_text(prompt)
-        payload = {"model": self._model, "prompt": prompt, "stream": False}
+        payload = {"model": self._model, "prompt": prompt, "stream": False, "format": OLLAMA_COMPILER_RESPONSE_SCHEMA}
         raw_response_text: str | None = None
         try:
             http_request = request.Request(
@@ -550,9 +555,12 @@ class OllamaSemanticCompilerBackend:
                 diagnostics={},
                 status="invalid_json",
             )
-        canonical_payload = _canonicalize_response_payload(str(packet.get("raw_user_input") or ""), parsed_payload, planner_defaults=self._planner_defaults, packet=packet)
         return SemanticCompilerResponse(
-            parsed_payload=canonical_payload,
+            # Binding validation and canonicalization belong to the runtime
+            # boundary. Returning the parsed model object unchanged prevents
+            # stale or malformed content from being normalized before the
+            # current-turn envelope is checked.
+            parsed_payload=parsed_payload,
             raw_response=raw_response_text,
             metadata={
                 "backend_mode": self.mode_name,
