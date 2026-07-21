@@ -157,3 +157,19 @@ Focused resolver/compiler/runtime tests and the read-only operator replay cover
 these boundaries. This is a forward-only clean cutover, not a compatibility
 layer. Seam 9's historical machine closeout and its remaining operator UI/new
 CI gates are unchanged.
+
+## Runtime turn-integrity addendum (2026-07-21)
+
+The persisted `thread-70c60d78beaf` counterexample demonstrated two defects:
+turn 6 accepted a stale noncanonical compiler response about “building good
+habits here”, and graph execution directly consumed prior active-focus values.
+The repair adds exact current-turn response binding with one fresh retry and
+fail-closed blocking, moves Ollama normalization behind that check, removes
+`active_focus` from graph seed configuration, and limits fallback continuity to
+compact current-plan referents/concepts. No inventory, ingest, entity,
+executor, threshold, graph-direction, temporal, fusion, selection, or frontier
+behavior changed.
+
+Historical artifacts remain readable but are not treated as current execution
+inputs. Seam 8 remains machine-complete/operator-UAT-pending after local gates;
+the sister/entity question remains a separate capability issue.

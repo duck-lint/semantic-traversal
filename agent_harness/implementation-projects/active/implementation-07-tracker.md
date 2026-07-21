@@ -38,6 +38,7 @@
 | 2026-07-19 | Coordinator | Completed Seam 9 machine closeout audit | Added bounded closeout plan, reconciled historical statuses, audited runtime/YAML/compiler authority, verified the active index read-only, corrected stale probe documentation, added the narrow Electron desktop-runtime type boundary, passed plugin build/typecheck, ran probes, and passed the 170-test suite, compileall, and diff check | Machine-complete; obtain bounded operator-only Obsidian UI evidence before archive |
 | 2026-07-20 | Coordinator | Repaired the post-Seam-9 overlapping-subject canonicalization defect | Replayed persisted `thread-a65a4751fb1a`; valid subject-bearing queries and `Geometry of Meaning` are preserved, subjectless fields use a minimal basis, repeated canonicalization is idempotent, and 18 compiler-schema tests pass; controlled active-index replay remains read-only and shows no canonicalizer-induced repetition | Restore machine-complete/operator-UAT-pending after full verification; obtain new CI and operator UI evidence |
 | 2026-07-20 | Coordinator | Repaired two bounded post-Seam-9 contract defects: removed observed-inventory scope binding and added declared evidence-requirement completeness | Raw `journal_entry` is diagnostic-only without a configured alias; YAML maps five requirement enums to operators; one compiler repair is attempted for an incomplete plan and a second incomplete result blocks without retrieval; focused resolver/compiler/runtime tests pass | Complete records, replay evidence, and full verification; retain operator UI and new CI as separate open gates |
+| 2026-07-21 | Coordinator | Repaired current-turn compiler binding and removed direct conversation-state retrieval coordinates | Persisted turn-6 replay confirmed stale “building good habits here” output and active-focus graph injection; binding retry/blocking and no-active-focus graph regressions added; full verification pending | Complete controlled replay, hashes, and machine gates; retain entity correctness and operator UI as open |
 
 ## Work Status
 
@@ -55,7 +56,7 @@
 | Seam 5: fusion/selection | Coordinator | complete for bounded experiment | Accepted ordinal surface fusion, required reservations, explicit budget retirement, and breadth-before-depth selection; merged to target as `3dd1579`; same-pool replay, representative probes, full suite 142, compileall, and diff checks pass | The broader weighted-RRF hybrid is superseded historical analysis and unapproved; preferred reservoir, hard note/source/byte bounds, redundancy suppression, query/graph quotas, and marginal thresholds are not routine planned Seam 5 work |
 | Seam 6A: temporal substrate | Coordinator | complete | Typed anchors, temporal retrieval, mode-correct governing anchors, relation-first ordering, lifecycle/atomicity tests, representative and disposable corpus UAT; repair commit and full-suite evidence recorded below | Accepted bounded contract is complete; compiler temporal activation was deferred to Seam 8 and is now recorded below |
 | Seam 7: persisted inventory | Coordinator | complete | Persisted validated snapshot, deterministic logical hash, atomic staged activation, fallback diagnostics, alias overlay, compiler/resolver/traversal same-turn reuse; focused inventory/config/runtime tests; full suite 156; disposable configured-corpus UAT | Accepted bounded contract complete; Seam 8 follow-up is recorded below |
-| Seam 8: compiler/schema contract | Coordinator | machine-complete / operator-UAT-pending | Scope-authority cutover and evidence-requirement completeness repair; focused 138-test slice and full 184-test suite pass; read-only artifact/active-index replay recorded | No compiler-owned runtime policy; operator UI and new CI remain open |
+| Seam 8: compiler/schema contract | Coordinator | machine-complete / operator-UAT-pending | Current-turn binding and conversation/retrieval separation repair; focused 142-test slice and full 188-test suite pass; controlled stale replay blocks with zero retrieval candidates | No compiler-owned runtime policy; entity correctness and operator UI remain out of scope |
 | Seam 9: cleanup/docs/UAT | Coordinator | machine-complete / operator-UAT-pending | Closeout plan, audits, active-index health, final UAT matrix record, plugin build/typecheck, 170-test suite, compileall, diff check, hashes | Do not archive until the bounded operator UI checklist is supplied or explicitly accepted as the sole remaining gate |
 
 ## Blockers
@@ -413,3 +414,17 @@ requirement fields remain explicit empty fields; deterministic fallback plans
 may declare their own requirements. This is a forward-only clean cutover: the
 superseded observed-value binders and incomplete-plan execution path are not
 retained for compatibility.
+
+Runtime-integrity repair closeout (2026-07-21): focused compiler/resolver/
+runtime tests pass 142; full Python suite passes 188; compileall and diff-check
+pass; plugin build and strict TypeScript pass. The controlled replay of the
+persisted turn-6 raw response made two compiler calls, rejected both missing
+bindings, preserved no stale plan fields, executed zero retrieval candidates,
+and wrote internally consistent thread/turn identities across artifacts.
+Compiler template/rendered fixture/YAML hashes are
+`9ee6ced09353a5ec88f1b4ae50582f89cb64258932b099d9cc40019f789e9b69`,
+`258e274cf3a6677b2080d0356d51e29f8011782dde4c642d7c77a695a5e4f2df`, and
+`c1f5475e4b500e4fcf64f108074d1f0faca9dff51941f7852df37a0e70ba6e80`;
+the frontier hash remains
+`fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776`.
+No inventory, entity, executor, ranking, or frontier surface changed.
