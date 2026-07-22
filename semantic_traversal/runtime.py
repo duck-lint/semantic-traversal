@@ -5,7 +5,6 @@ import math
 import re
 import sqlite3
 import time
-import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -381,10 +380,8 @@ def _compiler_request_packet(
     recent_semantic_turns: list[dict[str, Any]],
     active_focus: dict[str, Any],
     resource_inventory_summary: dict[str, Any],
-    request_binding: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "request_binding": request_binding,
         "raw_user_input": raw_user_input,
         "prior_thread_state": prior_thread_state,
         "recent_messages": recent_messages,
@@ -393,58 +390,6 @@ def _compiler_request_packet(
         "resource_inventory_summary": resource_inventory_summary,
         "scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
         "instruction": "Compile a retrieval request, not an answer. Emit supported planner intent and retrieval-layer fields only. Use inventory scope aliases rather than raw note_type, path_contains, source_label, planner_diagnostics, or runtime selection/claim policy.",
-    }
-
-
-def _new_compiler_request_binding(*, thread_id: str, turn_id: int, raw_user_input: str) -> dict[str, Any]:
-    return {
-        "thread_id": thread_id,
-        "turn_id": turn_id,
-        "compiler_request_id": uuid.uuid4().hex,
-        "raw_user_input_sha256": sha256_text(raw_user_input),
-    }
-
-
-def _validate_compiler_response_binding(
-    *,
-    response: SemanticCompilerResponse,
-    requested_binding: dict[str, Any],
-    raw_user_input: str,
-) -> dict[str, Any]:
-    returned_payload = response.parsed_payload if isinstance(response.parsed_payload, dict) else None
-    returned_binding = returned_payload.get("request_binding") if isinstance(returned_payload, dict) else None
-    mismatched_fields: list[str] = []
-    if not isinstance(returned_binding, dict):
-        mismatched_fields.append("request_binding")
-    else:
-        for field in ("thread_id", "turn_id", "compiler_request_id", "raw_user_input_sha256"):
-            if returned_binding.get(field) != requested_binding.get(field):
-                mismatched_fields.append(field)
-    if isinstance(returned_payload, dict) and returned_payload.get("raw_user_input") != raw_user_input:
-        mismatched_fields.append("raw_user_input")
-    status = "bound" if response.status == "parsed" and not mismatched_fields else "failed"
-    return {
-        "requested_binding": dict(requested_binding),
-        "returned_binding": dict(returned_binding) if isinstance(returned_binding, dict) else None,
-        "binding_status": status,
-        "mismatched_fields": list(dict.fromkeys(mismatched_fields)),
-    }
-
-
-def _target_binding_failure_packet(*, raw_user_input: str, request_binding: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "thread_id": request_binding["thread_id"],
-        "turn_id": request_binding["turn_id"],
-        "request_binding": dict(request_binding),
-        "raw_user_input": raw_user_input,
-        "intent": "target-binding failure",
-        "query": "",
-        "entities": [],
-        "relations": [],
-        "resolved_referents": [],
-        "limitations": ["semantic compiler response was not bound to the current turn"],
-        "planner_retrieval_plan": {},
-        "planner_diagnostics": {"target_binding_failure": True},
     }
 
 
@@ -468,10 +413,10 @@ def _deterministic_semantic_packet(
         if resolved_referents:
             concepts = list(dict.fromkeys([*concepts, *resolved_referents]))
             query = " ".join([query, *resolved_referents[:8]]).strip() or query
-    # Retrieval coordinates come from this fallback's current plan only. A
-    # referential fallback may materialize compact carried concepts above, but
-    # prior user text, selected titles, and selected sections are not seeds.
     graph_seeds: list[str] = [query] if query else []
+    if prior_thread_state.get("latest_user_input"):
+        graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
+    graph_seeds = list(dict.fromkeys(seed for seed in graph_seeds if seed))
     packet = {
         "raw_user_input": raw_user_input,
         "intent": "deterministic retrieval planning fallback",
@@ -504,14 +449,11 @@ def _canonicalize_compiler_packet(
     config: RuntimeConfig,
     fallback_limitations: list[str] | None = None,
 ) -> dict[str, Any]:
-    # A parsed compiler response must stand on its own current-turn fields.
-    # Conversation context was supplied to the model, but it is not a fallback
-    # retrieval coordinate source after the model has returned.
     fallback_packet = _deterministic_semantic_packet(
         raw_user_input=raw_user_input,
-        prior_thread_state={},
-        active_focus={},
-        recent_semantic_turns=[],
+        prior_thread_state=prior_thread_state,
+        active_focus=active_focus,
+        recent_semantic_turns=recent_semantic_turns,
         config=config,
         limitations=fallback_limitations,
     )
@@ -525,6 +467,12 @@ def _canonicalize_compiler_packet(
     packet["relations"] = _coerce_string_list(payload.get("relations")) or packet["relations"]
     packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
     packet["limitations"] = _coerce_string_list(payload.get("limitations")) if isinstance(payload.get("limitations"), list) else []
+    focus_terms: list[str] = []
+    carry_focus_terms = _is_referential_user_input(raw_user_input, config=config) or is_comparison_intent(raw_user_input)
+    if carry_focus_terms:
+        focus_terms = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
+    if carry_focus_terms and focus_terms:
+        packet["resolved_referents"] = list(dict.fromkeys([*packet["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=packet["query"],
@@ -535,6 +483,11 @@ def _canonicalize_compiler_packet(
         planner_defaults=config.retrieval_planner_defaults,
     )
     canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, planner_defaults=config.retrieval_planner_defaults, raw_user_input=raw_user_input)
+    if carry_focus_terms and focus_terms:
+        canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *packet["resolved_referents"]]))
+        comparison_query = " ".join([packet["query"], *focus_terms[:6]]).strip()
+        if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
+            canonical_plan["semantic_queries"].append(comparison_query)
     packet["planner_retrieval_plan"] = canonical_plan
     packet["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(
@@ -1073,10 +1026,12 @@ def _exact_candidates(
 def _graph_seed_values(
     *,
     planner_retrieval_plan: dict[str, Any],
+    prior_thread_state: dict[str, Any],
     config: RuntimeConfig,
 ) -> list[tuple[str, str]]:
     seeds: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
     configured_sources = set(config.graph_traversal_seed_sources)
     if "graph_seeds" in configured_sources:
         for value in _coerce_string_list(planner_retrieval_plan.get("graph_seeds")):
@@ -1090,6 +1045,23 @@ def _graph_seed_values(
             if seed not in seen:
                 seen.add(seed)
                 seeds.append(seed)
+    if "active_focus" in configured_sources:
+        for value in (
+            active_focus.get("query"),
+            active_focus.get("concepts"),
+            active_focus.get("scope_requests"),
+            active_focus.get("resolved_referents"),
+            active_focus.get("semantic_queries"),
+            active_focus.get("lexical_queries"),
+            active_focus.get("graph_seeds"),
+            active_focus.get("selected_note_titles"),
+            active_focus.get("selected_section_labels"),
+        ):
+            for item in _coerce_string_list(value):
+                seed = ("active_focus", item)
+                if seed not in seen:
+                    seen.add(seed)
+                    seeds.append(seed)
     return [(source, seed) for source, seed in seeds if seed]
 
 
@@ -1494,6 +1466,7 @@ def _graph_candidates(
     connection: sqlite3.Connection,
     config: RuntimeConfig,
     planner_retrieval_plan: dict[str, Any],
+    prior_thread_state: dict[str, Any],
     graph_depth: dict[str, Any] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
@@ -1552,6 +1525,7 @@ def _graph_candidates(
     node_type_allowlist = set(config.graph_traversal_node_type_allowlist)
     seed_values = _graph_seed_values(
         planner_retrieval_plan=planner_retrieval_plan,
+        prior_thread_state=prior_thread_state,
         config=config,
     )
     if not seed_values:
@@ -2649,6 +2623,7 @@ def _semantic_traversal(
             connection=connection,
             config=config,
             planner_retrieval_plan=bound_retrieval_plan,
+            prior_thread_state=prior_thread_state,
             graph_depth=graph_layer,
             scope_filters=scope_filters,
             limit=_layer_limit(graph_layer, config.retrieval_graph_max_candidates),

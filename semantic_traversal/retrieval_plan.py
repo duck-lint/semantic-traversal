@@ -225,12 +225,19 @@ def _focus_carry_terms(
     carried: list[str] = []
 
     def consume_source(source: dict[str, Any]) -> None:
-        # Only compact semantic referents may cross the conversation boundary.
-        # Prior queries, graph seeds, selected evidence, and section labels are
-        # descriptive history, not retrieval coordinates.
-        for field in ("resolved_referents", "concepts"):
+        for field in ("resolved_referents", "concepts", "literal_terms", "graph_seeds", "lexical_queries"):
             for item in coerce_string_list(source.get(field)):
                 _append_compact_term(carried, item, max_terms=max_terms)
+                if len(carried) >= max_terms:
+                    return
+        query = str(source.get("query") or "").strip()
+        if query:
+            _append_query_terms(carried, query, max_terms=max_terms)
+            if len(carried) >= max_terms:
+                return
+        for field in ("semantic_queries",):
+            for item in coerce_string_list(source.get(field)):
+                _append_query_terms(carried, item, max_terms=max_terms)
                 if len(carried) >= max_terms:
                     return
 
@@ -243,6 +250,15 @@ def _focus_carry_terms(
             if len(carried) >= max_terms:
                 break
 
+    if len(carried) < max_terms:
+        for source in (active_focus or {}, *(recent_semantic_turns[-2:] if isinstance(recent_semantic_turns, list) else [])):
+            if not isinstance(source, dict):
+                continue
+            for field in ("selected_note_titles", "selected_section_labels"):
+                for item in coerce_string_list(source.get(field)):
+                    _append_compact_term(carried, item, max_terms=max_terms)
+                    if len(carried) >= max_terms:
+                        return carried[:max_terms]
     return carried[:max_terms]
 
 
