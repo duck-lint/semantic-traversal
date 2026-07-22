@@ -289,10 +289,6 @@ The current implementation is still under active development around canonical se
 - Thread artifacts are under `<data-root>/threads/<thread-id>/turns/`. The
   retrieval packet and traversal manifest are the bounded evidence boundary;
   the synthesis context is the exact context sent to the frontier model.
-  Compiler responses must echo the runtime-owned current-turn binding envelope.
-  Conversation state is interpretive context only; retrieval executes solely
-  from the successfully bound current plan. Active focus is never a direct
-  graph or query source.
 - Restarting or reloading the plugin does not require reingest. Configure its
   Python executable, runtime root, YAML path, and artifact root, then use the
   plugin's ingest command only when the data/projection conditions above call

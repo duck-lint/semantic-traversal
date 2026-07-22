@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import json
 import shutil
 import sqlite3
 import tempfile
@@ -24,8 +23,6 @@ from semantic_traversal.runtime import (
     _count_selected_by_layer,
     _merge_candidates,
     _select_retrieval_chunks,
-    _new_compiler_request_binding,
-    _validate_compiler_response_binding,
     run_thread_turn,
 )
 from semantic_traversal.retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
@@ -100,7 +97,8 @@ class TestSemanticCompilerBackend:
             resolved_referents=[],
             planner_defaults=self._planner_defaults,
         )
-        payload = {
+        return SemanticCompilerResponse(
+            parsed_payload={
                 "raw_user_input": raw_user_input,
                 "intent": "test semantic compiler output",
                 "query": query,
@@ -109,10 +107,7 @@ class TestSemanticCompilerBackend:
                 "resolved_referents": [],
                 "planner_retrieval_plan": planner_retrieval_plan,
                 "limitations": ["test compiler backend used"],
-            }
-        payload["request_binding"] = dict(packet["request_binding"])
-        return SemanticCompilerResponse(
-            parsed_payload=payload,
+            },
             raw_response=None,
             metadata={"backend_mode": self.mode_name},
             diagnostics={},
@@ -171,18 +166,13 @@ class ExplodingCompilerBackend:
 class ResponseCompilerBackend:
     mode_name = "response"
 
-    def __init__(self, payload: dict[str, Any], raw_response: str, *, echo_binding: bool = True) -> None:
+    def __init__(self, payload: dict[str, Any], raw_response: str) -> None:
         self.payload = payload
         self.raw_response = raw_response
-        self.echo_binding = echo_binding
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
-        payload = dict(self.payload)
-        if self.echo_binding:
-            payload["request_binding"] = dict(packet["request_binding"])
-            payload["raw_user_input"] = packet["raw_user_input"]
         return SemanticCompilerResponse(
-            parsed_payload=payload,
+            parsed_payload=self.payload,
             raw_response=self.raw_response,
             metadata={"backend_mode": self.mode_name},
             diagnostics={"source": "fixture"},
@@ -193,23 +183,13 @@ class ResponseCompilerBackend:
 class SequenceCompilerBackend:
     mode_name = "sequence"
 
-    def __init__(self, payloads: list[dict[str, Any]], *, echo_binding: bool = True, binding_modes: list[str] | None = None) -> None:
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
         self.payloads = payloads
         self.calls: list[dict[str, Any]] = []
-        self.echo_binding = echo_binding
-        self.binding_modes = binding_modes
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         self.calls.append(packet)
         payload = self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)]
-        payload = dict(payload)
-        binding_mode = self.binding_modes[len(self.calls) - 1] if self.binding_modes and len(self.calls) <= len(self.binding_modes) else ("echo" if self.echo_binding else "none")
-        if binding_mode == "echo":
-            payload["request_binding"] = dict(packet["request_binding"])
-            payload["raw_user_input"] = packet["raw_user_input"]
-        elif binding_mode == "wrong_thread":
-            payload["request_binding"] = {**packet["request_binding"], "thread_id": "stale-thread"}
-            payload["raw_user_input"] = packet["raw_user_input"]
         return SemanticCompilerResponse(
             parsed_payload=payload,
             raw_response="sequence raw response",
@@ -228,11 +208,8 @@ class RecordingCompilerBackend:
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         self.calls.append(packet)
-        payload = dict(self.payload)
-        payload["request_binding"] = dict(packet["request_binding"])
-        payload["raw_user_input"] = packet["raw_user_input"]
         return SemanticCompilerResponse(
-            parsed_payload=payload,
+            parsed_payload=self.payload,
             raw_response="recorded raw compiler response",
             metadata={"backend_mode": self.mode_name},
             diagnostics={"source": "recording"},
@@ -1070,7 +1047,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["expanded_note_count"], 0)
         self.assertFalse(any("wikilink hop" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
 
-    def test_active_focus_does_not_supply_graph_seeds_on_referential_second_turn(self) -> None:
+    def test_active_focus_can_supply_graph_seeds_on_referential_second_turn(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1090,8 +1067,9 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=UnavailableEmbeddingBackend(),
         )
         self.assertEqual(second_turn.semantic_traversal_manifest["graph_traversal"]["enabled"], True)
-        self.assertNotIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
-        self.assertTrue(all(seed["source"] != "active_focus" for seed in second_turn.semantic_traversal_manifest["graph_traversal"]["submitted_seeds"]))
+        self.assertIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
+        self.assertGreater(second_turn.semantic_traversal_manifest["graph_traversal"]["matched_seed_count"], 0)
+        self.assertTrue(any("wikilink hop" in chunk["selection_reason"] for chunk in second_turn.retrieval_packet["selected_chunks"]))
 
     def test_graph_traversal_notes_appear_in_manifest(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
@@ -1258,7 +1236,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         for junk_term in ("raw_user_input", "assistant_response_snippet", "selected_chunk_ids", "selected_note_titles", "{"):
             self.assertNotIn(junk_term, planner_plan["concepts"])
 
-    def test_referential_second_turn_does_not_invent_resolved_referents_after_canonicalization(self) -> None:
+    def test_referential_second_turn_preserves_resolved_referents_after_canonicalization(self) -> None:
         data_root = _prepare_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1307,10 +1285,12 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
         resolved_referents = second_turn.semantic_compiler_packet["planner_retrieval_plan"]["resolved_referents"]
-        self.assertNotIn("candy", resolved_referents)
-        self.assertNotIn("bed", resolved_referents)
+        self.assertIn("candy", resolved_referents)
+        self.assertIn("bed", resolved_referents)
+        self.assertIn("candy", second_turn.next_thread_state["active_focus"]["resolved_referents"])
+        self.assertIn("bed", second_turn.next_thread_state["active_focus"]["resolved_referents"])
 
-    def test_comparison_intent_uses_only_current_plan_subjects(self) -> None:
+    def test_comparison_intent_carries_prior_active_focus_into_semantic_context(self) -> None:
         data_root = _prepare_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1361,8 +1341,8 @@ class ThesisRuntimeTests(unittest.TestCase):
         planner_plan = second_turn.semantic_compiler_packet["planner_retrieval_plan"]
         joined_referents = " ".join(planner_plan["resolved_referents"]).lower()
         joined_semantic_queries = " ".join(planner_plan["semantic_queries"]).lower()
-        self.assertNotIn("schopenhauer", joined_referents)
-        self.assertNotIn("schopenhauer", joined_semantic_queries)
+        self.assertIn("schopenhauer", joined_referents)
+        self.assertIn("schopenhauer", joined_semantic_queries)
         self.assertLessEqual(len(planner_plan["resolved_referents"]), 12)
         self.assertNotIn("relate", [entry["term"] for entry in planner_plan["literal_terms"]])
         self.assertNotIn("contrast", [entry["term"] for entry in planner_plan["literal_terms"]])
@@ -2873,62 +2853,6 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertIn("compiler-declared evidence requirements are incomplete", result.coverage_report["blocking_reasons"])
         self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["lexical"], 0)
         self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], [])
-
-    def test_unbound_stale_compiler_response_retries_once_then_blocks_without_canonicalizing(self) -> None:
-        data_root = _prepare_data_root()
-        stale_payload = {
-            "raw_user_input": "am I building good habits here/",
-            "query": "building good habits here",
-            "planner_retrieval_plan": {"semantic_queries": ["building good habits here"], "graph_seeds": ["building good habits here"], "retrieval_layers": []},
-        }
-        compiler = SequenceCompilerBackend([stale_payload, stale_payload], binding_modes=["none", "none"])
-        result = run_thread_turn(
-            repo_root=REPO_ROOT, data_root=data_root, user_input="what is my sisters name",
-            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
-            embedding_backend=UnavailableEmbeddingBackend(),
-        )
-        self.assertEqual(len(compiler.calls), 2)
-        self.assertEqual(result.semantic_compiler_status, "target_binding_failed")
-        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"], {"exact": 0, "lexical": 0, "vector": 0, "graph": 0, "temporal": 0})
-        self.assertNotIn("building good habits", json.dumps(result.semantic_compiler_packet).lower())
-        self.assertIn("semantic compiler response was not bound to the current turn", result.coverage_report["blocking_reasons"])
-
-    def test_bound_retry_is_canonicalized_only_after_binding_validation(self) -> None:
-        data_root = _prepare_data_root()
-        payload = {
-            "raw_user_input": "what is my sisters name",
-            "query": "sisters name",
-            "planner_retrieval_plan": {"concepts": ["sisters name"], "semantic_queries": ["sisters name"], "lexical_queries": ["sisters name"], "graph_seeds": [], "retrieval_layers": []},
-        }
-        compiler = SequenceCompilerBackend([payload, payload], binding_modes=["none", "echo"])
-        result = run_thread_turn(
-            repo_root=REPO_ROOT, data_root=data_root, user_input="what is my sisters name",
-            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
-            embedding_backend=UnavailableEmbeddingBackend(),
-        )
-        self.assertEqual(len(compiler.calls), 2)
-        self.assertEqual(result.semantic_compiler_status, "parsed")
-        self.assertEqual(result.semantic_compiler_diagnostic["target_binding_retry"]["outcome"], "bound")
-        self.assertEqual(result.semantic_compiler_packet["raw_user_input"], "what is my sisters name")
-        self.assertIn("sisters name", json.dumps(result.semantic_compiler_packet).lower())
-
-    def test_binding_validator_rejects_each_current_turn_identity_mismatch(self) -> None:
-        requested = _new_compiler_request_binding(thread_id="thread", turn_id=3, raw_user_input="current")
-        for field, value in (("thread_id", "other"), ("turn_id", 4), ("compiler_request_id", "other"), ("raw_user_input_sha256", "other")):
-            returned = {"request_binding": {**requested, field: value}, "raw_user_input": "current"}
-            response = SemanticCompilerResponse(parsed_payload=returned, raw_response="raw", metadata={}, diagnostics={}, status="parsed")
-            result = _validate_compiler_response_binding(response=response, requested_binding=requested, raw_user_input="current")
-            self.assertEqual(result["binding_status"], "failed")
-            self.assertIn(field, result["mismatched_fields"])
-
-    def test_turn_artifacts_share_current_thread_and_turn_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            result = run_thread_turn(
-                repo_root=REPO_ROOT, data_root=Path(temp_dir), user_input="current concept",
-                llm_backend=RecordingLLMBackend(), semantic_compiler_backend=TestSemanticCompilerBackend(),
-            )
-            artifacts = [result.semantic_compiler_packet, result.semantic_compiler_diagnostic, result.semantic_traversal_manifest, result.retrieval_packet, result.coverage_report, result.synthesis_context_packet, result.state_delta]
-            self.assertTrue(all(item["thread_id"] == result.thread_id and item["turn_id"] == result.turn_id for item in artifacts))
 
 
 if __name__ == "__main__":

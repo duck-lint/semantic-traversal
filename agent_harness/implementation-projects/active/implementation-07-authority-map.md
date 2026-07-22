@@ -41,15 +41,3 @@ a duplicated codebase; compatibility is opt-in and requires explicit approval.
 | 7 | inventory/ingest/runtime, inventory tests | prompts, UI | persisted inventory reused without full scans |
 | 8 | compiler prompt/schema only | frontier prompt unless proven incompatible | hashes, line diff, golden output retention |
 | 9 | docs/tests/benchmarks/guards | aspirational capability claims | final UAT and risk ledger |
-
-## Runtime turn-integrity authority
-
-Compiler output is executable only when it is bound to the exact current
-request envelope. Schema validity alone does not establish target validity.
-Conversation state is descriptive interpretive context, not retrieval
-authority. Only the current bound compiler plan supplies literal terms,
-queries, seeds, scope aliases, referents, layers, and evidence requirements to
-retrieval. Historical selected evidence cannot become future retrieval input
-unless the current compiler explicitly re-expresses it in current-turn plan
-fields. Active focus remains persisted for compiler interpretation, diagnostics,
-and continuity, but has no direct executor path.

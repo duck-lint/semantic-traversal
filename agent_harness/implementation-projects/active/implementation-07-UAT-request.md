@@ -730,35 +730,3 @@ resolver, and runtime slice passed 138 tests; the complete Python suite passed
 184 tests; compileall and `git diff --check` passed. The status is
 machine-complete/operator-UAT-pending. No new CI success is claimed for queued
 operator screenshots.
-
-## Current-turn integrity replay (2026-07-21)
-
-Persisted thread `thread-70c60d78beaf` was inspected without altering its
-historical artifacts. Turn 6 asked `what is my sisters name`, while the raw
-compiler response was a parsed noncanonical `retrieval_request` for “building
-good habits here”. Canonicalization produced `development of what sisters
-name`, lexical terms `what`, `sisters`, `name`, and graph seed `what sisters
-name`. Its graph manifest listed `active_focus` among seed sources and included
-habit, semantic-geometry, note-title, date, and section material. The turn had
-50 lexical, 0 vector, and 24 graph candidates, with 7 lexical and 17 graph
-selected contributions. Turns 3 through 5 likewise show lagging compiler
-content and active-focus graph sources.
-
-The repair introduces a runtime-owned binding envelope containing thread ID,
-turn ID, unpredictable compiler request ID, and the SHA-256 of the exact raw
-input. Binding is checked before canonicalization, fallback, completeness,
-scope binding, retrieval, focus update, or synthesis. A missing/mismatched
-response gets one fresh current-turn retry; a second failure blocks with
-complete artifacts and no stale semantic fields or retrieval execution.
-
-The graph seed source list now contains only current-plan `graph_seeds` and
-`semantic_queries`. Active focus remains in bounded compiler/synthesis context
-and persisted state, but selected titles, sections, prior queries, and prior
-seeds cannot directly enter an executor. Deterministic fallback carries only
-compact prior concepts/referents for genuinely referential/comparison input;
-self-contained input uses current text only.
-
-The entity/sister retrieval result remains explicitly out of scope. Controlled
-fixtures prove current-plan graph execution, one retry, failed-retry blocking,
-identity mismatch detection, and cross-artifact thread/turn consistency. A
-fresh normal live qwen/plugin UAT is still an operator gate, not claimed here.

@@ -327,8 +327,6 @@ class CompilerSchemaContractTests(unittest.TestCase):
         self.assertIn("origin_of_idea", prompt)
         self.assertIn("concept X origin", prompt)
         self.assertIn("evidence_requirements", prompt)
-        self.assertIn("request_binding", prompt)
-        self.assertIn("raw_user_input_sha256", prompt)
         self.assertIn("chronology", prompt)
 
     def test_evidence_requirements_are_canonical_schema_fields(self) -> None:

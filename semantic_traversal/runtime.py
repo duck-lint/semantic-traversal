@@ -428,8 +428,6 @@ def _validate_compiler_response_binding(
         "returned_binding": dict(returned_binding) if isinstance(returned_binding, dict) else None,
         "binding_status": status,
         "mismatched_fields": list(dict.fromkeys(mismatched_fields)),
-        "raw_response_hash": sha256_text(response.raw_response) if isinstance(response.raw_response, str) else None,
-        "raw_response_preview": _snippet(response.raw_response, limit=400) if isinstance(response.raw_response, str) else None,
     }
 
 
@@ -617,12 +615,6 @@ def _repair_incomplete_compiler_plan(
         return semantic_compiler_packet, "parsed", compiler_response, {"attempted": False, "outcome": "not_needed", "latency_ms": 0}
 
     repair_request = dict(compiler_request)
-    repair_binding = _new_compiler_request_binding(
-        thread_id=str(compiler_request["request_binding"]["thread_id"]),
-        turn_id=int(compiler_request["request_binding"]["turn_id"]),
-        raw_user_input=raw_user_input,
-    )
-    repair_request["request_binding"] = repair_binding
     repair_request["instruction"] = (
         "Repair the compiler retrieval plan exactly once. Preserve raw_user_input, valid semantic fields, and valid layers. "
         "For each declared evidence requirement, add its mapped supported operator or explicitly remove/revise the requirement "
@@ -649,17 +641,7 @@ def _repair_incomplete_compiler_plan(
             status="unavailable",
         )
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
-    repair_binding_diagnostics = _validate_compiler_response_binding(
-        response=repair_response,
-        requested_binding=repair_binding,
-        raw_user_input=raw_user_input,
-    ) if repair_response.status == "parsed" else {
-        "requested_binding": dict(repair_binding),
-        "returned_binding": None,
-        "binding_status": "not_available",
-        "mismatched_fields": [],
-    }
-    if repair_response.status == "parsed" and repair_binding_diagnostics["binding_status"] == "bound":
+    if repair_response.status == "parsed" and isinstance(repair_response.parsed_payload, dict):
         repaired_packet, repaired_status = _compiler_response_to_packet(
             raw_user_input=raw_user_input,
             prior_thread_state=prior_thread_state,
@@ -668,20 +650,15 @@ def _repair_incomplete_compiler_plan(
             config=config,
             response=repair_response,
         )
-        repaired_packet["request_binding"] = dict(repair_binding)
     else:
-        repaired_packet = _target_binding_failure_packet(raw_user_input=raw_user_input, request_binding=repair_binding)
-        repaired_status = "target_binding_failed" if repair_response.status == "parsed" else "repair_failed"
+        repaired_packet, repaired_status = semantic_compiler_packet, "repair_failed"
     repaired_plan = repaired_packet.get("planner_retrieval_plan") if isinstance(repaired_packet.get("planner_retrieval_plan"), dict) else {}
     repaired_completeness = validate_plan_completeness(planner_retrieval_plan=repaired_plan, config=config)
-    if repaired_status == "target_binding_failed":
-        repaired_completeness = {"status": "incomplete", "reason": "semantic compiler response was not bound to the current turn"}
     repair_record = {
         "attempted": True,
         "latency_ms": latency_ms,
         "outcome": "complete" if repaired_completeness.get("status") == "complete" else "incomplete",
         "response_status": repair_response.status,
-        "binding": repair_binding_diagnostics,
     }
     repaired_completeness["repair_attempted"] = True
     repaired_completeness["repair_result"] = repair_record["outcome"]
@@ -705,14 +682,7 @@ def _incomplete_plan_artifacts(
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
     completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
-    target_binding_failure = bool(semantic_compiler_packet.get("planner_diagnostics", {}).get("target_binding_failure"))
-    if target_binding_failure:
-        completeness = {"status": "incomplete", "reason": "semantic compiler response was not bound to the current turn"}
-    note = (
-        "retrieval blocked: semantic compiler response was not bound to the current turn"
-        if target_binding_failure
-        else "retrieval blocked: compiler-declared evidence requirements are incomplete"
-    )
+    note = "retrieval blocked: compiler-declared evidence requirements are incomplete"
     manifest = {
         "planner_retrieval_plan": planner,
         "bound_retrieval_plan": bound,
@@ -3041,13 +3011,11 @@ def _coverage_report(
     blocking_reasons: list[str] = []
     if semantic_compiler_status != "parsed":
         blocking_reasons.append(f"semantic compiler status is {semantic_compiler_status}; parsed compiler output is required")
-    if semantic_compiler_status == "target_binding_failed":
-        blocking_reasons.append("semantic compiler response was not bound to the current turn")
     if not compiler_valid:
         blocking_reasons.append("semantic compiler packet is missing or malformed")
     planner_diagnostics = semantic_compiler_packet.get("planner_diagnostics") if isinstance(semantic_compiler_packet, dict) else {}
     plan_completeness = planner_diagnostics.get("plan_completeness") if isinstance(planner_diagnostics, dict) else None
-    if semantic_compiler_status != "target_binding_failed" and isinstance(plan_completeness, dict) and plan_completeness.get("status") != "complete":
+    if isinstance(plan_completeness, dict) and plan_completeness.get("status") != "complete":
         blocking_reasons.append("compiler-declared evidence requirements are incomplete")
     bound_plan = traversal_manifest.get("bound_retrieval_plan") if isinstance(traversal_manifest.get("bound_retrieval_plan"), dict) else {}
     graph_seeds = list(bound_plan.get("graph_seeds") or [])
@@ -3279,7 +3247,6 @@ def _update_thread_state(
     retrieval_packet: dict[str, Any],
     created_at: str,
     config: RuntimeConfig,
-    preserve_active_focus: bool = False,
 ) -> dict[str, Any]:
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
@@ -3299,7 +3266,7 @@ def _update_thread_state(
         )
     )
     recent_semantic_turns = recent_semantic_turns[-int(config.runtime_conversation["recent_semantic_turn_limit"]):]
-    active_focus = _normalize_active_focus(prior_thread_state.get("active_focus")) if preserve_active_focus else _compact_active_focus(
+    active_focus = _compact_active_focus(
         planner_retrieval_plan=planner_retrieval_plan,
         retrieval_packet=retrieval_packet,
     )
@@ -3417,7 +3384,6 @@ def run_thread_turn(
         recent_semantic_turns=recent_semantic_turns,
         active_focus=active_focus,
         resource_inventory_summary=resource_inventory_summary,
-        request_binding=_new_compiler_request_binding(thread_id=thread_id_value, turn_id=turn_id, raw_user_input=user_input),
     )
     compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(config=resolved_config)
     try:
@@ -3431,97 +3397,16 @@ def run_thread_turn(
             status="unavailable",
         )
 
-    requested_binding = compiler_request["request_binding"]
-    binding_diagnostics = _validate_compiler_response_binding(
-        response=compiler_response,
-        requested_binding=requested_binding,
+    semantic_compiler_packet, semantic_compiler_status = _compiler_response_to_packet(
         raw_user_input=user_input,
-    ) if compiler_response.status == "parsed" else {
-        "requested_binding": dict(requested_binding),
-        "returned_binding": None,
-        "binding_status": "not_available",
-        "mismatched_fields": [],
-    }
-    binding_retry_record: dict[str, Any] = {"attempted": False, "outcome": "not_needed", "request_id": None}
-    initial_binding_diagnostics = dict(binding_diagnostics)
-    if compiler_response.status == "parsed" and binding_diagnostics["binding_status"] != "bound":
-        retry_binding = _new_compiler_request_binding(thread_id=thread_id_value, turn_id=turn_id, raw_user_input=user_input)
-        retry_request = dict(compiler_request)
-        retry_request["request_binding"] = retry_binding
-        retry_request["instruction"] = (
-            "The previous compiler response failed current-turn binding. Ignore it completely and compile a fresh retrieval "
-            "plan for this exact current request_binding and raw_user_input. Echo the complete request_binding exactly. "
-            "Return JSON only; do not continue or edit stale semantic content."
-        )
-        try:
-            retry_response = compiler_backend.compile_turn(retry_request)
-        except Exception as exc:  # noqa: BLE001
-            retry_response = SemanticCompilerResponse(
-                parsed_payload=None,
-                raw_response=None,
-                metadata={"backend_mode": getattr(compiler_backend, "mode_name", "unknown"), "error": str(exc)},
-                diagnostics={},
-                status="unavailable",
-            )
-        binding_retry_record = {
-            "attempted": True,
-            "outcome": "bound" if retry_response.status == "parsed" and _validate_compiler_response_binding(
-                response=retry_response, requested_binding=retry_binding, raw_user_input=user_input
-            )["binding_status"] == "bound" else "failed",
-            "request_id": retry_binding["compiler_request_id"],
-        }
-        retry_binding_diagnostics = _validate_compiler_response_binding(
-            response=retry_response,
-            requested_binding=retry_binding,
-            raw_user_input=user_input,
-        ) if retry_response.status == "parsed" else {
-            "requested_binding": dict(retry_binding),
-            "returned_binding": None,
-            "binding_status": "not_available",
-            "mismatched_fields": [],
-        }
-        binding_diagnostics["retry"] = retry_binding_diagnostics
-        if retry_response.status == "parsed" and retry_binding_diagnostics["binding_status"] == "bound":
-            compiler_response = retry_response
-            requested_binding = retry_binding
-            binding_diagnostics = retry_binding_diagnostics
-        else:
-            compiler_response = SemanticCompilerResponse(
-                parsed_payload=compiler_response.parsed_payload,
-                raw_response=retry_response.raw_response or compiler_response.raw_response,
-                metadata={**compiler_response.metadata, "target_binding_failure": True},
-                diagnostics={**compiler_response.diagnostics, "target_binding_failure": True},
-                status="target_binding_failed",
-            )
-
-    if compiler_response.status == "parsed" and binding_diagnostics.get("binding_status") == "bound":
-        semantic_compiler_packet, semantic_compiler_status = _compiler_response_to_packet(
-            raw_user_input=user_input,
-            prior_thread_state=prior_thread_state,
-            active_focus=active_focus,
-            recent_semantic_turns=recent_semantic_turns,
-            response=compiler_response,
-            config=resolved_config,
-        )
-        semantic_compiler_packet["request_binding"] = dict(requested_binding)
-        semantic_compiler_status = "parsed"
-    elif compiler_response.status == "target_binding_failed":
-        semantic_compiler_packet = _target_binding_failure_packet(raw_user_input=user_input, request_binding=requested_binding)
-        semantic_compiler_status = "target_binding_failed"
-    else:
-        semantic_compiler_packet, semantic_compiler_status = _compiler_response_to_packet(
-            raw_user_input=user_input,
-            prior_thread_state=prior_thread_state,
-            active_focus=active_focus,
-            recent_semantic_turns=recent_semantic_turns,
-            response=compiler_response,
-            config=resolved_config,
-        )
-        semantic_compiler_packet["request_binding"] = dict(requested_binding)
+        prior_thread_state=prior_thread_state,
+        active_focus=active_focus,
+        recent_semantic_turns=recent_semantic_turns,
+        response=compiler_response,
+        config=resolved_config,
+    )
     planner_for_completeness = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     initial_completeness = validate_plan_completeness(planner_retrieval_plan=planner_for_completeness, config=resolved_config)
-    if semantic_compiler_status == "target_binding_failed":
-        initial_completeness = {"status": "incomplete", "reason": "semantic compiler response was not bound to the current turn"}
     semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = initial_completeness
     repair_record = {"attempted": False, "outcome": "not_needed", "latency_ms": 0}
     if initial_completeness.get("status") != "complete" and compiler_response.status == "parsed":
@@ -3543,9 +3428,6 @@ def run_thread_turn(
         config=resolved_config,
     )
     semantic_compiler_diagnostic["plan_repair"] = repair_record
-    semantic_compiler_diagnostic["target_binding"] = binding_diagnostics
-    semantic_compiler_diagnostic["target_binding_initial"] = initial_binding_diagnostics
-    semantic_compiler_diagnostic["target_binding_retry"] = binding_retry_record
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
         planner_retrieval_plan = build_default_retrieval_plan(
@@ -3634,12 +3516,6 @@ def run_thread_turn(
         retrieval_packet=retrieval_packet,
     )
 
-    # Every durable turn artifact carries the same current-turn identity. This
-    # makes cross-artifact drift observable when a compiler response is stale.
-    for artifact in (semantic_compiler_packet, semantic_compiler_diagnostic, semantic_traversal_manifest, retrieval_packet, coverage_report):
-        artifact["thread_id"] = thread_id_value
-        artifact["turn_id"] = turn_id
-
     blocking_reasons = list(coverage_report.get("blocking_reasons") or [])
     llm_unavailable_reason = getattr(llm_backend, "unavailable_reason", None)
     if coverage_report["decision"] == "approved" and llm_unavailable_reason:
@@ -3722,7 +3598,6 @@ def run_thread_turn(
         retrieval_packet=retrieval_packet,
         created_at=created_at,
         config=resolved_config,
-        preserve_active_focus=semantic_compiler_status == "target_binding_failed",
     )
 
     conversation_thread = _build_conversation_thread(

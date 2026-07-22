@@ -11,27 +11,7 @@ from .hashing import sha256_text
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, scope_requests_from_text
 
 
-INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics", "request_binding"}
-
-OLLAMA_COMPILER_RESPONSE_SCHEMA = {
-    "type": "object",
-    "required": ["request_binding", "raw_user_input", "query", "planner_retrieval_plan"],
-    "properties": {
-        "request_binding": {
-            "type": "object",
-            "required": ["thread_id", "turn_id", "compiler_request_id", "raw_user_input_sha256"],
-            "properties": {
-                "thread_id": {"type": "string"},
-                "turn_id": {"type": "integer"},
-                "compiler_request_id": {"type": "string"},
-                "raw_user_input_sha256": {"type": "string"},
-            },
-        },
-        "raw_user_input": {"type": "string"},
-        "query": {"type": "string"},
-        "planner_retrieval_plan": {"type": "object"},
-    },
-}
+INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics"}
 
 
 COMPILER_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -361,8 +341,6 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     if not isinstance(payload, dict):
         return fallback
     result = dict(fallback)
-    if isinstance(payload.get("request_binding"), dict):
-        result["request_binding"] = dict(payload["request_binding"])
     result["raw_user_input"] = raw_user_input
     result["intent"] = str(payload.get("intent") or result["intent"]).strip() or result["intent"]
     model_query = payload.get("query") if isinstance(payload.get("query"), str) else ""
@@ -498,7 +476,7 @@ class OllamaSemanticCompilerBackend:
             )
         prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template, planner_defaults=self._planner_defaults)
         prompt_hash = sha256_text(prompt)
-        payload = {"model": self._model, "prompt": prompt, "stream": False, "format": OLLAMA_COMPILER_RESPONSE_SCHEMA}
+        payload = {"model": self._model, "prompt": prompt, "stream": False}
         raw_response_text: str | None = None
         try:
             http_request = request.Request(

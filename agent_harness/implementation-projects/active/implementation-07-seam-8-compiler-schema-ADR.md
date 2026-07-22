@@ -261,19 +261,3 @@ This is a forward-only clean cutover. Superseded observed-value scope binders
 and incomplete-plan execution behavior are not retained for compatibility. The
 accepted subject-preserving and explicit-empty contract remains intact, and
 the frontier prompt remains unchanged.
-
-### Post-Seam-8 runtime-integrity repair (2026-07-21)
-
-Compiler responses now require an exact runtime binding envelope before any
-semantic field is canonicalized. One fresh retry uses a new request ID; a
-second missing or mismatched binding blocks retrieval and synthesis. The
-Ollama backend requests JSON output but returns parsed model content unchanged
-so runtime validation precedes normalization.
-
-Conversation context remains available to compiler and frontier synthesis, but
-only the current bound plan supplies retrieval coordinates. The YAML graph seed
-source list no longer includes `active_focus`; prior selected titles, sections,
-chunk IDs, queries, and seeds have no direct executor path. Referential
-continuity remains possible only when the current compiler or deterministic
-referential fallback materializes compact referents into current plan fields.
-This repair does not address entity retrieval correctness.
