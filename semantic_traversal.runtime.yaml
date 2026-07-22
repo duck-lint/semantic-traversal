@@ -93,7 +93,6 @@ graph_traversal:
   max_candidates: 24
   seed_sources:
     - graph_seeds
-    - active_focus
     - semantic_queries
   edge_type_allowlist:
     - note_links_note

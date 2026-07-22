@@ -14,6 +14,18 @@
 | Compiler-declared evidence requirements | Semantic compiler declaration checked against YAML operator mapping | `semantic_compiler.py`, `retrieval_resolver.py`, `runtime.py` | Completeness and bounded-repair tests |
 | Compiler-facing scope authority | YAML-configured scope aliases only; observed inventory is descriptive | `retrieval_resolver.py`, `resource_inventory.py` | Unauthorized observed-value scope regressions |
 
+## Conversation-state execution boundary (2026-07-21)
+
+Persisted conversation state is descriptive interpretive context. It may be
+supplied to the compiler and bounded synthesis context, and the deterministic
+fallback may inspect compact prior concepts or resolved referents only for an
+explicit referential/comparison input. It has no direct retrieval authority.
+Only fields serialized into the current planner retrieval plan supply executor
+inputs. Active focus, prior selected evidence, prior queries, prior graph
+seeds, selected titles/sections, and prior raw user input are not graph seeds
+or other executor coordinates. Compiler semantic targeting remains an
+unresolved control-plane issue outside this narrow boundary repair.
+
 ## Forward-only clean-cutover invariant
 
 Implementation 07 uses forward-only clean-cutover development. Superseded

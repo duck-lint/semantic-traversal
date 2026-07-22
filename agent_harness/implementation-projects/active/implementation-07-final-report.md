@@ -157,3 +157,23 @@ Focused resolver/compiler/runtime tests and the read-only operator replay cover
 these boundaries. This is a forward-only clean cutover, not a compatibility
 layer. Seam 9's historical machine closeout and its remaining operator UI/new
 CI gates are unchanged.
+
+## Post-closeout direct conversation-state retrieval-authority repair (2026-07-21)
+
+This narrow repair removed the executable path from persisted state to graph
+seed construction. YAML graph seed sources now contain only `graph_seeds` and
+`semantic_queries`; `_graph_seed_values` accepts only the current planner plan
+and config; and graph candidate construction no longer receives prior thread
+state. Self-contained fallback no longer appends previous raw input. Runtime
+and semantic-compiler canonicalizers no longer append prior focus. Compact
+referential/comparison fallback carry remains limited to prior concepts and
+resolved referents materialized in the current plan.
+
+Read-only replay of `thread-70c60d78beaf` turn 6 found 45 historical
+`active_focus` seeds among 47 submitted graph seeds. Repaired construction
+submitted exactly the two current-plan seeds: `what sisters name` and
+`development of what sisters name`; prior selected titles/sections and raw
+input were absent. The stale compiler target remains unresolved and was not
+claimed fixed. No executor, threshold, fusion, selection, temporal, inventory,
+ingest, compiler-context, or frontier behavior changed. Status remains
+machine-complete/operator-UAT-pending; UI and new CI evidence remain open.

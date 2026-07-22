@@ -8,7 +8,7 @@ from urllib import error, request
 
 from .config import RuntimeConfig
 from .hashing import sha256_text
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, is_comparison_intent, _focus_carry_terms, scope_requests_from_text
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, scope_requests_from_text
 
 
 INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics"}
@@ -372,13 +372,6 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         result["limitations"] = cleaned_limitations
     else:
         result["limitations"] = []
-    focus_terms = _focus_carry_terms(
-        active_focus=packet.get("active_focus") if isinstance(packet, dict) and isinstance(packet.get("active_focus"), dict) else None,
-        recent_semantic_turns=packet.get("recent_semantic_turns") if isinstance(packet, dict) and isinstance(packet.get("recent_semantic_turns"), list) else None,
-    )
-    carry_focus_terms = _is_referential_input(raw_user_input) or is_comparison_intent(raw_user_input)
-    if carry_focus_terms and focus_terms:
-        result["resolved_referents"] = list(dict.fromkeys([*result["resolved_referents"], *focus_terms]))
     planner_payload = payload.get("planner_retrieval_plan")
     subjects, subject_source = _subject_values(
         planner_payload=planner_payload,
@@ -401,11 +394,6 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         planner_defaults=planner_defaults,
     )
     canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(planner_payload, fallback=fallback_plan, planner_defaults=planner_defaults, raw_user_input=raw_user_input)
-    if carry_focus_terms and focus_terms:
-        canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *focus_terms]))
-        comparison_query = " ".join([result["query"], *focus_terms[:6]]).strip()
-        if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
-            canonical_plan["semantic_queries"].append(comparison_query)
     subject_query_adjustments = _repair_subject_bearing_queries(canonical_plan, subjects)
     graph_seed_adjustments = _repair_graph_seeds(canonical_plan, subjects)
     minimal_subject_basis, overlapping_subject_candidates = _minimal_subject_basis(subjects)

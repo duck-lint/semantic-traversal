@@ -1047,7 +1047,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["expanded_note_count"], 0)
         self.assertFalse(any("wikilink hop" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
 
-    def test_active_focus_can_supply_graph_seeds_on_referential_second_turn(self) -> None:
+    def test_active_focus_cannot_supply_graph_seeds_on_referential_second_turn(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1067,9 +1067,9 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=UnavailableEmbeddingBackend(),
         )
         self.assertEqual(second_turn.semantic_traversal_manifest["graph_traversal"]["enabled"], True)
-        self.assertIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
-        self.assertGreater(second_turn.semantic_traversal_manifest["graph_traversal"]["matched_seed_count"], 0)
-        self.assertTrue(any("wikilink hop" in chunk["selection_reason"] for chunk in second_turn.retrieval_packet["selected_chunks"]))
+        self.assertNotIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
+        self.assertEqual(second_turn.semantic_traversal_manifest["graph_traversal"]["matched_seed_count"], 0)
+        self.assertFalse(any("active_focus" in str(seed) for seed in second_turn.semantic_traversal_manifest["graph_traversal"]["submitted_seeds"]))
 
     def test_graph_traversal_notes_appear_in_manifest(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
@@ -1236,7 +1236,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         for junk_term in ("raw_user_input", "assistant_response_snippet", "selected_chunk_ids", "selected_note_titles", "{"):
             self.assertNotIn(junk_term, planner_plan["concepts"])
 
-    def test_referential_second_turn_preserves_resolved_referents_after_canonicalization(self) -> None:
+    def test_compiler_canonicalization_does_not_inject_prior_focus(self) -> None:
         data_root = _prepare_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1285,12 +1285,10 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
         resolved_referents = second_turn.semantic_compiler_packet["planner_retrieval_plan"]["resolved_referents"]
-        self.assertIn("candy", resolved_referents)
-        self.assertIn("bed", resolved_referents)
-        self.assertIn("candy", second_turn.next_thread_state["active_focus"]["resolved_referents"])
-        self.assertIn("bed", second_turn.next_thread_state["active_focus"]["resolved_referents"])
+        self.assertEqual(resolved_referents, [])
+        self.assertNotIn("candy", " ".join(second_turn.semantic_compiler_packet["planner_retrieval_plan"]["semantic_queries"]))
 
-    def test_comparison_intent_carries_prior_active_focus_into_semantic_context(self) -> None:
+    def test_comparison_plan_uses_only_current_subjects(self) -> None:
         data_root = _prepare_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1341,8 +1339,8 @@ class ThesisRuntimeTests(unittest.TestCase):
         planner_plan = second_turn.semantic_compiler_packet["planner_retrieval_plan"]
         joined_referents = " ".join(planner_plan["resolved_referents"]).lower()
         joined_semantic_queries = " ".join(planner_plan["semantic_queries"]).lower()
-        self.assertIn("schopenhauer", joined_referents)
-        self.assertIn("schopenhauer", joined_semantic_queries)
+        self.assertNotIn("schopenhauer", joined_referents)
+        self.assertNotIn("schopenhauer", joined_semantic_queries)
         self.assertLessEqual(len(planner_plan["resolved_referents"]), 12)
         self.assertNotIn("relate", [entry["term"] for entry in planner_plan["literal_terms"]])
         self.assertNotIn("contrast", [entry["term"] for entry in planner_plan["literal_terms"]])

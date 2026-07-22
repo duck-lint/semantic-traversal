@@ -730,3 +730,18 @@ resolver, and runtime slice passed 138 tests; the complete Python suite passed
 184 tests; compileall and `git diff --check` passed. The status is
 machine-complete/operator-UAT-pending. No new CI success is claimed for queued
 operator screenshots.
+## Post-closeout direct conversation-state authority repair (2026-07-21)
+
+The persisted turn-6 artifact from `thread-70c60d78beaf` was replayed without
+mutation. Its current plan contained `what sisters name` as a graph seed and
+`development of what sisters name` as a semantic query. The historical graph
+manifest additionally submitted 45 seeds sourced from `active_focus`, for 47
+submitted seeds total. Under repaired graph construction, only the two
+current-plan tuples were submitted; active-focus and selected-title/section
+derived seeds were absent.
+
+This is a retrieval-authority repair only. The stale compiler output targeting
+an earlier topic remains an unresolved semantic-targeting/control-plane issue;
+it was not fixed here. Conversation context remains available to compiler and
+synthesis, while only current-plan fields reach executors. Machine status
+remains complete/operator-UAT-pending; no UI UAT or new CI success is claimed.

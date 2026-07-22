@@ -413,3 +413,25 @@ requirement fields remain explicit empty fields; deterministic fallback plans
 may declare their own requirements. This is a forward-only clean cutover: the
 superseded observed-value binders and incomplete-plan execution path are not
 retained for compatibility.
+
+## Direct conversation-state retrieval authority repair (2026-07-21)
+
+Removed `active_focus` from YAML graph seed sources; `_graph_seed_values` now
+accepts only the current planner retrieval plan and config; and graph
+candidate construction no longer receives prior thread state. Self-contained
+fallback no longer appends previous raw user input. Runtime and semantic
+compiler canonicalizers no longer append prior focus to current resolved
+referents or queries. Compact referential/comparison fallback carry is limited
+to prior concepts and resolved referents and is serialized into the current
+plan.
+
+Read-only replay of `thread-70c60d78beaf` turn 6 found 45 historical
+`active_focus` seeds among 47 submitted graph seeds. Repaired construction
+submitted exactly two current-plan tuples: `graph_seeds` / `what sisters name`
+and `semantic_queries` / `development of what sisters name`. Active-focus and
+selected-title/section-derived seeds were absent. The stale compiler target is
+not fixed by this repair and remains an unresolved control-plane issue.
+
+Status remains machine-complete/operator-UAT-pending. No compiler context,
+executor, threshold, fusion, selection, temporal, inventory, ingest, or
+frontier behavior was changed; UI and new CI evidence remain open.
