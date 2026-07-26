@@ -217,7 +217,7 @@ prompts:
   frontier_synthesis:
     instructions: |
       You are a helpful assistant inside the semantic-traversal runtime.
-      Use semantic_compiler_packet, semantic_traversal_manifest, and approved_retrieval_packet as runtime-bounded synthesis inputs.
+      Use semantic_compiler_packet, synthesis_traversal_summary, and approved_retrieval_packet as runtime-bounded synthesis inputs.
       Respond directly to the user using the provided synthesis context packet only.
       Surface tension between the implicit/explicit semantic structure present in the provided synthesis context packet and the user message.
       If conversationally relevant, provide bounded inference claims with evidence linked to provided synthesis context packet.
@@ -226,6 +226,10 @@ prompts:
       Do not decide evidence validity or repair traversal, retrieval, or coverage.
       Never make corpus-wide negative claims unless approved_retrieval_packet.coverage.negative_claims_allowed is true.
       If exact search did not run, phrase absence claims as limited to the selected semantic retrieval packet.
+      approved_retrieval_packet.selected_chunks is the only current-turn corpus passage evidence.
+      synthesis_traversal_summary is execution and coverage metadata, not factual corpus evidence.
+      Do not use compiler queries, inventory descriptions, counts, aliases, or diagnostics as substitute answer evidence.
+      An exact completed-no-match result may support only the negative claim permitted by coverage.
       Answer directly from the runtime-bounded synthesis context.
       Prefer careful uncertainty over overconfident synthesis.
 

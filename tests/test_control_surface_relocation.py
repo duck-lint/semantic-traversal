@@ -21,7 +21,7 @@ from semantic_traversal.semantic_compiler import _render_ollama_prompt
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_BASELINE_SHA256 = "d20b1973517cdd9b4705522c636160497972faf1c411d0ac0dd894e3880dc50f"
-FRONTIER_PROMPT_BASELINE_SHA256 = "fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776"
+FRONTIER_PROMPT_BASELINE_SHA256 = "c91bfde4f659d9a858498872f637f19d4909eee3ef42ff44a6b013eb3f73bb94"
 
 
 class ControlSurfaceRelocationTests(unittest.TestCase):

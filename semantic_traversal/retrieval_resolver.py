@@ -150,6 +150,110 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
     }
 
 
+def validate_plan_executability(*, planner_retrieval_plan: dict[str, Any], config: RuntimeConfig) -> dict[str, Any]:
+    """Check that each requested operator has usable inputs from this plan only."""
+    plan = planner_retrieval_plan if isinstance(planner_retrieval_plan, dict) else {}
+    requested: list[str] = []
+    for layer in plan.get("retrieval_layers", []):
+        if not isinstance(layer, dict):
+            continue
+        operator = str(layer.get("operator") or "").strip()
+        if operator and operator not in requested:
+            requested.append(operator)
+
+    semantic_queries = [value.strip() for value in coerce_string_list(plan.get("semantic_queries")) if value.strip()]
+    lexical_queries = [value.strip() for value in coerce_string_list(plan.get("lexical_queries")) if value.strip()]
+    graph_seeds = [value.strip() for value in coerce_string_list(plan.get("graph_seeds")) if value.strip()]
+    literal_terms = [
+        str(entry.get("term") or "").strip()
+        for entry in plan.get("literal_terms", [])
+        if isinstance(entry, dict) and str(entry.get("term") or "").strip()
+    ]
+    configured_graph_sources = tuple(config.graph_traversal_seed_sources)
+    operator_results: list[dict[str, Any]] = []
+    executable: list[str] = []
+    blocking_reasons: list[str] = []
+    supported = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+
+    for operator in requested:
+        if operator not in supported:
+            result = {
+                "operator": operator,
+                "status": "invalid_input",
+                "required_inputs": [],
+                "present_inputs": [],
+                "reason": "retrieval operator is unsupported by this runtime seam",
+            }
+        elif operator == "exact_chunk_search":
+            present = ["literal_terms"] if literal_terms else []
+            result = {
+                "operator": operator,
+                "status": "executable" if present else "missing_input",
+                "required_inputs": ["literal_terms"],
+                "present_inputs": present,
+                "reason": "" if present else "no usable literal-term record is present in the current plan",
+            }
+        elif operator == "lexical_chunk_search":
+            present = ["lexical_queries"] if lexical_queries else ["semantic_queries"] if semantic_queries else []
+            result = {
+                "operator": operator,
+                "status": "executable" if present else "missing_input",
+                "required_inputs": ["lexical_queries", "semantic_queries"],
+                "present_inputs": present,
+                "reason": "" if not present or present == ["lexical_queries"] else "lexical_queries absent; using current-plan semantic_queries as the explicit lexical fallback",
+            }
+        elif operator == "vector_search":
+            present = ["semantic_queries"] if semantic_queries else []
+            result = {
+                "operator": operator,
+                "status": "executable" if present else "missing_input",
+                "required_inputs": ["semantic_queries"],
+                "present_inputs": present,
+                "reason": "" if present else "no usable semantic_queries value is present in the current plan",
+            }
+        elif operator == "graph_expand":
+            present_sources = [
+                source for source in configured_graph_sources
+                if (source == "graph_seeds" and graph_seeds) or (source == "semantic_queries" and semantic_queries)
+            ]
+            present = list(present_sources)
+            result = {
+                "operator": operator,
+                "status": "executable" if present else "missing_input",
+                "required_inputs": list(configured_graph_sources),
+                "present_inputs": present,
+                "reason": "" if present else "no permitted configured graph seed source has a usable current-plan value",
+            }
+        else:
+            present = []
+            if semantic_queries:
+                present.append("semantic_queries")
+            if lexical_queries:
+                present.append("lexical_queries")
+            result = {
+                "operator": operator,
+                "status": "executable" if present else "missing_input",
+                "required_inputs": ["semantic_queries", "lexical_queries"],
+                "present_inputs": present,
+                "reason": "" if present else "no usable temporal relevance query is present in the current plan",
+            }
+        operator_results.append(result)
+        if result["status"] == "executable":
+            executable.append(operator)
+        else:
+            blocking_reasons.append(f"{operator}: {result['reason']}")
+
+    has_retrieval_intent = bool(requested)
+    if not requested:
+        blocking_reasons.append("current plan requested no supported retrieval operator")
+    return {
+        "status": "executable" if requested and not blocking_reasons else "non_executable",
+        "requested_operators": requested,
+        "executable_operators": executable,
+        "operator_results": operator_results,
+        "has_retrieval_intent": has_retrieval_intent,
+        "blocking_reasons": blocking_reasons,
+    }
 def bind_retrieval_plan(
     *,
     planner_retrieval_plan: dict[str, Any],

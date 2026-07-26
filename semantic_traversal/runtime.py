@@ -22,7 +22,7 @@ from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .resource_inventory import build_resource_inventory, load_persisted_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
-from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness
+from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness, validate_plan_executability
 from .text_filters import is_low_signal_apparatus_text
 from .temporal import parse_temporal_value, relation_for_anchor
 from .semantic_compiler import (
@@ -622,6 +622,7 @@ def _incomplete_plan_artifacts(
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
     completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
+    plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
     note = "retrieval blocked: compiler-declared evidence requirements are incomplete"
     manifest = {
         "planner_retrieval_plan": planner,
@@ -634,15 +635,88 @@ def _incomplete_plan_artifacts(
         "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0, "temporal": 0},
         "selected_chunk_ids": [],
         "layer_manifests": {},
-        "unsupported_layer_requests": [],
+        "unsupported_layer_requests": [
+            {
+                "operator": str(layer.get("operator") or ""),
+                "required": bool(layer.get("required")),
+                "supplied_fields": dict(layer),
+                "reason": "retrieval operator is not supported by this runtime seam",
+            }
+            for layer in bound.get("retrieval_layers", [])
+            if isinstance(layer, dict) and str(layer.get("operator") or "") not in {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+        ],
         "plan_completeness": completeness,
-        "coverage": {"exact_search_performed": False, "exact_status": "not_requested", "scope": bound.get("scope_filters", {}), "literal_terms": [], "coverage_claims_allowed": False, "negative_claims_allowed": False, "required_layer_results": [], "plan_completeness": completeness},
+        "plan_executability": plan_executability,
+        "coverage": {"exact_search_performed": False, "exact_status": "not_requested", "scope": bound.get("scope_filters", {}), "literal_terms": [], "coverage_claims_allowed": False, "negative_claims_allowed": False, "required_layer_results": [], "plan_completeness": completeness, "plan_executability": plan_executability},
         "limits": ["Retrieval was not executed because the compiler plan was incomplete."],
         "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
         "scope_resolution": {"hard": bound.get("scope_filters", {}), "preferred": bound.get("preferred_scope_filters", {}), "bound_requests": bound.get("scope_resolution", {})},
         "selection_notes": [note],
     }
     packet = {"bound_retrieval_plan": bound, "coverage": manifest["coverage"], "limits": manifest["limits"], "selected_chunks": [], "matched_chunk_count": 0, "retrieval_observation": "blocked_incomplete_plan", "assembled_from_traversal_manifest": True}
+    return manifest, packet
+
+
+def _non_executable_plan_artifacts(
+    *,
+    semantic_compiler_packet: dict[str, Any],
+    config: RuntimeConfig,
+    resource_inventory_summary: dict[str, Any],
+    plan_executability: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Persist a blocked plan without opening the database or binding inputs."""
+    planner = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    note = "retrieval blocked: semantic compiler produced a non-executable retrieval plan"
+    coverage = {
+        "exact_search_performed": False,
+        "exact_status": "not_requested",
+        "scope": {},
+        "literal_terms": [],
+        "coverage_claims_allowed": False,
+        "negative_claims_allowed": False,
+        "required_layer_results": [],
+        "plan_completeness": completeness,
+        "plan_executability": plan_executability,
+    }
+    manifest = {
+        "planner_retrieval_plan": planner,
+        "bound_retrieval_plan": planner,
+        "resolver_adjustments": [],
+        "resource_inventory_summary": resource_inventory_summary,
+        "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
+        "execution": {"layers_executed": [], "layers_skipped": [{"reason": "non-executable plan"}]},
+        "candidate_counts": {key: 0 for key in ("exact", "lexical", "vector", "graph", "temporal")},
+        "selected_counts": {key: 0 for key in ("exact", "lexical", "vector", "graph", "temporal")},
+        "selected_chunk_ids": [],
+        "layer_manifests": {},
+        "unsupported_layer_requests": [
+            {
+                "operator": str(layer.get("operator") or ""),
+                "required": bool(layer.get("required")),
+                "supplied_fields": dict(layer),
+                "reason": "retrieval operator is not supported by this runtime seam",
+            }
+            for layer in planner.get("retrieval_layers", [])
+            if isinstance(layer, dict) and str(layer.get("operator") or "") not in {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+        ],
+        "plan_completeness": completeness,
+        "plan_executability": plan_executability,
+        "coverage": coverage,
+        "limits": ["Retrieval was not executed because the compiler plan was not executable."],
+        "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
+        "scope_resolution": {"hard": {}, "preferred": {}, "bound_requests": {}},
+        "selection_notes": [note],
+    }
+    packet = {
+        "bound_retrieval_plan": planner,
+        "coverage": coverage,
+        "limits": manifest["limits"],
+        "selected_chunks": [],
+        "matched_chunk_count": 0,
+        "retrieval_observation": "blocked_non_executable_plan",
+        "assembled_from_traversal_manifest": True,
+    }
     return manifest, packet
 
 
@@ -2480,6 +2554,7 @@ def _semantic_traversal(
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
     plan_completeness = validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
+    plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
 
     scope_filters = bound_retrieval_plan.get("scope_filters") if isinstance(bound_retrieval_plan.get("scope_filters"), dict) else {}
     literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
@@ -2877,6 +2952,7 @@ def _semantic_traversal(
         "layer_manifests": layer_manifests,
         "unsupported_layer_requests": unsupported_layer_requests,
         "plan_completeness": plan_completeness,
+        "plan_executability": plan_executability,
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
@@ -2957,9 +3033,11 @@ def _coverage_report(
     plan_completeness = planner_diagnostics.get("plan_completeness") if isinstance(planner_diagnostics, dict) else None
     if isinstance(plan_completeness, dict) and plan_completeness.get("status") != "complete":
         blocking_reasons.append("compiler-declared evidence requirements are incomplete")
+    plan_executability = planner_diagnostics.get("plan_executability") if isinstance(planner_diagnostics, dict) else None
+    if isinstance(plan_executability, dict) and plan_executability.get("status") != "executable":
+        blocking_reasons.append("semantic compiler produced a non-executable retrieval plan")
+        blocking_reasons.extend(str(reason) for reason in plan_executability.get("blocking_reasons") or [] if str(reason).strip())
     bound_plan = traversal_manifest.get("bound_retrieval_plan") if isinstance(traversal_manifest.get("bound_retrieval_plan"), dict) else {}
-    graph_seeds = list(bound_plan.get("graph_seeds") or [])
-    semantic_queries = list(bound_plan.get("semantic_queries") or [])
     layer_manifests = traversal_manifest.get("layer_manifests") if isinstance(traversal_manifest.get("layer_manifests"), dict) else {}
     candidate_counts = traversal_manifest.get("candidate_counts") if isinstance(traversal_manifest.get("candidate_counts"), dict) else {}
     required_layer_failures: list[str] = []
@@ -2994,14 +3072,17 @@ def _coverage_report(
     blocking_reasons.extend(required_layer_failures)
     exact_absence_is_valid = bool(
         isinstance(traversal_manifest.get("coverage"), dict)
+        and bool(traversal_manifest["coverage"].get("exact_search_performed"))
         and traversal_manifest["coverage"].get("exact_status") == "completed_no_matches"
-        and traversal_manifest["coverage"].get("negative_claims_allowed") is not None
+        and traversal_manifest["coverage"].get("negative_claims_allowed") is True
+        and not required_layer_failures
         and all(
             isinstance(result, dict) and result.get("status") == "completed_no_matches"
             for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
         )
     )
-    if selected_count == 0 and (semantic_queries or graph_seeds) and not exact_absence_is_valid:
+    has_retrieval_intent = bool(plan_executability.get("has_retrieval_intent")) if isinstance(plan_executability, dict) else bool(bound_plan.get("retrieval_layers"))
+    if selected_count == 0 and has_retrieval_intent and not exact_absence_is_valid:
         blocking_reasons.append("retrieval required but no chunks were selected")
     selection_notes = traversal_manifest.get("selection_notes") if isinstance(traversal_manifest, dict) else []
     if isinstance(selection_notes, list) and any("ingestion database unavailable" in str(note).lower() for note in selection_notes):
@@ -3017,12 +3098,15 @@ def _coverage_report(
         "retrieval_packet_hash": sha256_json(retrieval_packet),
         "selected_chunk_count": selected_count,
         "plan_completeness": plan_completeness,
+        "plan_executability": plan_executability,
     }
 
 
 def _blocked_turn_response(*, blocking_reasons: list[str]) -> str:
     """Return an honest assistant message for a turn that never reached synthesis."""
     reasons = " ".join(str(reason).strip() for reason in blocking_reasons if str(reason).strip()).lower()
+    if "non-executable retrieval plan" in reasons:
+        return "I couldn't search the vault because the retrieval plan did not contain usable search inputs."
     if "semantic compiler" in reasons:
         return "I couldn't interpret that turn because the semantic compiler is unavailable or returned invalid output."
     if "ingestion database" in reasons:
@@ -3038,6 +3122,75 @@ def _build_visible_transcript_tail(messages: list[dict[str, Any]], *, limit: int
     return messages[-limit:]
 
 
+def _build_synthesis_traversal_summary(traversal_manifest: dict[str, Any]) -> dict[str, Any]:
+    """Project only bounded execution metadata into the frontier packet."""
+    layer_manifests = traversal_manifest.get("layer_manifests") if isinstance(traversal_manifest.get("layer_manifests"), dict) else {}
+    layer_statuses: dict[str, Any] = {}
+    for name in ("exact", "lexical", "vector", "graph", "temporal"):
+        layer = layer_manifests.get(name) if isinstance(layer_manifests.get(name), dict) else {}
+        if name == "exact":
+            layer_statuses[name] = {
+                "status": str(layer.get("status") or "not_requested"),
+                "returned_candidate_count": int(layer.get("returned_candidate_count") or 0),
+                "total_match_count": layer.get("total_match_count"),
+                "matching_note_count": layer.get("matching_note_count"),
+            }
+        else:
+            layer_statuses[name] = {
+                "status": str(layer.get("status") or "not_requested"),
+                "candidate_count": int(layer.get("candidate_count") or 0),
+            }
+    scope = traversal_manifest.get("scope_resolution") if isinstance(traversal_manifest.get("scope_resolution"), dict) else {}
+    bound_requests = scope.get("bound_requests") if isinstance(scope.get("bound_requests"), dict) else {}
+    fusion = traversal_manifest.get("fusion") if isinstance(traversal_manifest.get("fusion"), dict) else {}
+    reservation = fusion.get("required_reservation") if isinstance(fusion.get("required_reservation"), dict) else {}
+    full_coverage = traversal_manifest.get("coverage") if isinstance(traversal_manifest.get("coverage"), dict) else {}
+    coverage = {
+        key: full_coverage.get(key)
+        for key in (
+            "exact_search_performed", "exact_status", "total_exact_matches", "matching_note_count",
+            "total_occurrence_count", "count_status", "coverage_claims_allowed",
+            "negative_claims_allowed", "negative_claims_require_exact_layer", "required_layer_results",
+        )
+        if key in full_coverage
+    }
+    return {
+        "execution": {
+            "layers_executed": list((traversal_manifest.get("execution") or {}).get("layers_executed") or []),
+            "layers_skipped": list((traversal_manifest.get("execution") or {}).get("layers_skipped") or []),
+        },
+        "candidate_counts": dict(traversal_manifest.get("candidate_counts") or {}),
+        "selected_counts": dict(traversal_manifest.get("selected_counts") or {}),
+        "coverage": coverage,
+        "limits": list(traversal_manifest.get("limits") or []),
+        "plan_completeness": dict(traversal_manifest.get("plan_completeness") or {}),
+        "plan_executability": dict(traversal_manifest.get("plan_executability") or {}),
+        "unsupported_layer_requests": [
+            {
+                "operator": str(item.get("operator") or ""),
+                "required": bool(item.get("required")),
+                "reason": str(item.get("reason") or ""),
+            }
+            for item in traversal_manifest.get("unsupported_layer_requests") or []
+            if isinstance(item, dict)
+        ],
+        "scope_resolution": {
+            "requested_aliases": list(bound_requests.get("requested_aliases") or bound_requests.get("bound_requests") or []),
+            "hard_applied": dict(scope.get("hard") or {}),
+            "preferred_applied": dict(scope.get("preferred") or {}),
+        },
+        "layer_statuses": layer_statuses,
+        "fusion_summary": {
+            "selector": str(fusion.get("selector") or ""),
+            "candidate_count": int(fusion.get("candidate_count") or 0),
+            "selected_count": int(fusion.get("selected_count") or 0),
+            "selected_unique_note_count": int(fusion.get("selected_unique_note_count") or 0),
+            "max_selected_chunks_per_note": int(fusion.get("max_selected_chunks_per_note") or 0),
+            "required_reservation": reservation,
+        },
+    }
+
+
 def _build_synthesis_context_packet(
     *,
     thread_id: str,
@@ -3046,7 +3199,7 @@ def _build_synthesis_context_packet(
     prior_thread_state: dict[str, Any],
     visible_transcript_tail: list[dict[str, Any]],
     semantic_compiler_packet: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
+    synthesis_traversal_summary: dict[str, Any],
     approved_retrieval_packet: dict[str, Any] | None,
     coverage_report: dict[str, Any],
     runtime_outcome: str,
@@ -3059,7 +3212,7 @@ def _build_synthesis_context_packet(
         "prior_thread_state": prior_thread_state,
         "visible_transcript_tail": visible_transcript_tail,
         "semantic_compiler_packet": semantic_compiler_packet,
-        "semantic_traversal_manifest": semantic_traversal_manifest,
+        "synthesis_traversal_summary": synthesis_traversal_summary,
         "approved_retrieval_packet": approved_retrieval_packet,
         "coverage_report": coverage_report,
         "runtime_outcome": runtime_outcome,
@@ -3379,6 +3532,8 @@ def run_thread_turn(
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
             planner_defaults=resolved_config.retrieval_planner_defaults,
         )
+    plan_executability = validate_plan_executability(planner_retrieval_plan=planner_retrieval_plan, config=resolved_config)
+    semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_executability"] = plan_executability
     # The database-backed path binds inside _semantic_traversal, where the same
     # live inventory is already loaded. Only bind here for the no-database
     # diagnostic path so resolver work is not performed twice per turn.
@@ -3392,6 +3547,13 @@ def run_thread_turn(
             config=resolved_config,
             resource_inventory_summary=resource_inventory_summary,
             prior_thread_state=prior_thread_state,
+        )
+    elif plan_executability.get("status") != "executable":
+        semantic_traversal_manifest, retrieval_packet = _non_executable_plan_artifacts(
+            semantic_compiler_packet=semantic_compiler_packet,
+            config=resolved_config,
+            resource_inventory_summary=resource_inventory_summary,
+            plan_executability=plan_executability,
         )
     elif database_path.exists():
         if embedding_backend is None:
@@ -3473,22 +3635,12 @@ def run_thread_turn(
         prior_thread_state=prior_thread_state,
         visible_transcript_tail=visible_transcript_tail,
         semantic_compiler_packet=semantic_compiler_packet,
-        semantic_traversal_manifest=semantic_traversal_manifest,
+        synthesis_traversal_summary=_build_synthesis_traversal_summary(semantic_traversal_manifest),
         approved_retrieval_packet=approved_retrieval_packet,
         coverage_report=coverage_report,
         runtime_outcome=runtime_outcome,
         blocking_reasons=blocking_reasons,
     )
-    fusion_manifest = semantic_traversal_manifest.get("fusion")
-    if isinstance(fusion_manifest, dict):
-        # The manifest is referenced by the context packet. Two passes make
-        # the recorded value include the diagnostic field itself without
-        # introducing a hidden byte ceiling or truncating evidence.
-        for _ in range(2):
-            fusion_manifest["synthesis_context_bytes"] = len(
-                json.dumps(synthesis_context_packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            )
-
     assistant_response_text: str | None = None
     llm_metadata: dict[str, Any] = {
         "mode": getattr(llm_backend, "mode_name", "unknown"),
@@ -3519,7 +3671,7 @@ def run_thread_turn(
                 prior_thread_state=prior_thread_state,
                 visible_transcript_tail=visible_transcript_tail,
                 semantic_compiler_packet=semantic_compiler_packet,
-                semantic_traversal_manifest=semantic_traversal_manifest,
+                synthesis_traversal_summary=_build_synthesis_traversal_summary(semantic_traversal_manifest),
                 approved_retrieval_packet=None,
                 coverage_report=coverage_report,
                 runtime_outcome=runtime_outcome,
