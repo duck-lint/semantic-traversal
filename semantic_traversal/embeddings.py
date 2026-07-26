@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from importlib import import_module
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -10,6 +11,59 @@ from .config import RuntimeConfig
 
 
 _SENTENCE_TRANSFORMER_MODEL_CACHE: dict[tuple[str, str | None], Any] = {}
+EMBEDDING_ENCODING_STRATEGY = "chunk_embedding_text_v1"
+
+
+def canonical_embedding_identity(
+    *,
+    provider: str,
+    model: str,
+    dimensions: int,
+    normalize_embeddings: bool,
+    encoding_strategy: str = EMBEDDING_ENCODING_STRATEGY,
+) -> dict[str, Any]:
+    return {
+        "provider": str(provider),
+        "model": str(model),
+        "dimensions": int(dimensions),
+        "normalize_embeddings": bool(normalize_embeddings),
+        "encoding_strategy": str(encoding_strategy),
+    }
+
+
+def embedding_identity_hash(identity: dict[str, Any]) -> str:
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def embedding_identity_from_response(
+    response: EmbeddingResponse,
+    *,
+    config: RuntimeConfig,
+    vector: list[float],
+) -> dict[str, Any]:
+    metadata = response.metadata if isinstance(response.metadata, dict) else {}
+    return canonical_embedding_identity(
+        provider=str(metadata.get("backend_mode") or "unknown"),
+        model=str(metadata.get("model") or config.embedding_model),
+        dimensions=len(vector),
+        normalize_embeddings=bool(metadata.get("normalize_embeddings", config.embedding_normalize_embeddings)),
+        encoding_strategy=str(metadata.get("encoding_strategy") or EMBEDDING_ENCODING_STRATEGY),
+    )
+
+
+def embedding_identity_hint(*, backend: EmbeddingBackend, config: RuntimeConfig) -> dict[str, Any] | None:
+    metadata = getattr(backend, "identity_metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+    dimensions = metadata.get("dimensions", config.embedding_dimensions)
+    return {
+        "provider": str(metadata.get("backend_mode") or getattr(backend, "mode_name", "unknown")),
+        "model": str(metadata.get("model") or config.embedding_model),
+        "dimensions": int(dimensions) if dimensions is not None else None,
+        "normalize_embeddings": bool(metadata.get("normalize_embeddings", config.embedding_normalize_embeddings)),
+        "encoding_strategy": str(metadata.get("encoding_strategy") or EMBEDDING_ENCODING_STRATEGY),
+    }
 
 
 @dataclass(frozen=True)
@@ -126,6 +180,18 @@ class SentenceTransformersEmbeddingBackend:
         self._batch_size = batch_size
         self._normalize_embeddings = normalize_embeddings
         self._device = device
+
+    @property
+    def identity_metadata(self) -> dict[str, Any]:
+        dimension_method = getattr(self._model, "get_sentence_embedding_dimension", None)
+        dimensions = dimension_method() if callable(dimension_method) else None
+        return {
+            "backend_mode": self.mode_name,
+            "model": self._model_name,
+            "dimensions": dimensions,
+            "normalize_embeddings": self._normalize_embeddings,
+            "encoding_strategy": EMBEDDING_ENCODING_STRATEGY,
+        }
 
     def _load_model(self, sentence_transformer_class: Any, *, model: str, device: str | None) -> Any:
         cache_key = (model, device)

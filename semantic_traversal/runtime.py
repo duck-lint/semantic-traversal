@@ -4,19 +4,27 @@ import json
 import math
 import re
 import sqlite3
+import time
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .config import RuntimeConfig, load_runtime_config
-from .embeddings import EmbeddingBackend, resolve_embedding_backend
+from .embeddings import (
+    EmbeddingBackend,
+    embedding_identity_from_response,
+    embedding_identity_hash,
+    resolve_embedding_backend,
+)
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
-from .resource_inventory import build_resource_inventory
+from .resource_inventory import build_resource_inventory, load_persisted_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
-from .retrieval_resolver import bind_retrieval_plan
+from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness, validate_plan_executability
 from .text_filters import is_low_signal_apparatus_text
+from .temporal import parse_temporal_value, relation_for_anchor
 from .semantic_compiler import (
     INTERNAL_COMPILER_ECHO_FIELDS,
     SemanticCompilerBackend,
@@ -27,7 +35,15 @@ from .storage import append_ledger_record, create_thread_paths, load_json, write
 
 
 QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
-LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph"}
+LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph", "temporal_retrieve": "temporal"}
+EXACT_SEARCH_STATUSES = {
+    "not_requested",
+    "skipped_no_terms",
+    "unavailable",
+    "failed",
+    "completed_no_matches",
+    "completed_with_matches",
+}
 
 
 def _default_active_focus() -> dict[str, Any]:
@@ -373,7 +389,7 @@ def _compiler_request_packet(
         "active_focus": active_focus,
         "resource_inventory_summary": resource_inventory_summary,
         "scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
-        "instruction": "Compile a soft retrieval plan, not an answer. Emit scope requests and concepts only; do not emit note_type, path_contains, source_label, planner_diagnostics, or any other executable filters.",
+        "instruction": "Compile a retrieval request, not an answer. Emit supported planner intent and retrieval-layer fields only. Use inventory scope aliases rather than raw note_type, path_contains, source_label, planner_diagnostics, or runtime selection/claim policy.",
     }
 
 
@@ -398,8 +414,6 @@ def _deterministic_semantic_packet(
             concepts = list(dict.fromkeys([*concepts, *resolved_referents]))
             query = " ".join([query, *resolved_referents[:8]]).strip() or query
     graph_seeds: list[str] = [query] if query else []
-    if prior_thread_state.get("latest_user_input"):
-        graph_seeds.append(str(prior_thread_state["latest_user_input"]).strip())
     graph_seeds = list(dict.fromkeys(seed for seed in graph_seeds if seed))
     packet = {
         "raw_user_input": raw_user_input,
@@ -451,12 +465,6 @@ def _canonicalize_compiler_packet(
     packet["relations"] = _coerce_string_list(payload.get("relations")) or packet["relations"]
     packet["resolved_referents"] = _coerce_string_list(payload.get("resolved_referents")) or packet["resolved_referents"]
     packet["limitations"] = _coerce_string_list(payload.get("limitations")) if isinstance(payload.get("limitations"), list) else []
-    focus_terms: list[str] = []
-    carry_focus_terms = _is_referential_user_input(raw_user_input, config=config) or is_comparison_intent(raw_user_input)
-    if carry_focus_terms:
-        focus_terms = _focus_carry_terms(active_focus=active_focus, recent_semantic_turns=recent_semantic_turns)
-    if carry_focus_terms and focus_terms:
-        packet["resolved_referents"] = list(dict.fromkeys([*packet["resolved_referents"], *focus_terms]))
     fallback_plan = build_default_retrieval_plan(
         raw_user_input=raw_user_input,
         query=packet["query"],
@@ -467,11 +475,6 @@ def _canonicalize_compiler_packet(
         planner_defaults=config.retrieval_planner_defaults,
     )
     canonical_plan, planner_diagnostics = canonicalize_retrieval_plan(payload.get("planner_retrieval_plan"), fallback=fallback_plan, planner_defaults=config.retrieval_planner_defaults, raw_user_input=raw_user_input)
-    if carry_focus_terms and focus_terms:
-        canonical_plan["resolved_referents"] = list(dict.fromkeys([*canonical_plan.get("resolved_referents", []), *packet["resolved_referents"]]))
-        comparison_query = " ".join([packet["query"], *focus_terms[:6]]).strip()
-        if comparison_query and comparison_query not in canonical_plan["semantic_queries"]:
-            canonical_plan["semantic_queries"].append(comparison_query)
     packet["planner_retrieval_plan"] = canonical_plan
     packet["planner_diagnostics"] = {
         "ignored_planner_fields": sorted(
@@ -530,6 +533,191 @@ def _compiler_response_to_packet(
         ),
         "fallback",
     )
+
+
+def _repair_incomplete_compiler_plan(
+    *,
+    raw_user_input: str,
+    compiler_request: dict[str, Any],
+    compiler_backend: SemanticCompilerBackend,
+    compiler_response: SemanticCompilerResponse,
+    semantic_compiler_packet: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+    active_focus: dict[str, Any],
+    recent_semantic_turns: list[dict[str, Any]],
+    config: RuntimeConfig,
+    resource_inventory_summary: dict[str, Any],
+) -> tuple[dict[str, Any], str, SemanticCompilerResponse, dict[str, Any]]:
+    planner = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    initial_completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
+    if initial_completeness.get("status") == "complete":
+        semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = initial_completeness
+        return semantic_compiler_packet, "parsed", compiler_response, {"attempted": False, "outcome": "not_needed", "latency_ms": 0}
+
+    repair_request = dict(compiler_request)
+    repair_request["instruction"] = (
+        "Repair the compiler retrieval plan exactly once. Preserve raw_user_input, valid semantic fields, and valid layers. "
+        "For each declared evidence requirement, add its mapped supported operator or explicitly remove/revise the requirement "
+        "if the interpretation was wrong. Remove unauthorized raw note-type, path, or source scope values. Return JSON only; "
+        "do not answer the user, emit runtime policy, or make topic-specific inferences."
+    )
+    repair_request["repair_context"] = {
+        "original_compiler_payload": compiler_response.parsed_payload,
+        "canonical_plan": planner,
+        "completeness_diagnostics": initial_completeness,
+        "available_scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
+        "supported_evidence_requirements": list(config.retrieval_evidence_requirement_operators),
+        "requirement_operator_mapping": config.retrieval_evidence_requirement_operators,
+    }
+    started = time.perf_counter()
+    try:
+        repair_response = compiler_backend.compile_turn(repair_request)
+    except Exception as exc:  # noqa: BLE001
+        repair_response = SemanticCompilerResponse(
+            parsed_payload=None,
+            raw_response=None,
+            metadata={"backend_mode": getattr(compiler_backend, "mode_name", "unknown"), "error": str(exc)},
+            diagnostics={},
+            status="unavailable",
+        )
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
+    if repair_response.status == "parsed" and isinstance(repair_response.parsed_payload, dict):
+        repaired_packet, repaired_status = _compiler_response_to_packet(
+            raw_user_input=raw_user_input,
+            prior_thread_state=prior_thread_state,
+            active_focus=active_focus,
+            recent_semantic_turns=recent_semantic_turns,
+            config=config,
+            response=repair_response,
+        )
+    else:
+        repaired_packet, repaired_status = semantic_compiler_packet, "repair_failed"
+    repaired_plan = repaired_packet.get("planner_retrieval_plan") if isinstance(repaired_packet.get("planner_retrieval_plan"), dict) else {}
+    repaired_completeness = validate_plan_completeness(planner_retrieval_plan=repaired_plan, config=config)
+    repair_record = {
+        "attempted": True,
+        "latency_ms": latency_ms,
+        "outcome": "complete" if repaired_completeness.get("status") == "complete" else "incomplete",
+        "response_status": repair_response.status,
+    }
+    repaired_completeness["repair_attempted"] = True
+    repaired_completeness["repair_result"] = repair_record["outcome"]
+    repaired_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = repaired_completeness
+    repaired_packet["planner_diagnostics"]["plan_repair"] = repair_record
+    return repaired_packet, repaired_status, repair_response, repair_record
+
+
+def _incomplete_plan_artifacts(
+    *,
+    semantic_compiler_packet: dict[str, Any],
+    config: RuntimeConfig,
+    resource_inventory_summary: dict[str, Any],
+    prior_thread_state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    planner = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    bound, adjustments, inventory = bind_retrieval_plan(
+        planner_retrieval_plan=planner,
+        inventory_summary=resource_inventory_summary,
+        config=config,
+        raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
+    )
+    completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
+    plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
+    note = "retrieval blocked: compiler-declared evidence requirements are incomplete"
+    manifest = {
+        "planner_retrieval_plan": planner,
+        "bound_retrieval_plan": bound,
+        "resolver_adjustments": adjustments,
+        "resource_inventory_summary": inventory,
+        "inventory_diagnostics": inventory.get("inventory_diagnostics", {}),
+        "execution": {"layers_executed": [], "layers_skipped": [{"reason": "incomplete plan"}]},
+        "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0, "temporal": 0},
+        "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0, "temporal": 0},
+        "selected_chunk_ids": [],
+        "layer_manifests": {},
+        "unsupported_layer_requests": [
+            {
+                "operator": str(layer.get("operator") or ""),
+                "required": bool(layer.get("required")),
+                "supplied_fields": dict(layer),
+                "reason": "retrieval operator is not supported by this runtime seam",
+            }
+            for layer in bound.get("retrieval_layers", [])
+            if isinstance(layer, dict) and str(layer.get("operator") or "") not in {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+        ],
+        "plan_completeness": completeness,
+        "plan_executability": plan_executability,
+        "coverage": {"exact_search_performed": False, "exact_status": "not_requested", "scope": bound.get("scope_filters", {}), "literal_terms": [], "coverage_claims_allowed": False, "negative_claims_allowed": False, "required_layer_results": [], "plan_completeness": completeness, "plan_executability": plan_executability},
+        "limits": ["Retrieval was not executed because the compiler plan was incomplete."],
+        "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
+        "scope_resolution": {"hard": bound.get("scope_filters", {}), "preferred": bound.get("preferred_scope_filters", {}), "bound_requests": bound.get("scope_resolution", {})},
+        "selection_notes": [note],
+    }
+    packet = {"bound_retrieval_plan": bound, "coverage": manifest["coverage"], "limits": manifest["limits"], "selected_chunks": [], "matched_chunk_count": 0, "retrieval_observation": "blocked_incomplete_plan", "assembled_from_traversal_manifest": True}
+    return manifest, packet
+
+
+def _non_executable_plan_artifacts(
+    *,
+    semantic_compiler_packet: dict[str, Any],
+    config: RuntimeConfig,
+    resource_inventory_summary: dict[str, Any],
+    plan_executability: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Persist a blocked plan without opening the database or binding inputs."""
+    planner = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    note = "retrieval blocked: semantic compiler produced a non-executable retrieval plan"
+    coverage = {
+        "exact_search_performed": False,
+        "exact_status": "not_requested",
+        "scope": {},
+        "literal_terms": [],
+        "coverage_claims_allowed": False,
+        "negative_claims_allowed": False,
+        "required_layer_results": [],
+        "plan_completeness": completeness,
+        "plan_executability": plan_executability,
+    }
+    manifest = {
+        "planner_retrieval_plan": planner,
+        "bound_retrieval_plan": planner,
+        "resolver_adjustments": [],
+        "resource_inventory_summary": resource_inventory_summary,
+        "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
+        "execution": {"layers_executed": [], "layers_skipped": [{"reason": "non-executable plan"}]},
+        "candidate_counts": {key: 0 for key in ("exact", "lexical", "vector", "graph", "temporal")},
+        "selected_counts": {key: 0 for key in ("exact", "lexical", "vector", "graph", "temporal")},
+        "selected_chunk_ids": [],
+        "layer_manifests": {},
+        "unsupported_layer_requests": [
+            {
+                "operator": str(layer.get("operator") or ""),
+                "required": bool(layer.get("required")),
+                "supplied_fields": dict(layer),
+                "reason": "retrieval operator is not supported by this runtime seam",
+            }
+            for layer in planner.get("retrieval_layers", [])
+            if isinstance(layer, dict) and str(layer.get("operator") or "") not in {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+        ],
+        "plan_completeness": completeness,
+        "plan_executability": plan_executability,
+        "coverage": coverage,
+        "limits": ["Retrieval was not executed because the compiler plan was not executable."],
+        "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
+        "scope_resolution": {"hard": {}, "preferred": {}, "bound_requests": {}},
+        "selection_notes": [note],
+    }
+    packet = {
+        "bound_retrieval_plan": planner,
+        "coverage": coverage,
+        "limits": manifest["limits"],
+        "selected_chunks": [],
+        "matched_chunk_count": 0,
+        "retrieval_observation": "blocked_non_executable_plan",
+        "assembled_from_traversal_manifest": True,
+    }
+    return manifest, packet
 
 
 def _semantic_compiler_diagnostic_packet(
@@ -605,6 +793,34 @@ def _layer_limit(layer: dict[str, Any] | None, fallback: int) -> int:
         return fallback
 
 
+def _non_exact_layer_manifest(
+    *,
+    operator: str,
+    layer: dict[str, Any] | None,
+    status: str,
+    candidate_count: int,
+    diagnostics: dict[str, Any] | None = None,
+    selected_contribution_count: int = 0,
+    selected_chunk_ids: list[str] | None = None,
+    adequate_contribution: bool = False,
+) -> dict[str, Any]:
+    layer = layer if isinstance(layer, dict) else {}
+    return {
+        "operator": operator,
+        "requested": bool(layer),
+        "required": bool(layer.get("required")),
+        "status": status,
+        "requested_limit": layer.get("requested_limit"),
+        "default_limit": layer.get("default_limit"),
+        "maximum_limit": layer.get("maximum_limit"),
+        "effective_limit": layer.get("effective_limit", layer.get("limit")),
+        "limit_adjustment": layer.get("limit_adjustment", "none"),
+        "candidate_count": int(candidate_count),
+        "selected_contribution_count": int(selected_contribution_count),
+        "selected_chunk_ids": list(selected_chunk_ids or []),
+        "adequate_contribution": bool(adequate_contribution),
+        "diagnostics": diagnostics or [],
+    }
 def _scope_values(scope_filters: dict[str, Any], key: str) -> list[str]:
     return [str(value).strip().lower() for value in _coerce_string_list(scope_filters.get(key)) if str(value).strip()]
 
@@ -621,35 +837,79 @@ def _chunk_matches_scope(row: dict[str, Any], scope_filters: dict[str, Any]) -> 
         return True
     relative_path = str(row.get("relative_path") or "").lower().replace("\\", "/")
     source_root_path = str(row.get("source_root_path") or "").lower().replace("\\", "/")
-    title = str(row.get("note_title") or "").lower()
-    frontmatter_semantics = ""
+    frontmatter_values: dict[str, Any] = {}
     try:
-        frontmatter_semantics = json.dumps(json.loads(str(row.get("frontmatter_semantics_json") or "{}")), ensure_ascii=True).lower()
+        parsed_frontmatter = json.loads(str(row.get("frontmatter_semantics_json") or "{}"))
+        if isinstance(parsed_frontmatter, dict):
+            frontmatter_values = parsed_frontmatter
     except json.JSONDecodeError:
-        frontmatter_semantics = str(row.get("frontmatter_semantics_json") or "").lower()
-    scope_haystack = f"{source_root_path} {relative_path} {title} {frontmatter_semantics}"
-    # Journal/daily scopes are often encoded in path/title/frontmatter-derived filenames rather than a chunk column.
-    required_terms = list(dict.fromkeys([*path_terms, *note_type_terms]))
-    return any(term in scope_haystack for term in required_terms)
+        frontmatter_values = {}
+
+    # A dimension is an OR set; different dimensions are conjunctive. Note type
+    # is read from parsed frontmatter so a value such as `journal` cannot match
+    # an unrelated serialized field or a substring of another facet.
+    if note_type_terms:
+        raw_note_type = frontmatter_values.get("note_type")
+        note_types = _coerce_string_list(raw_note_type)
+        normalized_note_types = {value.strip().lower() for value in note_types if value.strip()}
+        if not normalized_note_types.intersection(note_type_terms):
+            return False
+    if path_terms:
+        path_haystack = f"{source_root_path} {relative_path}".lower()
+        if not any(term in path_haystack for term in path_terms):
+            return False
+    return True
 
 
 def _scoped_chunk_rows(chunk_rows: list[dict[str, Any]], scope_filters: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in chunk_rows if _chunk_matches_scope(row, scope_filters)]
 
 
+def _annotate_scope_matches(
+    candidates: list[dict[str, Any]],
+    *,
+    hard_scope_filters: dict[str, Any],
+    preferred_scope_filters: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Expose scope evidence without turning preferred scope into admission."""
+    annotated: list[dict[str, Any]] = []
+    preferred_scope_active = bool(
+        str(preferred_scope_filters.get("source_label") or "").strip()
+        or _scope_values(preferred_scope_filters, "note_type")
+        or _scope_values(preferred_scope_filters, "path_contains")
+    )
+    for candidate in candidates:
+        next_candidate = dict(candidate)
+        if "scope_match" not in next_candidate:
+            next_candidate["scope_match"] = hard_scope_filters
+        next_candidate["preferred_scope_match"] = (
+            preferred_scope_active
+            and _chunk_matches_scope(next_candidate, preferred_scope_filters)
+        )
+        annotated.append(next_candidate)
+    return annotated
+
+
 def _candidate_source_layers(candidate: dict[str, Any]) -> list[str]:
-    sources = candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
-    normalized: list[str] = []
+    # `source_layers` is materialized before merge-only fields are removed. It
+    # is the durable provenance surface; `sources` is only the merge scratch
+    # field and selection_source is only the winning representation.
+    sources = candidate.get("source_layers") or candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
+    observed: set[str] = set()
     for source in _coerce_string_list(sources):
         if source == "graph_expanded":
             source = "graph"
-        if source and source not in normalized:
-            normalized.append(source)
-    return normalized
+        if source:
+            observed.add(source)
+    # Keep packet and manifest ordering stable even when candidates arrive from
+    # different executors or contain duplicate support entries.
+    return [source for source in ("exact", "lexical", "vector", "graph", "temporal") if source in observed]
 
 
 def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[str, int]:
     counts = {"exact": 0, "lexical": 0, "vector": 0, "graph": 0}
+    if any("temporal" in _candidate_source_layers(candidate) for candidate in selected_candidates):
+        counts["temporal"] = 0
     for candidate in selected_candidates:
         for source in _candidate_source_layers(candidate):
             if source in counts:
@@ -663,70 +923,174 @@ def _exact_candidates(
     *,
     scope_filters: dict[str, Any],
     limit: int,
+    return_total_count: bool = False,
     config: RuntimeConfig,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    fields = ("note_title", "section_label", "relative_path", "paragraph_text")
     notes: list[str] = []
-    terms = [str(entry.get("term") or "").strip() for entry in literal_terms if isinstance(entry, dict) and str(entry.get("term") or "").strip()]
+    term_entries = []
+    for entry in literal_terms:
+        if not isinstance(entry, dict):
+            continue
+        term = str(entry.get("term") or "").strip()
+        if term:
+            term_entries.append({
+                "term": term,
+                "match": str(entry.get("match") or "case_insensitive_substring").strip(),
+                "required": bool(entry.get("required")),
+            })
+    terms = [entry["term"] for entry in term_entries]
+    base_info = {
+        "operator": "exact_chunk_search",
+        "literal_terms": terms,
+        "scope": scope_filters,
+        "search_exhaustive": False,
+        "return_total_count_requested": bool(return_total_count),
+        "count_status": "not_requested" if not return_total_count else "completed",
+        "count_unit": "matching_chunks",
+        "total_match_count": None if not return_total_count else 0,
+        "total_occurrence_count": None if not return_total_count else 0,
+        "matching_note_count": None if not return_total_count else 0,
+        "returned_candidate_count": 0,
+        "returned_count": 0,
+        "term_results": [],
+    }
     if not terms:
-        return [], ["exact search skipped: no literal terms"], {
-            "operator": "exact_chunk_search",
-            "literal_terms": [],
-            "scope": scope_filters,
-            "total_match_count": 0,
-            "matching_note_count": 0,
-            "returned_count": 0,
+        base_info.update(status="skipped_no_terms", search_exhaustive=False, count_status="not_applicable")
+        return [], ["exact search skipped: no literal terms"], base_info
+
+    def occurrences(value: str, term: str, match_mode: str) -> list[tuple[int, int]]:
+        if match_mode not in {"case_sensitive_substring", "case_insensitive_substring"}:
+            return []
+        if not term:
+            return []
+        if match_mode == "case_sensitive_substring":
+            matcher = re.compile(re.escape(term))
+        else:
+            # Search the original text so regex offsets remain offsets into
+            # the canonical field even when Unicode case handling expands a
+            # code point during comparison.
+            matcher = re.compile(re.escape(term), re.IGNORECASE)
+        found: list[tuple[int, int]] = []
+        # Count deterministic non-overlapping occurrences. This mirrors the
+        # first-match context contract and avoids double-counting overlaps.
+        for match in matcher.finditer(value):
+            found.append((match.start(), match.end()))
+        return found
+
+    def context(value: str, start: int, end: int) -> dict[str, Any]:
+        radius = max(0, int(config.retrieval_exact_context_chars))
+        return {
+            "field": "",
+            "match_start": start,
+            "match_end": end,
+            "excerpt": value[max(0, start - radius): min(len(value), end + radius)],
         }
 
     scoped_rows = _scoped_chunk_rows(chunk_rows, scope_filters)
     candidates: list[dict[str, Any]] = []
+    per_term: dict[str, dict[str, Any]] = {
+        entry["term"]: {
+            "term": entry["term"], "required": entry["required"], "match": entry["match"],
+            "status": "failed" if entry["match"] not in {"case_sensitive_substring", "case_insensitive_substring"} else "completed_no_matches",
+            "matching_chunk_count": 0, "matching_note_count": 0, "total_occurrence_count": 0,
+            "returned_candidate_count": 0, "selected_exact_chunk_count": 0, "selected_chunk_ids": [],
+            "adequate_contribution": not entry["required"],
+        }
+        for entry in term_entries
+    }
     matching_note_ids: set[str] = set()
     total_match_count = 0
-    lowered_terms = [term.lower() for term in terms]
+    total_occurrence_count = 0
     for row in scoped_rows:
-        haystack = "\n".join(
-            str(row.get(field) or "")
-            for field in ("note_title", "section_label", "relative_path", "paragraph_text")
-        ).lower()
-        matched_terms = [term for term, lowered_term in zip(terms, lowered_terms, strict=True) if lowered_term in haystack]
+        evidence: list[dict[str, Any]] = []
+        matched_terms: list[str] = []
+        for entry in term_entries:
+            term = entry["term"]
+            term_occurrences: list[tuple[str, int, int]] = []
+            for field in fields:
+                value = str(row.get(field) or "")
+                for start, end in occurrences(value, term, entry["match"]):
+                    term_occurrences.append((field, start, end))
+            if not term_occurrences:
+                continue
+            matched_terms.append(term)
+            result = per_term[term]
+            result["status"] = "completed_with_matches"
+            result["matching_chunk_count"] += 1
+            result["matching_note_count"] = None
+            result["total_occurrence_count"] += len(term_occurrences)
+            total_occurrence_count += len(term_occurrences)
+            for field, start, end in term_occurrences:
+                representative = context(str(row.get(field) or ""), start, end)
+                representative["field"] = field
+                evidence.append({
+                    "term": term,
+                    "match": entry["match"],
+                    "matched_fields": [field],
+                    "occurrence_count_in_chunk": len([item for item in term_occurrences if item[0] == field]),
+                    "representative_context": representative,
+                })
+                break
         if not matched_terms:
             continue
         total_match_count += 1
         matching_note_ids.add(str(row.get("note_id") or ""))
-        if len(candidates) >= limit:
-            continue
-        candidates.append(
-            {
+        for term in matched_terms:
+            per_term[term]["matching_note_count"] = None
+        if len(candidates) < max(0, limit):
+            candidates.append({
                 **row,
                 "selection_reason": f"exact literal match: {', '.join(matched_terms)}",
                 "score": len(matched_terms) + float(config.retrieval_scoring["exact_bonus"]),
                 "selection_source": "exact",
                 "match_reason": f"literal term {', '.join(matched_terms)}",
                 "scope_match": scope_filters,
-            }
-        )
-    if candidates:
-        notes.append(f"exact search matched {total_match_count} chunk(s); returned {len(candidates)}")
-    else:
-        notes.append("exact search produced no matches")
-    return candidates, notes, {
-        "operator": "exact_chunk_search",
-        "literal_terms": terms,
-        "scope": scope_filters,
-        "total_match_count": total_match_count,
-        "matching_note_count": len([note_id for note_id in matching_note_ids if note_id]),
+                "exact_term_provenance": list(matched_terms),
+                "exact_match_evidence": evidence,
+            })
+            for term in matched_terms:
+                per_term[term]["returned_candidate_count"] += 1
+
+    for term, result in per_term.items():
+        result["matching_note_count"] = len({str(row.get("note_id") or "") for row in scoped_rows if any(
+            occurrences(str(row.get(field) or ""), term, next(entry["match"] for entry in term_entries if entry["term"] == term))
+            for field in fields
+        )})
+    for result in per_term.values():
+        if result["status"] == "completed_no_matches":
+            result["adequate_contribution"] = True
+        if not return_total_count:
+            # Status still comes from the exhaustive scan, but exhaustive
+            # count reporting was not requested and must not leak as a total.
+            result["matching_chunk_count"] = None
+            result["matching_note_count"] = None
+            result["total_occurrence_count"] = None
+    base_info.update({
+        "status": "failed" if any(result["status"] == "failed" for result in per_term.values()) else ("completed_with_matches" if total_match_count else "completed_no_matches"),
+        "search_exhaustive": True,
+        "count_status": "completed" if return_total_count else "not_requested",
+        "total_match_count": total_match_count if return_total_count else None,
+        "total_occurrence_count": total_occurrence_count if return_total_count else None,
+        "matching_note_count": len([note_id for note_id in matching_note_ids if note_id]) if return_total_count else None,
+        "returned_candidate_count": len(candidates),
         "returned_count": len(candidates),
-    }
+        "term_results": list(per_term.values()),
+    })
+    notes.append(
+        f"exact search matched {total_match_count} chunk(s); returned {len(candidates)}"
+        if total_match_count else "exact search produced no matches"
+    )
+    return candidates, notes, base_info
 
 
 def _graph_seed_values(
     *,
     planner_retrieval_plan: dict[str, Any],
-    prior_thread_state: dict[str, Any],
     config: RuntimeConfig,
 ) -> list[tuple[str, str]]:
     seeds: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    active_focus = _normalize_active_focus(prior_thread_state.get("active_focus"))
     configured_sources = set(config.graph_traversal_seed_sources)
     if "graph_seeds" in configured_sources:
         for value in _coerce_string_list(planner_retrieval_plan.get("graph_seeds")):
@@ -740,23 +1104,6 @@ def _graph_seed_values(
             if seed not in seen:
                 seen.add(seed)
                 seeds.append(seed)
-    if "active_focus" in configured_sources:
-        for value in (
-            active_focus.get("query"),
-            active_focus.get("concepts"),
-            active_focus.get("scope_requests"),
-            active_focus.get("resolved_referents"),
-            active_focus.get("semantic_queries"),
-            active_focus.get("lexical_queries"),
-            active_focus.get("graph_seeds"),
-            active_focus.get("selected_note_titles"),
-            active_focus.get("selected_section_labels"),
-        ):
-            for item in _coerce_string_list(value):
-                seed = ("active_focus", item)
-                if seed not in seen:
-                    seen.add(seed)
-                    seeds.append(seed)
     return [(source, seed) for source, seed in seeds if seed]
 
 
@@ -800,40 +1147,95 @@ def _lexical_candidates(
     chunk_rows: list[dict[str, Any]],
     query_terms: list[str],
     *,
+    connection: sqlite3.Connection,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
     config: RuntimeConfig,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    mode: str | None = None,
+    return_diagnostics: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     notes: list[str] = []
+    diagnostics: dict[str, Any] = {
+        "requested_queries": list(query_terms),
+        "effective_query": None,
+        "requested_mode": mode,
+        "effective_mode": None,
+        "fts_available": None,
+        "index_row_count": None,
+        "raw_match_count": None,
+        "scoped_match_count": None,
+        "returned_candidate_count": 0,
+        "candidate_count": 0,
+    }
+    def finish() -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+        diagnostics["returned_candidate_count"] = len(candidates)
+        diagnostics["candidate_count"] = len(candidates)
+        return (candidates, notes, diagnostics) if return_diagnostics else (candidates, notes)
+
+    # Kept as a keyword-only compatibility escape hatch for runtime manifests.
+    # Existing focused executor tests retain the historical two-value return.
     if not query_terms:
-        return candidates, notes
-    scoped_rows = _scoped_chunk_rows(chunk_rows, scope_filters or {})
-    lowered_terms = [str(term).lower() for term in query_terms if str(term).strip()]
-    for row in scoped_rows:
-        haystack = " ".join(
-            str(row.get(field) or "")
-            for field in ("note_title", "section_label", "relative_path", "paragraph_text")
-        ).lower()
-        matched_terms = [term for term in lowered_terms if term in haystack]
-        if not matched_terms:
+        diagnostics["status"] = "skipped_no_input"
+        return finish()
+    selected_mode = str(mode or config.retrieval_lexical_default_mode).strip()
+    diagnostics["effective_mode"] = selected_mode
+    supported_modes = {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}
+    if selected_mode not in supported_modes:
+        diagnostics["status"] = "unsupported"
+        message = [f"lexical search unavailable: unsupported mode {selected_mode}"]
+        return ([], message, diagnostics) if return_diagnostics else ([], message)
+    terms = [str(term).strip() for term in query_terms if str(term).strip()]
+    if selected_mode == "exact_phrase":
+        fts_query = '"' + " ".join(terms).replace('"', '""') + '"'
+    else:
+        tokens = [token for term in terms for token in QUERY_TOKEN_RE.findall(term.lower())]
+        if selected_mode == "prefix":
+            tokens = [f"{token}*" for token in tokens]
+        joiner = " AND " if selected_mode == "all_tokens" else " OR "
+        fts_query = joiner.join(tokens)
+    if not fts_query:
+        diagnostics["status"] = "skipped_no_input"
+        return finish()
+    diagnostics["effective_query"] = fts_query
+    try:
+        match_rows = connection.execute(
+            "SELECT chunk_id, bm25(chunks_fts) AS fts_rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY fts_rank ASC, chunk_id ASC",
+            (fts_query,),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        diagnostics["status"] = "unavailable" if "no such table" in str(exc).lower() else "failed"
+        diagnostics["fts_available"] = False
+        message = [f"lexical search unavailable: FTS5 index error: {exc}"]
+        return ([], message, diagnostics) if return_diagnostics else ([], message)
+    diagnostics["fts_available"] = True
+    diagnostics["index_row_count"] = int(connection.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0])
+    rows_by_id = {str(row.get("chunk_id")): row for row in _scoped_chunk_rows(chunk_rows, scope_filters or {})}
+    diagnostics["raw_match_count"] = len(match_rows)
+    diagnostics["scoped_match_count"] = sum(
+        1 for match_row in match_rows if str(match_row["chunk_id"]) in rows_by_id
+    )
+    for match_row in match_rows:
+        row = rows_by_id.get(str(match_row["chunk_id"]))
+        if row is None or (limit is not None and len(candidates) >= limit):
             continue
-        if limit is not None and len(candidates) >= limit:
-            continue
-        candidates.append(
-            {
-                **row,
-                "selection_reason": f"lexical match: {', '.join(matched_terms)}",
-                "score": len(matched_terms) + float(config.retrieval_scoring["lexical_bonus"]),
-                "selection_source": "lexical",
-                "match_reason": f"lexical term {', '.join(matched_terms)}",
-            }
-        )
+        rank = float(match_row["fts_rank"] or 0.0)
+        candidates.append({
+            **row,
+            "selection_reason": f"FTS5 {selected_mode} match: {', '.join(terms)}",
+            "score": (1.0 / (1.0 + abs(rank))) + float(config.retrieval_scoring["lexical_bonus"]),
+            "selection_source": "lexical",
+            "match_reason": f"FTS5 {selected_mode} query {fts_query}",
+            "lexical_mode": selected_mode,
+            "lexical_query": " ".join(terms),
+            "fts_rank": rank,
+        })
     if candidates:
-        notes.append(f"lexical search matched {len(candidates)} chunk(s)")
+        notes.append(f"lexical FTS5 search mode={selected_mode} matched {len(candidates)} chunk(s)")
     else:
         notes.append("lexical search produced no matches")
-    return candidates, notes
+    diagnostics["status"] = "completed_with_candidates" if candidates else "completed_no_candidates"
+    return finish()
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -853,59 +1255,252 @@ def _vector_candidates(
     config: RuntimeConfig,
     embedding_backend: EmbeddingBackend,
     vector_query: str,
+    vector_queries: list[str] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    eligible_chunk_ids: set[str] | None = None,
+    return_diagnostics: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
-    if not vector_query.strip():
-        return [], ["vector search skipped: empty query"]
-    if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
-        return [], ["vector search unavailable"]
-
-    response = embedding_backend.embed_query_text(vector_query)
-    if response.status != "embedded" or not response.vectors:
-        return [], [f"vector search unavailable: {response.status}"]
-
-    query_vector = response.vectors[0]
-    rows = connection.execute(
-        f"SELECT chunk_id, vector_json FROM {config.vector_table}"
-    ).fetchall()
-    if not rows:
-        return [], ["vector search found no indexed vectors"]
-
-    chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
     candidates: list[dict[str, Any]] = []
+    diagnostics: dict[str, Any] = {
+        "requested_queries": [],
+        "effective_queries": [],
+        "query_results": [],
+        "candidate_count": 0,
+        "effective_limit": 0,
+        "configured_min_similarity": config.retrieval_vector_min_similarity,
+        "effective_min_similarity": config.retrieval_vector_min_similarity,
+        "configured_per_query_max_candidates": config.retrieval_vector_per_query_max_candidates,
+        "configured_max_chunks_per_note": config.retrieval_vector_max_chunks_per_note,
+        "stored_vector_row_count": 0,
+        "compatible_vector_count": 0,
+        "invalid_json_count": 0,
+        "invalid_numeric_count": 0,
+        "empty_vector_count": 0,
+        "zero_norm_count": 0,
+        "dimension_mismatch_count": 0,
+        "identity_mismatch_count": 0,
+        "mixed_identity_count": 0,
+        "below_threshold_count": 0,
+        "at_or_above_threshold_count": 0,
+        "note_cap_attrition_count": 0,
+        "per_query_cap_attrition_count": 0,
+        "query_order_policy": "canonical_lexicographic",
+    }
+
+    def finish() -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+        diagnostics["candidate_count"] = len(candidates)
+        diagnostics["returned_candidate_count"] = len(candidates)
+        return (candidates, notes, diagnostics) if return_diagnostics else (candidates, notes)
+
+    requested_queries = [str(query).strip() for query in (vector_queries or [vector_query]) if str(query).strip()]
+    queries = sorted(set(requested_queries))
+    diagnostics["requested_queries"] = requested_queries
+    diagnostics["effective_queries"] = queries
+    effective_limit = min(config.retrieval_vector_max_candidates, max(0, int(limit if limit is not None else config.retrieval_vector_max_candidates)))
+    diagnostics["effective_limit"] = effective_limit
+    if not queries:
+        diagnostics["status"] = "skipped_no_input"
+        return finish()
+    if getattr(embedding_backend, "mode_name", "unavailable") == "unavailable":
+        diagnostics["status"] = "unavailable"
+        diagnostics["failure_reason"] = "embedding backend unavailable"
+        return finish()
+
+    query_vectors: list[tuple[str, list[float], dict[str, Any]]] = []
+    query_failures: list[str] = []
+    for query in queries:
+        response = embedding_backend.embed_query_text(query)
+        query_result: dict[str, Any] = {
+            "query": query,
+            "backend_status": response.status,
+            "embedding_succeeded": False,
+            "vector_rows_considered": 0,
+            "scope_admissible_rows": 0,
+            "rows_at_or_above_threshold": 0,
+            "candidates_before_per_query_cap": 0,
+            "candidates_after_per_query_cap": 0,
+            "candidates_represented_after_merged_allocation": 0,
+        }
+        if response.status == "embedded" and response.vectors and isinstance(response.vectors[0], list):
+            query_vector = response.vectors[0]
+            if query_vector and all(isinstance(value, (int, float)) for value in query_vector):
+                query_identity = embedding_identity_from_response(response, config=config, vector=[float(value) for value in query_vector])
+                if not isinstance(response.metadata, dict) or not response.metadata.get("backend_mode"):
+                    query_identity["provider"] = str(getattr(embedding_backend, "mode_name", "unknown"))
+                query_norm = math.sqrt(sum(float(value) * float(value) for value in query_vector))
+                if query_norm > 0.0:
+                    query_vectors.append((query, [float(value) for value in query_vector], query_identity))
+                    query_result.update(
+                        {
+                            "embedding_succeeded": True,
+                            "query_identity": query_identity,
+                            "query_dimensions": len(query_vector),
+                        }
+                    )
+                else:
+                    query_result["diagnostic"] = "query vector has zero norm"
+            else:
+                query_result["diagnostic"] = "query vector is empty or nonnumeric"
+        else:
+            query_result["diagnostic"] = "query embedding failed"
+        if not query_result["embedding_succeeded"]:
+            query_failures.append(f"{query}: {response.status}")
+        diagnostics["query_results"].append(query_result)
+    if not query_vectors:
+        diagnostics["status"] = "failed" if query_failures else "unavailable"
+        return finish()
+
+    try:
+        rows = connection.execute(
+            f"SELECT chunk_id, vector_json, vector_dimensions, embedding_provider, embedding_model, embedding_identity_json, embedding_identity_hash FROM {config.vector_table} ORDER BY chunk_id"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        diagnostics["status"] = "partial_failure" if query_failures else "unavailable"
+        diagnostics["failure_reason"] = f"vector identity columns unavailable: {exc}"
+        return finish()
+    diagnostics["stored_vector_row_count"] = len(rows)
+    chunk_rows = {str(row["chunk_id"]): row for row in _load_chunk_rows(connection)}
+    valid_rows: list[tuple[Any, dict[str, Any], list[float], dict[str, Any]]] = []
+    observed_identity_keys: set[str] = set()
     for row in rows:
         chunk_id = str(row["chunk_id"])
         chunk_row = chunk_rows.get(chunk_id)
-        if chunk_row is None or not _chunk_matches_scope(chunk_row, scope_filters or {}):
+        if chunk_row is None:
+            diagnostics["identity_mismatch_count"] += 1
             continue
         try:
+            identity = json.loads(str(row["embedding_identity_json"]))
             vector = json.loads(str(row["vector_json"]))
-        except json.JSONDecodeError:
+        except (TypeError, ValueError, json.JSONDecodeError):
+            diagnostics["invalid_json_count"] += 1
             continue
-        if not isinstance(vector, list) or not all(isinstance(value, (int, float)) for value in vector):
+        if not isinstance(identity, dict) or not {"provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy"}.issubset(identity):
+            diagnostics["identity_mismatch_count"] += 1
             continue
-        similarity = _cosine_similarity(query_vector, [float(value) for value in vector])
-        if similarity <= 0.0:
+        observed_identity_keys.add(json.dumps(identity, sort_keys=True, separators=(",", ":")))
+        try:
+            columns_match = (
+                str(row["embedding_provider"]) == str(identity["provider"])
+                and str(row["embedding_model"]) == str(identity["model"])
+                and int(row["vector_dimensions"]) == int(identity["dimensions"])
+            )
+        except (TypeError, ValueError):
+            columns_match = False
+        if not columns_match:
+            diagnostics["identity_mismatch_count"] += 1
             continue
+        if str(row["embedding_identity_hash"] or "") != embedding_identity_hash(identity):
+            diagnostics["identity_mismatch_count"] += 1
+            continue
+        if not isinstance(vector, list):
+            diagnostics["invalid_numeric_count"] += 1
+            continue
+        if not vector:
+            diagnostics["empty_vector_count"] += 1
+            continue
+        if not all(isinstance(value, (int, float)) for value in vector):
+            diagnostics["invalid_numeric_count"] += 1
+            continue
+        if len(vector) != int(identity["dimensions"]) or len(vector) != int(row["vector_dimensions"]):
+            diagnostics["dimension_mismatch_count"] += 1
+            continue
+        if math.sqrt(sum(float(value) * float(value) for value in vector)) == 0.0:
+            diagnostics["zero_norm_count"] += 1
+            continue
+        diagnostics["compatible_vector_count"] += 1
+        valid_rows.append((row, chunk_row, [float(value) for value in vector], identity))
+    diagnostics["observed_identity_count"] = len(observed_identity_keys)
+    diagnostics["mixed_identity_count"] = max(0, len(observed_identity_keys) - 1)
+
+    per_query_lists: dict[str, list[dict[str, Any]]] = {}
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    for query, query_vector, query_identity in query_vectors:
+        query_result = next(result for result in diagnostics["query_results"] if result["query"] == query)
+        query_candidates: list[dict[str, Any]] = []
+        query_result["vector_rows_considered"] = len(rows)
+        for row, chunk_row, vector, stored_identity in valid_rows:
+            if eligible_chunk_ids is not None and str(row["chunk_id"]) not in eligible_chunk_ids:
+                continue
+            if not _chunk_matches_scope(chunk_row, scope_filters or {}):
+                continue
+            query_result["scope_admissible_rows"] += 1
+            if any(stored_identity.get(field) != query_identity.get(field) for field in ("provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy")):
+                diagnostics["identity_mismatch_count"] += 1
+                continue
+            similarity = _cosine_similarity(query_vector, vector)
+            if similarity < config.retrieval_vector_min_similarity:
+                diagnostics["below_threshold_count"] += 1
+                continue
+            diagnostics["at_or_above_threshold_count"] += 1
+            query_result["rows_at_or_above_threshold"] += 1
+            query_candidates.append({"chunk_id": str(row["chunk_id"]), "query": query, "similarity": similarity, "chunk_row": chunk_row})
+        query_candidates.sort(key=lambda item: (-float(item["similarity"]), str(item["chunk_id"])))
+        query_result["candidates_before_per_query_cap"] = len(query_candidates)
+        if len(query_candidates) > config.retrieval_vector_per_query_max_candidates:
+            diagnostics["per_query_cap_attrition_count"] += len(query_candidates) - config.retrieval_vector_per_query_max_candidates
+        query_candidates = query_candidates[: config.retrieval_vector_per_query_max_candidates]
+        query_result["candidates_after_per_query_cap"] = len(query_candidates)
+        per_query_lists[query] = query_candidates
+        for item in query_candidates:
+            candidate = merged_by_id.setdefault(item["chunk_id"], {"chunk_row": item["chunk_row"], "scores": {}})
+            candidate["scores"][query] = float(item["similarity"])
+
+    selected_ids: set[str] = set()
+    selected_order: list[str] = []
+    note_counts: dict[str, int] = {}
+    query_indexes = {query: 0 for query in queries if query in per_query_lists}
+    while len(selected_ids) < effective_limit and any(query_indexes[query] < len(per_query_lists[query]) for query in query_indexes):
+        progressed = False
+        for query in queries:
+            if query not in query_indexes or query_indexes[query] >= len(per_query_lists[query]) or len(selected_ids) >= effective_limit:
+                continue
+            item = per_query_lists[query][query_indexes[query]]
+            query_indexes[query] += 1
+            progressed = True
+            chunk_id = item["chunk_id"]
+            if chunk_id in selected_ids:
+                continue
+            note_id = str(item["chunk_row"].get("note_id") or "")
+            if note_counts.get(note_id, 0) >= config.retrieval_vector_max_chunks_per_note:
+                diagnostics["note_cap_attrition_count"] += 1
+                continue
+            selected_ids.add(chunk_id)
+            selected_order.append(chunk_id)
+            note_counts[note_id] = note_counts.get(note_id, 0) + 1
+        if not progressed:
+            break
+
+    for chunk_id in selected_order:
+        merged = merged_by_id[chunk_id]
+        scores = {query: merged["scores"][query] for query in sorted(merged["scores"])}
+        best_query = sorted(scores, key=lambda query: (-scores[query], query))[0]
+        best_similarity = scores[best_query]
         candidates.append(
             {
-                **chunk_row,
-                "selection_reason": f"vector similarity {similarity:.3f}",
-                "score": similarity + float(config.retrieval_scoring["vector_bonus"]),
+                **merged["chunk_row"],
+                "selection_reason": f"vector similarity {best_similarity:.3f} from {best_query}",
+                "score": best_similarity + float(config.retrieval_scoring["vector_bonus"]),
                 "selection_source": "vector",
-                "match_reason": f"vector query similarity {similarity:.3f}",
+                "match_reason": f"vector query similarity {best_similarity:.3f}",
+                "semantic_query_provenance": list(scores),
+                "vector_query_scores": [{"query": query, "similarity": scores[query]} for query in scores],
+                "vector_best_query": best_query,
+                "vector_similarity": best_similarity,
             }
         )
-    candidates = sorted(candidates, key=lambda candidate: -float(candidate.get("score") or 0.0))
-    if limit is not None:
-        candidates = candidates[:limit]
+    for result in diagnostics["query_results"]:
+        result["candidates_represented_after_merged_allocation"] = sum(1 for candidate in candidates if result["query"] in candidate.get("semantic_query_provenance", []))
     if candidates:
-        notes.append(f"vector search matched {len(candidates)} chunk(s)")
+        notes.append(f"vector search matched {len(candidates)} chunk(s) across {len(query_vectors)} semantic quer{'y' if len(query_vectors) == 1 else 'ies'}")
     else:
         notes.append("vector search produced no matches")
-    return candidates, notes
+    if query_failures:
+        notes.append(f"vector queries failed: {'; '.join(query_failures)}")
+    degraded = any(diagnostics[key] for key in ("invalid_json_count", "invalid_numeric_count", "empty_vector_count", "zero_norm_count", "dimension_mismatch_count", "identity_mismatch_count", "mixed_identity_count")) and diagnostics["compatible_vector_count"] > 0
+    diagnostics["status"] = "partial_failure" if query_failures or degraded else ("completed_with_candidates" if candidates else "completed_no_candidates")
+    return finish()
 
 
 def _graph_candidates(
@@ -913,19 +1508,27 @@ def _graph_candidates(
     connection: sqlite3.Connection,
     config: RuntimeConfig,
     planner_retrieval_plan: dict[str, Any],
-    prior_thread_state: dict[str, Any],
+    graph_depth: dict[str, Any] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
     if not config.graph_traversal_enabled:
         return [], ["graph traversal disabled"], {
+            "status": "disabled",
             "enabled": False,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
 
     try:
@@ -937,40 +1540,71 @@ def _graph_candidates(
         ).fetchall()
     except sqlite3.OperationalError:
         return [], ["graph search unavailable"], {
+            "status": "unavailable",
             "enabled": config.graph_traversal_enabled,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
 
     chunk_rows = {row["chunk_id"]: row for row in _load_chunk_rows(connection)}
     nodes_by_id = {str(row["node_id"]): dict(row) for row in node_rows}
-    note_nodes = [dict(row) for row in node_rows if str(row["node_type"]) in set(config.graph_traversal_node_type_allowlist)]
+    note_nodes = sorted(
+        [dict(row) for row in node_rows if str(row["node_type"]) in set(config.graph_traversal_node_type_allowlist)],
+        key=lambda row: str(row.get("node_id") or ""),
+    )
     edge_type_allowlist = set(config.graph_traversal_edge_type_allowlist)
     node_type_allowlist = set(config.graph_traversal_node_type_allowlist)
     seed_values = _graph_seed_values(
         planner_retrieval_plan=planner_retrieval_plan,
-        prior_thread_state=prior_thread_state,
         config=config,
     )
     if not seed_values:
         return [], ["graph search skipped: no graph seeds"], {
+            "status": "skipped_no_input",
             "enabled": config.graph_traversal_enabled,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
 
-    outgoing: dict[str, list[tuple[str, str]]] = {}
+    submitted_seeds: list[dict[str, str]] = []
+    for source_name, seed in seed_values:
+        item = {"source": str(source_name), "value": str(seed)}
+        if item not in submitted_seeds:
+            submitted_seeds.append(item)
+
+    outgoing: dict[str, list[tuple[str, str, str]]] = {}
+    incoming: dict[str, list[tuple[str, str, str]]] = {}
     for row in edge_rows:
-        outgoing.setdefault(str(row["source_node_id"]), []).append((str(row["target_node_id"]), str(row["edge_type"])))
+        source_node_id = str(row["source_node_id"])
+        target_node_id = str(row["target_node_id"])
+        edge_type = str(row["edge_type"])
+        outgoing.setdefault(source_node_id, []).append((target_node_id, edge_type, "outbound"))
+        incoming.setdefault(target_node_id, []).append((source_node_id, edge_type, "inbound"))
 
     selected_note_ids: list[str] = []
     note_reasons: dict[str, list[str]] = {}
+    note_hops: dict[str, list[dict[str, Any]]] = {}
+    matched_seed_note_ids: list[str] = []
     matched_seed_count = 0
     expanded_note_count = 0
     edge_types_used: list[str] = []
@@ -995,6 +1629,8 @@ def _graph_candidates(
                 continue
             node_label = str(node_row.get("label") or note_id)
             note_reasons.setdefault(note_id, []).append(f"{source_name} graph seed matched note: {node_label}")
+            if note_id not in matched_seed_note_ids:
+                matched_seed_note_ids.append(note_id)
             if note_id not in visited_notes:
                 visited_notes.add(note_id)
                 selected_note_ids.append(note_id)
@@ -1002,7 +1638,8 @@ def _graph_candidates(
 
     while queue:
         current_note_id, hop = queue.pop(0)
-        if hop >= config.graph_traversal_hop_limit:
+        effective_depth = int((graph_depth or {}).get("effective_depth", 0))
+        if hop >= effective_depth:
             continue
         # Avoid relying on helper placement below; note node ids are canonical.
         current_node_id = f"note::{current_note_id}"
@@ -1010,7 +1647,12 @@ def _graph_candidates(
         if current_node is None:
             continue
         current_label = str(current_node.get("label") or current_note_id)
-        for target_node_id, edge_type in outgoing.get(current_node_id, []):
+        traversals: list[tuple[str, str, str]] = []
+        if config.graph_traversal_direction in {"outbound", "both"}:
+            traversals.extend(sorted(outgoing.get(current_node_id, []), key=lambda item: (item[1], item[0])))
+        if config.graph_traversal_direction in {"inbound", "both"}:
+            traversals.extend(sorted(incoming.get(current_node_id, []), key=lambda item: (item[1], item[0])))
+        for target_node_id, edge_type, edge_direction in traversals:
             if edge_type not in edge_type_allowlist:
                 continue
             if edge_type not in edge_types_used:
@@ -1024,7 +1666,27 @@ def _graph_candidates(
             if not target_note_id:
                 continue
             target_label = str(target_node.get("label") or target_note_id)
-            note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1}: {current_label} -> {target_label}")
+            note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1} ({edge_direction}): {current_label} -> {target_label}")
+            edge_source_note_id = str(nodes_by_id.get(
+                current_node_id if edge_direction == "outbound" else target_node_id,
+                {},
+            ).get("ref_id") or "")
+            edge_target_note_id = str(nodes_by_id.get(
+                target_node_id if edge_direction == "outbound" else current_node_id,
+                {},
+            ).get("ref_id") or "")
+            hop_evidence = {
+                "hop": hop + 1,
+                "traversal_direction": edge_direction,
+                "edge_type": edge_type,
+                "edge_source_note_id": edge_source_note_id,
+                "edge_target_note_id": edge_target_note_id,
+                "from_note_id": current_note_id,
+                "to_note_id": target_note_id,
+            }
+            target_hops = note_hops.setdefault(target_note_id, [])
+            if hop_evidence not in target_hops and len(target_hops) < 8:
+                target_hops.append(hop_evidence)
             if target_note_id not in visited_notes:
                 visited_notes.add(target_note_id)
                 selected_note_ids.append(target_note_id)
@@ -1032,9 +1694,12 @@ def _graph_candidates(
                 expanded_note_count += 1
 
     max_graph_candidates = limit if limit is not None else config.graph_traversal_max_candidates
-    selected_chunk_ids: list[str] = []
+    eligible_rows_by_note: list[list[dict[str, Any]]] = []
     for note_id in selected_note_ids:
-        note_chunk_rows = [chunk_row for chunk_row in chunk_rows.values() if str(chunk_row["note_id"]) == note_id and _chunk_matches_scope(chunk_row, scope_filters or {})]
+        note_chunk_rows = sorted(
+            [chunk_row for chunk_row in chunk_rows.values() if str(chunk_row["note_id"]) == note_id and _chunk_matches_scope(chunk_row, scope_filters or {})],
+            key=lambda row: str(row.get("chunk_id") or ""),
+        )
         if not note_chunk_rows:
             continue
         preferred_rows = [
@@ -1051,16 +1716,27 @@ def _graph_candidates(
                 )
             )
         ]
-        candidate_rows = preferred_rows or note_chunk_rows
-        for chunk_row in candidate_rows:
-            chunk_id = str(chunk_row["chunk_id"])
+        eligible_rows_by_note.append(preferred_rows or note_chunk_rows)
+
+    # Materialize one representative per traversed note per round. This keeps
+    # a large seed note from consuming the graph pool before neighbors appear.
+    selected_chunk_ids: list[str] = []
+    round_index = 0
+    while len(selected_chunk_ids) < max_graph_candidates:
+        added_this_round = False
+        for candidate_rows in eligible_rows_by_note:
+            if round_index >= len(candidate_rows):
+                continue
+            chunk_id = str(candidate_rows[round_index]["chunk_id"])
             if chunk_id in selected_chunk_ids:
                 continue
             selected_chunk_ids.append(chunk_id)
+            added_this_round = True
             if len(selected_chunk_ids) >= max_graph_candidates:
                 break
-        if len(selected_chunk_ids) >= max_graph_candidates:
+        if not added_this_round:
             break
+        round_index += 1
 
     candidates = []
     for chunk_id in selected_chunk_ids:
@@ -1075,6 +1751,9 @@ def _graph_candidates(
                 "score": float(config.retrieval_scoring["graph_bonus"]),
                 "selection_source": "graph",
                 "match_reason": "graph expansion",
+                "graph_direction": config.graph_traversal_direction,
+                "graph_provenance": note_reasons.get(str(chunk_row["note_id"]), []),
+                "graph_hop_provenance": note_hops.get(str(chunk_row["note_id"]), []),
             }
         )
     if candidates:
@@ -1082,15 +1761,24 @@ def _graph_candidates(
     else:
         notes.append("graph search produced no matches")
     notes.append(
-        f"graph traversal enabled={config.graph_traversal_enabled}, hop_limit={config.graph_traversal_hop_limit}, matched_seed_count={matched_seed_count}, expanded_note_count={expanded_note_count}"
+        f"graph traversal enabled={config.graph_traversal_enabled}, effective_depth={int((graph_depth or {}).get('effective_depth', 0))}, matched_seed_count={matched_seed_count}, expanded_note_count={expanded_note_count}"
     )
     return candidates, notes, {
+        "status": "completed_with_candidates" if candidates else "completed_no_candidates",
         "enabled": config.graph_traversal_enabled,
-        "hop_limit": config.graph_traversal_hop_limit,
+        "hop_limit": int((graph_depth or {}).get("effective_depth", 0)),
+        **(graph_depth or {}),
         "seed_sources": list(config.graph_traversal_seed_sources),
+        "submitted_seeds": submitted_seeds,
         "matched_seed_count": matched_seed_count,
+        "matched_seed_note_ids": matched_seed_note_ids,
         "expanded_note_count": expanded_note_count,
+        "selected_note_ids": list(selected_note_ids),
         "edge_types_used": edge_types_used,
+        "direction": config.graph_traversal_direction,
+        "candidate_note_ids": [str(candidate.get("note_id") or "") for candidate in candidates],
+        "candidate_unique_note_ids": list(dict.fromkeys(str(candidate.get("note_id") or "") for candidate in candidates)),
+        "traversal_hops": [hop for note_id in selected_note_ids for hop in note_hops.get(note_id, [])],
     }
 
 
@@ -1169,57 +1857,453 @@ def _apply_retrieval_candidate_hygiene(
     return adjusted
 
 
+def _temporal_anchor_order_key(anchor: dict[str, Any]) -> tuple[str, str, str]:
+    """Return a stable interval key without comparing raw cross-surface scores."""
+    return (
+        str(anchor.get("canonical_start") or ""),
+        str(anchor.get("canonical_end") or ""),
+        str(anchor.get("anchor_id") or ""),
+    )
+
+
+def _choose_temporal_governing_anchor(
+    anchors: list[dict[str, Any]],
+    *,
+    mode: str,
+    direction: str,
+) -> dict[str, Any]:
+    """Choose the mode-specific anchor while retaining the complete set."""
+    if not anchors:
+        raise ValueError("temporal governing anchor requires at least one anchor")
+    if mode == "latest" or (mode == "ordered" and direction == "descending"):
+        return max(anchors, key=_temporal_anchor_order_key)
+    if mode == "before":
+        return max(
+            anchors,
+            key=lambda anchor: (
+                str(anchor.get("canonical_end") or anchor.get("canonical_start") or ""),
+                str(anchor.get("canonical_start") or ""),
+                str(anchor.get("anchor_id") or ""),
+            ),
+        )
+    if mode == "after":
+        return min(
+            anchors,
+            key=lambda anchor: (
+                str(anchor.get("canonical_start") or anchor.get("canonical_end") or ""),
+                str(anchor.get("canonical_end") or ""),
+                str(anchor.get("anchor_id") or ""),
+            ),
+        )
+    # earliest, ordered ascending, and between use the earliest qualifying
+    # interval as their governing temporal position.
+    return min(anchors, key=_temporal_anchor_order_key)
+
+
+def _temporal_candidate_position(candidate: dict[str, Any], field: str) -> str:
+    return str(candidate.get(field) or "")
+
+
+def _order_temporal_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    mode: str,
+    direction: str,
+) -> list[dict[str, Any]]:
+    """Apply the accepted temporal tuple with relevance in the right place."""
+    ordered = list(candidates)
+    # Stable passes make the tuple explicit while keeping identity as the last
+    # tie-breaker. Relation modes intentionally apply relevance last, making it
+    # primary after relation admission; date is only their secondary tie-break.
+    ordered.sort(key=lambda candidate: str(candidate.get("chunk_id") or ""))
+    if mode in {"earliest", "latest", "ordered"}:
+        descending = mode == "latest" or (mode == "ordered" and direction == "descending")
+        ordered.sort(
+            key=lambda candidate: -float(candidate.get("internal_ordinal_relevance") or 0.0)
+        )
+        ordered.sort(
+            key=lambda candidate: _temporal_candidate_position(
+                candidate, "temporal_governing_canonical_start"
+            ),
+            reverse=descending,
+        )
+        return ordered
+
+    if mode == "before":
+        ordered.sort(
+            key=lambda candidate: (
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_end")
+                or _temporal_candidate_position(candidate, "temporal_governing_canonical_start"),
+            ),
+            reverse=True,
+        )
+    elif mode == "after":
+        ordered.sort(
+            key=lambda candidate: (
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_start")
+                or _temporal_candidate_position(candidate, "temporal_governing_canonical_end"),
+            )
+        )
+    elif mode == "between":
+        ordered.sort(
+            key=lambda candidate: (
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_start"),
+                _temporal_candidate_position(candidate, "temporal_governing_canonical_end"),
+            )
+        )
+    ordered.sort(key=lambda candidate: -float(candidate.get("internal_ordinal_relevance") or 0.0))
+    return ordered
+
+
+def _temporal_candidates(
+    *,
+    connection: sqlite3.Connection,
+    config: RuntimeConfig,
+    chunk_rows: list[dict[str, Any]],
+    layer: dict[str, Any],
+    lexical_queries: list[str],
+    semantic_queries: list[str],
+    literal_terms: list[dict[str, Any]],
+    scope_filters: dict[str, Any],
+    embedding_backend: EmbeddingBackend,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    mode = str(layer.get("mode") or config.retrieval_temporal_default_mode)
+    diagnostics: dict[str, Any] = {
+        "operator": "temporal_retrieve",
+        "status": "not_requested",
+        "mode": mode,
+        "candidate_count": 0,
+        "matched_anchor_count": 0,
+        "matched_note_count": 0,
+        "internal_surface_counts": {"lexical": 0, "vector": 0},
+        "searches_full_temporal_projection": True,
+        "relation_certainty_counts": {},
+        "anchor_types": list(layer.get("anchor_types") or config.retrieval_temporal_default_anchor_types),
+        "authorities": list(layer.get("authorities") or config.retrieval_temporal_allowed_authorities),
+        "include_unresolved": bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default)),
+    }
+    if not config.retrieval_temporal_enabled:
+        diagnostics.update({"status": "disabled", "failure_reason": "temporal retrieval disabled by runtime YAML"})
+        return [], ["temporal retrieval disabled"], diagnostics
+    if mode not in config.retrieval_temporal_allowed_modes:
+        diagnostics.update({"status": "unsupported", "failure_reason": "temporal mode is not YAML-allowed"})
+        return [], ["temporal retrieval mode unsupported"], diagnostics
+    try:
+        boundary_start = parse_temporal_value(layer["before"])[0] if layer.get("before") is not None else parse_temporal_value(layer["start"])[0] if layer.get("start") is not None else None
+        boundary_end = parse_temporal_value(layer["after"])[1] if layer.get("after") is not None else parse_temporal_value(layer["end"])[1] if layer.get("end") is not None else None
+        if mode == "between" and (boundary_start is None or boundary_end is None):
+            raise ValueError("between requires start and end")
+        if boundary_start and boundary_end and boundary_start > boundary_end:
+            raise ValueError("temporal boundaries are contradictory")
+    except (TypeError, ValueError) as exc:
+        diagnostics.update({"status": "failed", "failure_reason": str(exc)})
+        return [], [f"temporal boundary failure: {exc}"], diagnostics
+
+    anchor_rows = connection.execute(
+        "SELECT anchor_id, note_id, chunk_id, anchor_type, canonical_start, canonical_end, precision, source_field, original_source_value, authority, parsing_status, conflict_group, unresolved, diagnostic_reason FROM temporal_anchors ORDER BY canonical_start, anchor_id"
+    ).fetchall()
+    allowed_types = set(diagnostics["anchor_types"])
+    allowed_authorities = set(diagnostics["authorities"])
+    eligible_anchors: list[dict[str, Any]] = []
+    for row in anchor_rows:
+        anchor = dict(row)
+        if anchor["anchor_type"] not in allowed_types or anchor["authority"] not in allowed_authorities:
+            continue
+        relation = relation_for_anchor(anchor, mode=mode, boundary_start=boundary_start, boundary_end=boundary_end, include_unresolved=diagnostics["include_unresolved"])
+        if relation is None:
+            continue
+        anchor["relation_certainty"] = relation
+        eligible_anchors.append(anchor)
+    diagnostics["matched_anchor_count"] = len(eligible_anchors)
+    if not eligible_anchors:
+        diagnostics.update({"status": "completed_no_candidates", "relation_certainty_counts": {}})
+        return [], ["temporal retrieval found no qualifying anchors"], diagnostics
+
+    combined_lexical_queries = list(dict.fromkeys([*lexical_queries, *[str(item.get("term")) for item in literal_terms if item.get("term")]]))
+    lexical, lexical_notes, lexical_diag = _lexical_candidates(
+        chunk_rows, combined_lexical_queries, connection=connection, scope_filters=scope_filters,
+        limit=None, config=config, mode=config.retrieval_lexical_default_mode, return_diagnostics=True,
+    )
+    eligible_note_ids = {str(anchor["note_id"]) for anchor in eligible_anchors}
+    eligible_chunk_ids = {str(row["chunk_id"]) for row in chunk_rows if str(row.get("note_id")) in eligible_note_ids and _chunk_matches_scope(row, scope_filters)}
+    lexical = [candidate for candidate in lexical if str(candidate.get("chunk_id")) in eligible_chunk_ids]
+    vector, vector_notes, vector_diag = _vector_candidates(
+        connection=connection, config=config, embedding_backend=embedding_backend,
+        vector_query=semantic_queries[0] if semantic_queries else "", vector_queries=semantic_queries,
+        scope_filters=scope_filters, limit=config.retrieval_temporal_max_candidates,
+        eligible_chunk_ids=eligible_chunk_ids, return_diagnostics=True,
+    )
+    lexical_by_id = {str(candidate["chunk_id"]): (index, candidate) for index, candidate in enumerate(lexical, start=1)}
+    vector_by_id = {str(candidate["chunk_id"]): (index, candidate) for index, candidate in enumerate(vector, start=1)}
+    diagnostics["internal_surface_counts"] = {"lexical": len(lexical), "vector": len(vector)}
+    rows_by_id = {str(row["chunk_id"]): row for row in chunk_rows}
+    anchor_by_note: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for anchor in eligible_anchors:
+        anchor_by_note[str(anchor["note_id"])].append(anchor)
+    temporal: list[dict[str, Any]] = []
+    for chunk_id in sorted(set(lexical_by_id) | set(vector_by_id)):
+        row = rows_by_id.get(chunk_id)
+        if row is None:
+            continue
+        anchors = anchor_by_note.get(str(row.get("note_id")), [])
+        if not anchors:
+            continue
+        direction = str(layer.get("direction") or "ascending")
+        anchor = _choose_temporal_governing_anchor(anchors, mode=mode, direction=direction)
+        lexical_rank = lexical_by_id.get(chunk_id, (None, {}))[0]
+        vector_rank = vector_by_id.get(chunk_id, (None, {}))[0]
+        ranks = [rank for rank in (lexical_rank, vector_rank) if rank is not None]
+        ordinal = sum(1.0 / rank for rank in ranks) if ranks else 0.0
+        provenance = [{"anchor_id": item["anchor_id"], "anchor_type": item["anchor_type"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "precision": item["precision"], "authority": item["authority"], "source_field": item["source_field"], "relation": mode, "relation_certainty": item["relation_certainty"]} for item in anchors]
+        ordered_anchors = sorted(anchors, key=_temporal_anchor_order_key)
+        temporal.append({
+            **row,
+            "selection_source": "temporal",
+            "source_layers": ["temporal"],
+            "score": ordinal,
+            "internal_lexical_rank": lexical_rank,
+            "internal_vector_rank": vector_rank,
+            "internal_ordinal_relevance": ordinal,
+            "temporal_anchor_ids": [item["anchor_id"] for item in ordered_anchors],
+            "temporal_provenance": [
+                item for item in sorted(provenance, key=lambda value: (str(value.get("canonical_start") or ""), str(value.get("canonical_end") or ""), str(value.get("anchor_id") or "")))
+            ],
+            "temporal_governing_anchor_id": anchor["anchor_id"],
+            "temporal_governing_anchor_type": anchor["anchor_type"],
+            "temporal_governing_canonical_start": anchor["canonical_start"],
+            "temporal_governing_canonical_end": anchor["canonical_end"],
+            "temporal_mode": mode,
+            "relation_status": anchor["relation_certainty"],
+            "selection_reason": f"temporal {mode} relevance admission",
+            "match_reason": f"temporal {mode} relation with ordinal relevance",
+        })
+    temporal = _order_temporal_candidates(
+        temporal,
+        mode=mode,
+        direction=str(layer.get("direction") or "ascending"),
+    )
+    temporal = temporal[: min(config.retrieval_temporal_max_candidates, max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit)))))]
+    diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "matched_note_count": len({str(item["note_id"]) for item in temporal}), "relation_certainty_counts": dict(sorted(Counter(str(item.get("relation_status")) for item in temporal).items()))})
+    return temporal, [*lexical_notes, *vector_notes], diagnostics
+
+
+_FUSION_SURFACE_ORDER = ("exact", "lexical", "vector", "graph", "temporal")
+
+
+def _deduplicate_surface_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    surface: str,
+) -> list[dict[str, Any]]:
+    """Keep the first executor-local representation for each chunk."""
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for candidate in candidates:
+        chunk_id = str(candidate.get("chunk_id") or "")
+        if not chunk_id or chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        unique.append(candidate)
+    return unique
+
+
+def _surface_rank_maps(
+    surface_candidates: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, float]]]:
+    ranks: dict[str, dict[str, int]] = {}
+    raw_scores: dict[str, dict[str, float]] = {}
+    for surface in _FUSION_SURFACE_ORDER:
+        ranks[surface] = {}
+        raw_scores[surface] = {}
+        for ordinal, candidate in enumerate(surface_candidates.get(surface, []), start=1):
+            chunk_id = str(candidate.get("chunk_id") or "")
+            if not chunk_id:
+                continue
+            ranks[surface][chunk_id] = ordinal
+            raw_scores[surface][chunk_id] = float(candidate.get("score") or 0.0)
+    return ranks, raw_scores
+
+
+def _apply_ordinal_fusion_metadata(
+    candidate: dict[str, Any],
+    *,
+    surface_ranks: dict[str, int],
+    surface_raw_scores: dict[str, float],
+) -> None:
+    ordered_ranks = {
+        surface: surface_ranks[surface]
+        for surface in _FUSION_SURFACE_ORDER
+        if surface in surface_ranks
+    }
+    ordered_scores = {
+        surface: surface_raw_scores[surface]
+        for surface in _FUSION_SURFACE_ORDER
+        if surface in surface_raw_scores
+    }
+    candidate["surface_ranks"] = ordered_ranks
+    candidate["surface_raw_scores"] = ordered_scores
+    candidate["ordinal_fusion_score"] = sum(1.0 / rank for rank in ordered_ranks.values())
+    candidate["best_surface_rank"] = min(ordered_ranks.values()) if ordered_ranks else None
+    candidate["surface_rank_sum"] = sum(ordered_ranks.values())
+
+
 def _merge_candidates(
     lexical_candidates: list[dict[str, Any]],
     vector_candidates: list[dict[str, Any]],
     graph_candidates: list[dict[str, Any]],
     config: RuntimeConfig,
     exact_candidates: list[dict[str, Any]] | None = None,
+    temporal_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
-    source_priority = {str(key): int(value) for key, value in config.retrieval_scoring["source_priority"].items()}
+    surface_candidates = {
+        "exact": _deduplicate_surface_candidates(list(exact_candidates or []), surface="exact"),
+        "lexical": _deduplicate_surface_candidates(lexical_candidates, surface="lexical"),
+        "vector": _deduplicate_surface_candidates(vector_candidates, surface="vector"),
+        "graph": _deduplicate_surface_candidates(graph_candidates, surface="graph"),
+        "temporal": _deduplicate_surface_candidates(list(temporal_candidates or []), surface="temporal"),
+    }
+    surface_ranks, surface_raw_scores = _surface_rank_maps(surface_candidates)
+    surface_representations = {
+        surface: {str(candidate.get("chunk_id") or ""): candidate for candidate in candidates}
+        for surface, candidates in surface_candidates.items()
+    }
+
+    def merge_list(existing: dict[str, Any], candidate: dict[str, Any], field: str) -> None:
+        values = [*existing.get(field, []), *candidate.get(field, [])]
+        if values:
+            unique: list[Any] = []
+            for value in values:
+                if value not in unique:
+                    unique.append(value)
+            existing[field] = unique
+
+    def merge_vector_provenance(existing: dict[str, Any], candidate: dict[str, Any]) -> None:
+        scores: dict[str, float] = {}
+        for item in [*existing.get("vector_query_scores", []), *candidate.get("vector_query_scores", [])]:
+            if isinstance(item, dict) and str(item.get("query") or ""):
+                scores[str(item["query"])] = max(scores.get(str(item["query"]), float("-inf")), float(item.get("similarity") or 0.0))
+        if not scores:
+            return
+        ordered_scores = {query: scores[query] for query in sorted(scores)}
+        best_query = sorted(ordered_scores, key=lambda query: (-ordered_scores[query], query))[0]
+        existing["vector_query_scores"] = [{"query": query, "similarity": ordered_scores[query]} for query in ordered_scores]
+        existing["semantic_query_provenance"] = list(ordered_scores)
+        existing["vector_best_query"] = best_query
+        existing["vector_similarity"] = ordered_scores[best_query]
 
     def absorb(candidate: dict[str, Any]) -> None:
         chunk_id = str(candidate["chunk_id"])
         existing = merged.get(chunk_id)
         source = str(candidate.get("selection_source") or "lexical")
+        candidate_layers = _candidate_source_layers(candidate)
         if existing is None:
             merged[chunk_id] = dict(candidate)
-            merged[chunk_id]["sources"] = [source]
-            merged[chunk_id]["source_layers"] = [source]
+            merged[chunk_id]["sources"] = list(candidate_layers)
+            merged[chunk_id]["source_layers"] = list(candidate_layers)
+            merged[chunk_id]["semantic_query_provenance"] = list(dict.fromkeys(_coerce_string_list(candidate.get("semantic_query_provenance"))))
+            merged[chunk_id]["exact_term_provenance"] = list(dict.fromkeys(_coerce_string_list(candidate.get("exact_term_provenance"))))
             return
-        existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
-        existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
-        existing_score = float(existing.get("score") or 0.0)
-        candidate_score = float(candidate.get("score") or 0.0)
-        if candidate_score > existing_score or (
-            candidate_score == existing_score
-            and source_priority.get(source, 0) > source_priority.get(str(existing.get("selection_source") or ""), 0)
-        ):
-            merged[chunk_id] = dict(candidate)
-            merged[chunk_id]["sources"] = list(dict.fromkeys(existing.get("sources", []) + [source]))
-            merged[chunk_id]["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + [source]))
-        else:
-            existing["score"] = max(existing_score, candidate_score)
-            existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
-            existing["selection_reason"] = ", ".join(
-                part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
-            )
+        existing_queries = _coerce_string_list(existing.get("semantic_query_provenance"))
+        candidate_queries = _coerce_string_list(candidate.get("semantic_query_provenance"))
+        existing_graph_provenance = _coerce_string_list(existing.get("graph_provenance"))
+        candidate_graph_provenance = _coerce_string_list(candidate.get("graph_provenance"))
+        existing["semantic_query_provenance"] = list(dict.fromkeys([*existing_queries, *candidate_queries]))
+        merge_vector_provenance(existing, candidate)
+        existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
+        existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
+        merge_list(existing, candidate, "exact_term_provenance")
+        merge_list(existing, candidate, "exact_match_evidence")
+        merge_list(existing, candidate, "graph_hop_provenance")
+        merge_list(existing, candidate, "temporal_provenance")
+        merge_list(existing, candidate, "temporal_anchor_ids")
+        if existing.get("temporal_governing_anchor_id") is None and candidate.get("temporal_governing_anchor_id") is not None:
+            existing["temporal_governing_anchor_id"] = candidate["temporal_governing_anchor_id"]
+            existing["temporal_governing_anchor_type"] = candidate.get("temporal_governing_anchor_type")
+            existing["temporal_governing_canonical_start"] = candidate.get("temporal_governing_canonical_start")
+            existing["temporal_governing_canonical_end"] = candidate.get("temporal_governing_canonical_end")
+        if existing_graph_provenance or candidate_graph_provenance:
+            existing["graph_provenance"] = list(dict.fromkeys([*existing_graph_provenance, *candidate_graph_provenance]))
+        if existing.get("graph_direction") is None and candidate.get("graph_direction") is not None:
+            existing["graph_direction"] = candidate.get("graph_direction")
+        existing["_retrieval_demoted"] = bool(existing.get("_retrieval_demoted")) or bool(candidate.get("_retrieval_demoted"))
+        existing["selection_reason"] = ", ".join(
+            part for part in [existing.get("selection_reason"), candidate.get("selection_reason")] if part
+        )
+        merge_vector_provenance(existing, candidate)
 
-    for candidate in list(exact_candidates or []) + lexical_candidates + vector_candidates + graph_candidates:
-        absorb(candidate)
+    for surface in _FUSION_SURFACE_ORDER:
+        for candidate in surface_candidates[surface]:
+            absorb(candidate)
+
+    for chunk_id, candidate in merged.items():
+        supporting_ranks = {
+            surface: ranks[chunk_id]
+            for surface, ranks in surface_ranks.items()
+            if chunk_id in ranks
+        }
+        supporting_scores = {
+            surface: raw_scores[chunk_id]
+            for surface, raw_scores in surface_raw_scores.items()
+            if chunk_id in raw_scores
+        }
+        _apply_ordinal_fusion_metadata(
+            candidate,
+            surface_ranks=supporting_ranks,
+            surface_raw_scores=supporting_scores,
+        )
+        best_surface = min(
+            supporting_ranks,
+            key=lambda surface: (supporting_ranks[surface], _FUSION_SURFACE_ORDER.index(surface)),
+        )
+        best_representation = surface_representations[best_surface][chunk_id]
+        preserved_fields = {
+            "source_layers",
+            "sources",
+            "exact_term_provenance",
+            "exact_match_evidence",
+            "graph_provenance",
+            "graph_hop_provenance",
+            "graph_direction",
+            "vector_query_scores",
+            "semantic_query_provenance",
+            "vector_best_query",
+            "vector_similarity",
+            "temporal_provenance",
+            "temporal_anchor_ids",
+            "temporal_governing_anchor_id",
+            "temporal_governing_anchor_type",
+            "temporal_governing_canonical_start",
+            "temporal_governing_canonical_end",
+            "selection_reason",
+            "surface_ranks",
+            "surface_raw_scores",
+            "ordinal_fusion_score",
+            "best_surface_rank",
+            "surface_rank_sum",
+        }
+        merged_fields = {key: candidate[key] for key in preserved_fields if key in candidate}
+        candidate.update({key: value for key, value in best_representation.items() if key not in preserved_fields})
+        candidate.update(merged_fields)
+        candidate["selection_source"] = best_surface
 
     ranked = sorted(
         merged.values(),
         key=lambda candidate: (
             bool(candidate.get("_retrieval_demoted")),
-            -source_priority.get(str((candidate.get("selection_source") or "lexical")), 0),
-            -float(candidate.get("score") or 0.0),
+            -float(candidate.get("ordinal_fusion_score") or 0.0),
+            not bool(candidate.get("preferred_scope_match")),
+            int(candidate.get("best_surface_rank") or 10**9),
+            int(candidate.get("surface_rank_sum") or 10**9),
+            tuple(
+                candidate.get("surface_ranks", {}).get(surface, 10**9)
+                for surface in _FUSION_SURFACE_ORDER
+            ),
             str(candidate["chunk_id"]),
         ),
     )
     for candidate in ranked:
-        sources = candidate.get("sources") or [candidate.get("selection_source") or "lexical"]
+        sources = _candidate_source_layers(candidate)
         candidate["selection_reason"] = ", ".join(
             part for part in [candidate.get("selection_reason"), f"sources: {', '.join(str(source) for source in sources)}"] if part
         )
@@ -1231,6 +2315,9 @@ def _select_retrieval_chunks(
     merged_candidates: list[dict[str, Any]],
     max_chunks: int,
     selection_policy: dict[str, Any] | None = None,
+    required_exact_terms: set[str] | None = None,
+    required_sources: set[str] | None = None,
+    selection_diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     seen_content_hashes: set[str] = set()
@@ -1256,27 +2343,185 @@ def _select_retrieval_chunks(
         selected.append(selected_candidate)
         return True
 
-    budgets = selection_policy.get("budgets") if isinstance(selection_policy, dict) else None
-    if isinstance(budgets, dict):
-        for source in ("exact", "lexical", "vector", "graph"):
-            try:
-                budget = max(0, int(budgets.get(source, 0)))
-            except (TypeError, ValueError):
-                budget = 0
-            taken = 0
-            for candidate in merged_candidates:
-                if taken >= budget:
-                    break
-                if source not in _candidate_source_layers(candidate):
-                    continue
-                if absorb(candidate):
-                    taken += 1
+    preserve_required_layers = bool(selection_policy.get("preserve_required_layers")) if isinstance(selection_policy, dict) else False
+    # Reserve exact-backed representatives only for required terms with
+    # positive matches. Ordinary retrieval-layer budgets are retired; exact
+    # term bounds, executor limits, and the global packet maximum remain hard.
+    required_exact_terms = set(required_exact_terms or set())
+    reserved_terms: set[str] = set()
+    if required_exact_terms:
+        for candidate in merged_candidates:
+            candidate_terms = set(_coerce_string_list(candidate.get("exact_term_provenance")))
+            if "exact" not in _candidate_source_layers(candidate) or not candidate_terms.intersection(required_exact_terms - reserved_terms):
+                continue
+            if absorb(candidate):
+                reserved_terms.update(candidate_terms.intersection(required_exact_terms))
+                selected[-1]["_fusion_selection_stage"] = "required_exact_reservation"
+                selected[-1]["_fusion_required_reservation"] = True
 
-    for candidate in merged_candidates:
-        if len(selected) >= max(0, max_chunks):
+    required_sources = set(required_sources or set())
+    reservation_diagnostics = selection_diagnostics if selection_diagnostics is not None else {}
+    reservation_diagnostics.setdefault("required_sources", sorted(required_sources))
+    reservation_diagnostics.setdefault("preserved_sources", [])
+    reservation_diagnostics.setdefault("inadequacies", [])
+    if preserve_required_layers and required_sources:
+        while True:
+            satisfied = {
+                source for source in required_sources
+                if any(source in _candidate_source_layers(item) for item in selected)
+            }
+            unsatisfied = required_sources - satisfied
+            if not unsatisfied:
+                break
+            eligible = [
+                candidate for candidate in merged_candidates
+                if set(_candidate_source_layers(candidate)).intersection(unsatisfied)
+            ]
+            if not eligible:
+                for source in sorted(unsatisfied):
+                    reason = "no candidate survived executor limits"
+                    if len(selected) >= max(0, max_chunks):
+                        reason = "packet maximum is exhausted"
+                    reservation_diagnostics["inadequacies"].append({"source": source, "reason": reason})
+                break
+            best = max(
+                eligible,
+                key=lambda candidate: len(set(_candidate_source_layers(candidate)).intersection(unsatisfied)),
+            )
+            if not absorb(best):
+                reason = "packet maximum is exhausted" if len(selected) >= max(0, max_chunks) else "deduplication removed the only representative"
+                reservation_diagnostics["inadequacies"].append({"source": sorted(unsatisfied)[0], "reason": reason})
+                break
+            selected[-1]["_fusion_selection_stage"] = "required_layer_reservation"
+            selected[-1]["_fusion_required_reservation"] = True
+            reservation_diagnostics["preserved_sources"] = sorted(
+                set(reservation_diagnostics["preserved_sources"]).union(_candidate_source_layers(best))
+            )
+
+    # Ordinary selection is breadth-before-depth across evidence sources
+    # identified by note_id. Required reservations already count as depth.
+    selected_ids = {str(item.get("chunk_id") or "") for item in selected}
+    selected_hashes = {str(item.get("chunk_hash") or "") for item in selected if str(item.get("chunk_hash") or "")}
+    note_candidates: dict[str, list[dict[str, Any]]] = {}
+    note_first_position: dict[str, int] = {}
+    for position, candidate in enumerate(merged_candidates):
+        chunk_id = str(candidate.get("chunk_id") or "")
+        if chunk_id in selected_ids:
+            continue
+        note_id = str(candidate.get("note_id") or "")
+        note_candidates.setdefault(note_id, []).append(candidate)
+        note_first_position.setdefault(note_id, position)
+    note_order = sorted(note_candidates, key=lambda note_id: (note_first_position[note_id], note_id))
+    note_counts = {
+        note_id: sum(str(item.get("note_id") or "") == note_id for item in selected)
+        for note_id in note_order
+    }
+    note_offsets = {note_id: 0 for note_id in note_order}
+    round_number = 0
+    while len(selected) < max(0, max_chunks):
+        eligible_notes = [
+            note_id for note_id in note_order
+            if note_offsets[note_id] < len(note_candidates[note_id])
+        ]
+        if not eligible_notes:
             break
-        absorb(candidate)
+        minimum_depth = min(note_counts[note_id] for note_id in eligible_notes)
+        round_number += 1
+        for note_id in note_order:
+            if len(selected) >= max(0, max_chunks):
+                break
+            if note_id not in eligible_notes or note_counts[note_id] != minimum_depth:
+                continue
+            candidate = note_candidates[note_id][note_offsets[note_id]]
+            note_offsets[note_id] += 1
+            chunk_id = str(candidate.get("chunk_id") or "")
+            chunk_hash = str(candidate.get("chunk_hash") or "")
+            before_depth = note_counts[note_id]
+            if chunk_id in selected_ids:
+                reservation_diagnostics.setdefault("duplicate_rejections", []).append({"chunk_id": chunk_id, "reason": "duplicate_chunk_id"})
+                continue
+            if chunk_hash and chunk_hash in selected_hashes:
+                reservation_diagnostics.setdefault("duplicate_rejections", []).append({"chunk_id": chunk_id, "reason": "duplicate_content_hash"})
+                continue
+            selected_candidate = dict(candidate)
+            selected_candidate["_fusion_selection_stage"] = "ordinary_note_breadth"
+            selected_candidate["_fusion_round"] = round_number
+            selected_candidate["_fusion_note_count_before"] = before_depth
+            selected_candidate["_fusion_note_count_after"] = before_depth + 1
+            if absorb(selected_candidate):
+                selected_ids.add(chunk_id)
+                if chunk_hash:
+                    selected_hashes.add(chunk_hash)
+                note_counts[note_id] += 1
     return selected
+
+
+def _fusion_diagnostics(
+    *,
+    merged_candidates: list[dict[str, Any]],
+    selected_candidates: list[dict[str, Any]],
+    selection_diagnostics: dict[str, Any],
+    retrieval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    selected_ids = {str(candidate.get("chunk_id") or "") for candidate in selected_candidates}
+    selected_by_id = {str(candidate.get("chunk_id") or ""): candidate for candidate in selected_candidates}
+    selected_hashes = {str(candidate.get("chunk_hash") or "") for candidate in selected_candidates if str(candidate.get("chunk_hash") or "")}
+    selected_note_counts = Counter(str(candidate.get("note_id") or "") for candidate in selected_candidates)
+    selected_preferred = [candidate for candidate in selected_candidates if bool(candidate.get("preferred_scope_match"))]
+    candidate_records: list[dict[str, Any]] = []
+    for candidate in merged_candidates:
+        chunk_id = str(candidate.get("chunk_id") or "")
+        selected = chunk_id in selected_ids
+        selected_record = selected_by_id.get(chunk_id, candidate)
+        rejection_reason = None
+        if not selected:
+            chunk_hash = str(candidate.get("chunk_hash") or "")
+            if chunk_hash and chunk_hash in selected_hashes:
+                rejection_reason = "duplicate_content_hash"
+            else:
+                rejection_reason = "not_selected_after_note_breadth"
+        candidate_records.append({
+            "chunk_id": chunk_id,
+            "note_id": str(candidate.get("note_id") or ""),
+            "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
+            "retrieval_demoted": bool(candidate.get("_retrieval_demoted")),
+            "source_layers": _candidate_source_layers(candidate),
+            "surface_ranks": dict(candidate.get("surface_ranks") or {}),
+            "surface_raw_scores": dict(candidate.get("surface_raw_scores") or {}),
+            "ordinal_fusion_score": candidate.get("ordinal_fusion_score"),
+            "best_surface_rank": candidate.get("best_surface_rank"),
+            "surface_rank_sum": candidate.get("surface_rank_sum"),
+            "selection_source": candidate.get("selection_source"),
+            "status": "selected" if selected else "rejected",
+            "selection_stage": selected_record.get("_fusion_selection_stage"),
+            "selection_round": selected_record.get("_fusion_round"),
+            "note_selected_count_before": selected_record.get("_fusion_note_count_before"),
+            "note_selected_count_after": selected_record.get("_fusion_note_count_after"),
+            "required_reservation": bool(selected_record.get("_fusion_required_reservation")),
+            "rejection_reason": rejection_reason,
+        })
+    packet_bytes = len(json.dumps(retrieval_packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return {
+        "selector": "ordinal_note_breadth",
+        "ordinal_formula": "sum(1 / surface_rank) over supporting surfaces",
+        "surface_order": list(_FUSION_SURFACE_ORDER),
+        "ordinary_layer_budgets": "retired",
+        "budget_diagnostic": "selection_policy.budgets retired for ordinal-note-breadth selector",
+        "candidate_count": len(merged_candidates),
+        "unique_candidate_note_count": len({str(candidate.get("note_id") or "") for candidate in merged_candidates}),
+        "selected_count": len(selected_candidates),
+        "selected_unique_note_count": len(selected_note_counts),
+        "selected_chunks_per_note": dict(sorted(selected_note_counts.items())),
+        "max_selected_chunks_per_note": max(selected_note_counts.values(), default=0),
+        "preferred_selected_count": len(selected_preferred),
+        "preferred_selected_unique_note_count": len({str(candidate.get("note_id") or "") for candidate in selected_preferred}),
+        "selected_counts_by_supporting_surface": _count_selected_by_layer(selected_candidates),
+        "selected_counts_by_selection_source": dict(sorted(Counter(str(candidate.get("selection_source") or "") for candidate in selected_candidates).items())),
+        "required_reservation": dict(selection_diagnostics),
+        "retrieval_packet_bytes": packet_bytes,
+        "synthesis_context_bytes": None,
+        "candidates": candidate_records,
+    }
 
 
 def _semantic_traversal(
@@ -1286,6 +2531,7 @@ def _semantic_traversal(
     semantic_compiler_packet: dict[str, Any],
     prior_thread_state: dict[str, Any],
     embedding_backend: EmbeddingBackend,
+    resource_inventory_summary: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
@@ -1299,13 +2545,16 @@ def _semantic_traversal(
             planner_defaults=config.retrieval_planner_defaults,
         )
 
-    resource_inventory_summary = build_resource_inventory(connection=connection, config=config)
+    if resource_inventory_summary is None:
+        resource_inventory_summary = build_resource_inventory(connection=connection, config=config)
     bound_retrieval_plan, resolver_adjustments, resource_inventory_summary = bind_retrieval_plan(
         planner_retrieval_plan=planner_retrieval_plan,
         inventory_summary=resource_inventory_summary,
         config=config,
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
+    plan_completeness = validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
+    plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
 
     scope_filters = bound_retrieval_plan.get("scope_filters") if isinstance(bound_retrieval_plan.get("scope_filters"), dict) else {}
     literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
@@ -1315,20 +2564,41 @@ def _semantic_traversal(
     exact_layer = retrieval_plan_layer(bound_retrieval_plan, "exact_chunk_search")
     lexical_layer = retrieval_plan_layer(bound_retrieval_plan, "lexical_chunk_search")
     vector_layer = retrieval_plan_layer(bound_retrieval_plan, "vector_search")
+    temporal_layer = retrieval_plan_layer(bound_retrieval_plan, "temporal_retrieve")
 
     chunk_rows = _load_chunk_rows(connection)
     layer_manifests: dict[str, Any] = {}
     execution = {"layers_executed": [], "layers_skipped": []}
+    unsupported_layer_requests: list[dict[str, Any]] = []
+    supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+    for layer in bound_retrieval_plan.get("retrieval_layers", []):
+        if not isinstance(layer, dict) or str(layer.get("operator") or "") in supported_operators:
+            continue
+        unsupported_layer_requests.append({
+            "operator": str(layer.get("operator") or ""),
+            "required": bool(layer.get("required")),
+            "supplied_fields": dict(layer),
+            "reason": "retrieval operator is not supported by this runtime seam",
+        })
+        execution["layers_skipped"].append({"layer": str(layer.get("operator") or ""), "reason": "unsupported operator"})
 
     exact_candidates: list[dict[str, Any]] = []
     exact_notes: list[str] = []
     exact_info = {
         "operator": "exact_chunk_search",
+        "status": "not_requested",
         "literal_terms": [],
         "scope": scope_filters,
-        "total_match_count": 0,
-        "matching_note_count": 0,
+        "search_exhaustive": False,
+        "return_total_count_requested": False,
+        "count_status": "not_requested",
+        "count_unit": "matching_chunks",
+        "total_match_count": None,
+        "total_occurrence_count": None,
+        "matching_note_count": None,
+        "returned_candidate_count": 0,
         "returned_count": 0,
+        "term_results": [],
     }
     if exact_layer is not None:
         execution["layers_executed"].append("exact_chunk_search")
@@ -1337,6 +2607,7 @@ def _semantic_traversal(
             literal_terms,
             scope_filters=scope_filters,
             limit=_layer_limit(exact_layer, config.retrieval_exact_max_matches),
+            return_total_count=bool(exact_layer.get("return_total_count")),
             config=config,
         )
     else:
@@ -1346,34 +2617,43 @@ def _semantic_traversal(
 
     lexical_candidates: list[dict[str, Any]] = []
     lexical_notes: list[str] = []
+    lexical_diagnostics: dict[str, Any] = {}
     if lexical_layer is not None:
         execution["layers_executed"].append("lexical_chunk_search")
-        lexical_candidates, lexical_notes = _lexical_candidates(
+        lexical_candidates, lexical_notes, lexical_diagnostics = _lexical_candidates(
             chunk_rows,
             lexical_queries,
+            connection=connection,
             scope_filters=scope_filters,
             limit=_layer_limit(lexical_layer, config.retrieval_lexical_max_candidates),
             config=config,
+            mode=str(lexical_layer.get("mode") or config.retrieval_lexical_default_mode),
+            return_diagnostics=True,
         )
     else:
         execution["layers_skipped"].append({"layer": "lexical_chunk_search", "reason": "not requested by bound retrieval plan"})
         lexical_notes = ["lexical search skipped: not requested by bound retrieval plan"]
+        lexical_diagnostics = {"status": "not_requested", "requested_queries": [], "candidate_count": 0}
 
     vector_candidates: list[dict[str, Any]] = []
     vector_notes: list[str] = []
+    vector_diagnostics: dict[str, Any] = {}
     if vector_layer is not None:
         execution["layers_executed"].append("vector_search")
-        vector_candidates, vector_notes = _vector_candidates(
+        vector_candidates, vector_notes, vector_diagnostics = _vector_candidates(
             connection=connection,
             config=config,
             embedding_backend=embedding_backend,
-            vector_query=semantic_queries[0] if semantic_queries else (lexical_queries[0] if lexical_queries else str(bound_retrieval_plan.get("intent_type") or "")),
+            vector_query=semantic_queries[0] if semantic_queries else "",
+            vector_queries=semantic_queries,
             scope_filters=scope_filters,
             limit=_layer_limit(vector_layer, config.retrieval_vector_max_candidates),
+            return_diagnostics=True,
         )
     else:
         execution["layers_skipped"].append({"layer": "vector_search", "reason": "not requested by bound retrieval plan"})
         vector_notes = ["vector search skipped: not requested by bound retrieval plan"]
+        vector_diagnostics = {"status": "not_requested", "requested_queries": [], "query_results": [], "candidate_count": 0}
 
     graph_candidates: list[dict[str, Any]] = []
     graph_notes: list[str] = []
@@ -1384,20 +2664,46 @@ def _semantic_traversal(
             connection=connection,
             config=config,
             planner_retrieval_plan=bound_retrieval_plan,
-            prior_thread_state=prior_thread_state,
+            graph_depth=graph_layer,
             scope_filters=scope_filters,
             limit=_layer_limit(graph_layer, config.retrieval_graph_max_candidates),
         )
     else:
         execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by bound retrieval plan"})
         graph_candidates, graph_notes, graph_traversal_info = [], ["graph search skipped: not requested by bound retrieval plan"], {
+            "status": "not_requested",
             "enabled": config.graph_traversal_enabled,
-            "hop_limit": config.graph_traversal_hop_limit,
+            "hop_limit": 0,
             "seed_sources": list(config.graph_traversal_seed_sources),
+            "submitted_seeds": [],
             "matched_seed_count": 0,
+            "matched_seed_note_ids": [],
             "expanded_note_count": 0,
+            "selected_note_ids": [],
             "edge_types_used": [],
+            "direction": config.graph_traversal_direction,
+            "candidate_note_ids": [],
+            "candidate_unique_note_ids": [],
+            "traversal_hops": [],
         }
+
+    temporal_candidates: list[dict[str, Any]] = []
+    temporal_notes: list[str] = []
+    temporal_info: dict[str, Any] = {"operator": "temporal_retrieve", "status": "not_requested", "candidate_count": 0}
+    if temporal_layer is not None:
+        execution["layers_executed"].append("temporal_retrieve")
+        try:
+            temporal_candidates, temporal_notes, temporal_info = _temporal_candidates(
+                connection=connection, config=config, chunk_rows=chunk_rows,
+                layer=temporal_layer, lexical_queries=lexical_queries,
+                semantic_queries=semantic_queries, literal_terms=literal_terms,
+                scope_filters=scope_filters, embedding_backend=embedding_backend,
+            )
+        except sqlite3.OperationalError as exc:
+            temporal_info = {"operator": "temporal_retrieve", "status": "unavailable", "candidate_count": 0, "failure_reason": str(exc)}
+            temporal_notes = [f"temporal retrieval unavailable: {exc}"]
+    else:
+        execution["layers_skipped"].append({"layer": "temporal_retrieve", "reason": "not requested by bound retrieval plan"})
 
     exact_candidates = _apply_retrieval_candidate_hygiene(
         candidates=exact_candidates,
@@ -1419,31 +2725,211 @@ def _semantic_traversal(
         semantic_compiler_packet=semantic_compiler_packet,
         config=config,
     )
+    temporal_candidates = _apply_retrieval_candidate_hygiene(
+        candidates=temporal_candidates,
+        semantic_compiler_packet=semantic_compiler_packet,
+        config=config,
+    )
 
-    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates)
+    preferred_scope_filters = bound_retrieval_plan.get("preferred_scope_filters") if isinstance(bound_retrieval_plan.get("preferred_scope_filters"), dict) else {}
+    exact_candidates = _annotate_scope_matches(
+        exact_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+
+    layer_manifests["lexical"] = _non_exact_layer_manifest(
+        operator="lexical_chunk_search",
+        layer=lexical_layer,
+        status=str(lexical_diagnostics.get("status") or ("completed_with_candidates" if lexical_candidates else "completed_no_candidates")),
+        candidate_count=len(lexical_candidates),
+        diagnostics=lexical_diagnostics,
+    )
+    layer_manifests["vector"] = _non_exact_layer_manifest(
+        operator="vector_search",
+        layer=vector_layer,
+        status=str(vector_diagnostics.get("status") or ("completed_with_candidates" if vector_candidates else "completed_no_candidates")),
+        candidate_count=len(vector_candidates),
+        diagnostics=vector_diagnostics,
+    )
+    graph_status = str(graph_traversal_info.get("status") or ("completed_with_candidates" if graph_candidates else "completed_no_candidates"))
+    layer_manifests["graph"] = _non_exact_layer_manifest(
+        operator="graph_expand",
+        layer=graph_layer,
+        status=graph_status,
+        candidate_count=len(graph_candidates),
+        diagnostics=graph_traversal_info,
+    )
+    layer_manifests["temporal"] = _non_exact_layer_manifest(
+        operator="temporal_retrieve",
+        layer=temporal_layer,
+        status=str(temporal_info.get("status") or ("completed_with_candidates" if temporal_candidates else "completed_no_candidates")),
+        candidate_count=len(temporal_candidates),
+        diagnostics=temporal_info,
+    )
+    lexical_candidates = _annotate_scope_matches(
+        lexical_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+    vector_candidates = _annotate_scope_matches(
+        vector_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+    graph_candidates = _annotate_scope_matches(
+        graph_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+    temporal_candidates = _annotate_scope_matches(
+        temporal_candidates,
+        hard_scope_filters=scope_filters,
+        preferred_scope_filters=preferred_scope_filters,
+    )
+
+    merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates, temporal_candidates=temporal_candidates)
+    required_exact_terms = {
+        str(result.get("term"))
+        for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
+        if isinstance(result, dict) and bool(result.get("required")) and result.get("status") == "completed_with_matches"
+    }
+    required_sources = {
+        LAYER_TO_SOURCE.get(str(layer.get("operator") or ""))
+        for layer in bound_retrieval_plan.get("retrieval_layers", [])
+        if isinstance(layer, dict) and bool(layer.get("required")) and LAYER_TO_SOURCE.get(str(layer.get("operator") or ""))
+    }
+    selection_diagnostics: dict[str, Any] = {}
+    effective_max_chunks = bound_retrieval_plan.get("selection_policy", {}).get("max_chunks")
+    if effective_max_chunks is None:
+        effective_max_chunks = config.max_retrieval_chunks
     selected_candidates = _select_retrieval_chunks(
         merged_candidates=merged_candidates,
-        max_chunks=int(bound_retrieval_plan.get("selection_policy", {}).get("max_chunks") or config.max_retrieval_chunks),
+        max_chunks=int(effective_max_chunks),
         selection_policy=bound_retrieval_plan.get("selection_policy") if isinstance(bound_retrieval_plan.get("selection_policy"), dict) else None,
+        required_exact_terms=required_exact_terms,
+        required_sources=required_sources,
+        selection_diagnostics=selection_diagnostics,
     )
     selected_counts = _count_selected_by_layer(selected_candidates)
+    for source, manifest in (("lexical", layer_manifests.get("lexical")), ("vector", layer_manifests.get("vector")), ("graph", layer_manifests.get("graph")), ("temporal", layer_manifests.get("temporal"))):
+        if not isinstance(manifest, dict):
+            continue
+        selected_for_source = [candidate for candidate in selected_candidates if source in _candidate_source_layers(candidate)]
+        manifest["selected_contribution_count"] = len(selected_for_source)
+        manifest["selected_chunk_ids"] = [str(candidate.get("chunk_id") or "") for candidate in selected_for_source]
+        manifest["adequate_contribution"] = manifest.get("status") == "completed_with_candidates" and bool(selected_for_source)
+        if bool(manifest.get("required")) and not manifest["adequate_contribution"]:
+            manifest["inadequacy_reason"] = (
+                "required layer did not produce candidates"
+                if manifest.get("status") != "completed_with_candidates"
+                else "required layer produced candidates but no selected chunk retained its provenance"
+            )
     exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
     exact_search_performed = exact_layer is not None
-    total_exact_matches = int(exact_info.get("total_match_count") or 0)
-    matching_note_count = int(exact_info.get("matching_note_count") or 0)
-    claim_policy = bound_retrieval_plan.get("claim_policy") if isinstance(bound_retrieval_plan.get("claim_policy"), dict) else {}
+    total_exact_matches = exact_info.get("total_match_count")
+    matching_note_count = exact_info.get("matching_note_count")
+    for term_result in exact_info.get("term_results", []) if isinstance(exact_info.get("term_results"), list) else []:
+        if not isinstance(term_result, dict):
+            continue
+        selected_for_term = [
+            candidate for candidate in selected_candidates
+            if "exact" in _candidate_source_layers(candidate)
+            and str(term_result.get("term")) in _coerce_string_list(candidate.get("exact_term_provenance"))
+        ]
+        term_result["selected_exact_chunk_count"] = len(selected_for_term)
+        term_result["selected_chunk_ids"] = [str(candidate.get("chunk_id") or "") for candidate in selected_for_term]
+        term_result["adequate_contribution"] = (
+            term_result.get("status") == "completed_no_matches"
+            or not bool(term_result.get("required"))
+            or len(selected_for_term) > 0
+        )
+    runtime_claim_policy = config.retrieval_planner_defaults.get("claim_policy", {})
+    negative_policy_requires_exact = runtime_claim_policy.get("negative_claims_require_exact_layer")
+    negative_policy_supported = isinstance(negative_policy_requires_exact, bool) and negative_policy_requires_exact
+    all_terms_completed = all(
+        isinstance(result, dict) and result.get("status") in {"completed_no_matches", "completed_with_matches"}
+        for result in exact_info.get("term_results", [])
+    ) if exact_info.get("term_results") else False
+    no_matches = exact_info.get("status") == "completed_no_matches"
+    negative_allowed = bool(
+        negative_policy_supported
+        and no_matches
+        and bool(exact_info.get("search_exhaustive"))
+        and all_terms_completed
+        and not any(result.get("status") == "completed_with_matches" for result in exact_info.get("term_results", []) if isinstance(result, dict))
+    )
+    required_layer_results: list[dict[str, Any]] = []
+    for layer in bound_retrieval_plan.get("retrieval_layers", []):
+        if not isinstance(layer, dict) or not bool(layer.get("required")):
+            continue
+        operator = str(layer.get("operator") or "")
+        source = LAYER_TO_SOURCE.get(operator)
+        if source is None:
+            required_layer_results.append({
+                "operator": operator,
+                "source": None,
+                "status": "unsupported",
+                "candidate_count": 0,
+                "selected_contribution_count": 0,
+                "adequate_contribution": False,
+                "blocking_reason": "required retrieval operator is unsupported",
+            })
+            continue
+        manifest = exact_info if source == "exact" else layer_manifests.get(source, {})
+        status = str(manifest.get("status") or "not_requested")
+        if source == "exact":
+            adequate = status in {"completed_no_matches", "completed_with_matches"} and not any(
+                isinstance(result, dict)
+                and bool(result.get("required"))
+                and result.get("status") == "completed_with_matches"
+                and not result.get("adequate_contribution")
+                for result in exact_info.get("term_results", [])
+            )
+            selected_contribution = sum(
+                1 for candidate in selected_candidates if "exact" in _candidate_source_layers(candidate)
+            )
+        else:
+            adequate = bool(manifest.get("adequate_contribution"))
+            selected_contribution = int(manifest.get("selected_contribution_count") or 0)
+        result = {
+            "operator": operator,
+            "source": source,
+            "status": status,
+            "candidate_count": int(manifest.get("candidate_count") or len({"exact": exact_candidates, "lexical": lexical_candidates, "vector": vector_candidates, "graph": graph_candidates, "temporal": temporal_candidates}.get(source, []))),
+            "selected_contribution_count": selected_contribution,
+            "adequate_contribution": adequate,
+            "blocking_reason": None,
+        }
+        if not adequate:
+            result["blocking_reason"] = str(manifest.get("inadequacy_reason") or f"required {source} layer is {status}")
+        required_layer_results.append(result)
     coverage = {
         "exact_search_performed": exact_search_performed,
+        "exact_status": str(exact_info.get("status") or ("completed_with_matches" if total_exact_matches else "completed_no_matches" if exact_search_performed else "not_requested")),
         "scope": scope_filters,
         "literal_terms": [str(entry.get("term") or "") for entry in literal_terms if str(entry.get("term") or "")],
         "total_exact_matches": total_exact_matches,
         "matching_note_count": matching_note_count,
-        "coverage_claims_allowed": bool(claim_policy.get("coverage_claims_allowed")) and exact_search_performed,
-        "negative_claims_allowed": exact_search_performed and total_exact_matches == 0,
+        "total_occurrence_count": exact_info.get("total_occurrence_count"),
+        "count_status": exact_info.get("count_status"),
+        "coverage_claims_allowed": bool(exact_info.get("search_exhaustive")) and exact_info.get("status") in {"completed_no_matches", "completed_with_matches"},
+        "negative_claims_allowed": negative_allowed,
+        "negative_claims_require_exact_layer": negative_policy_requires_exact,
+        "negative_claim_policy_diagnostic": None if negative_policy_supported else "runtime YAML negative-claim policy is unsupported or unavailable; permission remains false",
+        "required_exact_terms": sorted(required_exact_terms),
+        "inadequate_required_exact_terms": sorted(
+            str(result.get("term")) for result in exact_info.get("term_results", [])
+            if isinstance(result, dict) and bool(result.get("required")) and result.get("status") == "completed_with_matches" and not result.get("adequate_contribution")
+        ),
+        "required_layer_results": required_layer_results,
+        "selection_reservation": selection_diagnostics,
     }
     limits: list[str] = [f"Only {config.max_retrieval_chunks} chunk(s) may be selected for frontier synthesis."]
-    if exact_search_performed:
-        limits.append(f"Exact layer found {total_exact_matches} match(es) across {matching_note_count} note(s); synthesis uses a representative subset.")
+    if exact_search_performed and exact_info.get("return_total_count_requested"):
+        limits.append(f"Exact layer found {total_exact_matches} matching chunk(s) across {matching_note_count} note(s); synthesis uses a representative subset.")
+    elif exact_search_performed:
+        limits.append(f"Exact layer returned {exact_info.get('returned_candidate_count', 0)} candidate(s); exhaustive total reporting was not requested.")
     if not exact_search_performed:
         limits.append("No corpus-wide positive or negative exact-match claim is allowed because exact search did not run.")
 
@@ -1452,20 +2938,30 @@ def _semantic_traversal(
         "bound_retrieval_plan": bound_retrieval_plan,
         "resolver_adjustments": resolver_adjustments,
         "resource_inventory_summary": resource_inventory_summary,
+        "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
         "execution": execution,
         "candidate_counts": {
             "exact": len(exact_candidates),
             "lexical": len(lexical_candidates),
             "vector": len(vector_candidates),
             "graph": len(graph_candidates),
+            "temporal": len(temporal_candidates),
         },
         "selected_counts": selected_counts,
         "selected_chunk_ids": [str(candidate["chunk_id"]) for candidate in selected_candidates],
         "layer_manifests": layer_manifests,
+        "unsupported_layer_requests": unsupported_layer_requests,
+        "plan_completeness": plan_completeness,
+        "plan_executability": plan_executability,
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
-        "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes],
+        "scope_resolution": {
+            "hard": scope_filters,
+            "preferred": preferred_scope_filters,
+            "bound_requests": bound_retrieval_plan.get("scope_resolution", {}),
+        },
+        "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes, *temporal_notes],
     }
 
     retrieval_packet = {
@@ -1483,8 +2979,23 @@ def _semantic_traversal(
                 "paragraph_text": str(candidate["paragraph_text"]),
                 "chunk_hash": str(candidate["chunk_hash"]),
                 "source_layers": _candidate_source_layers(candidate),
+                "selection_source": str(candidate.get("selection_source") or ""),
+                "exact_match_evidence": candidate.get("exact_match_evidence", []),
+                "semantic_query_provenance": _coerce_string_list(candidate.get("semantic_query_provenance")),
+                "vector_query_scores": candidate.get("vector_query_scores", []),
+                "vector_best_query": candidate.get("vector_best_query"),
+                "vector_similarity": candidate.get("vector_similarity"),
+                "graph_direction": candidate.get("graph_direction"),
+                "graph_provenance": candidate.get("graph_provenance", []),
+                "graph_hop_provenance": candidate.get("graph_hop_provenance", []),
+                "temporal_mode": candidate.get("temporal_mode"),
+                "temporal_anchor_ids": candidate.get("temporal_anchor_ids", []),
+                "temporal_provenance": candidate.get("temporal_provenance", []),
+                "temporal_governing_anchor_id": candidate.get("temporal_governing_anchor_id"),
+                "relation_status": candidate.get("relation_status"),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
+                "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
             }
             for candidate in selected_candidates
@@ -1493,6 +3004,12 @@ def _semantic_traversal(
         "retrieval_observation": "matched_chunks" if selected_candidates else "no_matches",
         "assembled_from_traversal_manifest": True,
     }
+    traversal_manifest["fusion"] = _fusion_diagnostics(
+        merged_candidates=merged_candidates,
+        selected_candidates=selected_candidates,
+        selection_diagnostics=selection_diagnostics,
+        retrieval_packet=retrieval_packet,
+    )
 
     return traversal_manifest, retrieval_packet
 
@@ -1512,10 +3029,60 @@ def _coverage_report(
         blocking_reasons.append(f"semantic compiler status is {semantic_compiler_status}; parsed compiler output is required")
     if not compiler_valid:
         blocking_reasons.append("semantic compiler packet is missing or malformed")
+    planner_diagnostics = semantic_compiler_packet.get("planner_diagnostics") if isinstance(semantic_compiler_packet, dict) else {}
+    plan_completeness = planner_diagnostics.get("plan_completeness") if isinstance(planner_diagnostics, dict) else None
+    if isinstance(plan_completeness, dict) and plan_completeness.get("status") != "complete":
+        blocking_reasons.append("compiler-declared evidence requirements are incomplete")
+    plan_executability = planner_diagnostics.get("plan_executability") if isinstance(planner_diagnostics, dict) else None
+    if isinstance(plan_executability, dict) and plan_executability.get("status") != "executable":
+        blocking_reasons.append("semantic compiler produced a non-executable retrieval plan")
+        blocking_reasons.extend(str(reason) for reason in plan_executability.get("blocking_reasons") or [] if str(reason).strip())
     bound_plan = traversal_manifest.get("bound_retrieval_plan") if isinstance(traversal_manifest.get("bound_retrieval_plan"), dict) else {}
-    graph_seeds = list(bound_plan.get("graph_seeds") or [])
-    semantic_queries = list(bound_plan.get("semantic_queries") or [])
-    if selected_count == 0 and (semantic_queries or graph_seeds):
+    layer_manifests = traversal_manifest.get("layer_manifests") if isinstance(traversal_manifest.get("layer_manifests"), dict) else {}
+    candidate_counts = traversal_manifest.get("candidate_counts") if isinstance(traversal_manifest.get("candidate_counts"), dict) else {}
+    required_layer_failures: list[str] = []
+    structured_required_results = traversal_manifest.get("coverage", {}).get("required_layer_results") if isinstance(traversal_manifest.get("coverage"), dict) else None
+    if isinstance(structured_required_results, list):
+        for result in structured_required_results:
+            if isinstance(result, dict) and not bool(result.get("adequate_contribution")):
+                required_layer_failures.append(
+                    f"required {result.get('source') or result.get('operator')} layer is inadequate: {result.get('blocking_reason') or result.get('status')}"
+                )
+    else:
+        for layer in bound_plan.get("retrieval_layers") or []:
+            if not isinstance(layer, dict) or not bool(layer.get("required")):
+                continue
+            operator = str(layer.get("operator") or "")
+            source = LAYER_TO_SOURCE.get(operator)
+            if source == "exact":
+                exact_status = str((layer_manifests.get("exact") or {}).get("status") or "not_requested")
+                if exact_status not in {"completed_no_matches", "completed_with_matches"}:
+                    required_layer_failures.append(f"required exact layer is {exact_status}")
+            elif source and int(candidate_counts.get(source) or 0) == 0:
+                required_layer_failures.append(f"required {source} layer produced no candidates")
+    exact_manifest = layer_manifests.get("exact") if isinstance(layer_manifests.get("exact"), dict) else {}
+    for term_result in exact_manifest.get("term_results", []) if isinstance(exact_manifest.get("term_results"), list) else []:
+        if not isinstance(term_result, dict) or not bool(term_result.get("required")):
+            continue
+        status = str(term_result.get("status") or "failed")
+        if status not in {"completed_no_matches", "completed_with_matches"}:
+            required_layer_failures.append(f"required exact literal term {term_result.get('term')!r} was not executed adequately: {status}")
+        elif status == "completed_with_matches" and not bool(term_result.get("adequate_contribution")):
+            required_layer_failures.append(f"required exact literal term {term_result.get('term')!r} has inadequate selected contribution")
+    blocking_reasons.extend(required_layer_failures)
+    exact_absence_is_valid = bool(
+        isinstance(traversal_manifest.get("coverage"), dict)
+        and bool(traversal_manifest["coverage"].get("exact_search_performed"))
+        and traversal_manifest["coverage"].get("exact_status") == "completed_no_matches"
+        and traversal_manifest["coverage"].get("negative_claims_allowed") is True
+        and not required_layer_failures
+        and all(
+            isinstance(result, dict) and result.get("status") == "completed_no_matches"
+            for result in (layer_manifests.get("exact", {}).get("term_results", []) if isinstance(layer_manifests.get("exact"), dict) else [])
+        )
+    )
+    has_retrieval_intent = bool(plan_executability.get("has_retrieval_intent")) if isinstance(plan_executability, dict) else bool(bound_plan.get("retrieval_layers"))
+    if selected_count == 0 and has_retrieval_intent and not exact_absence_is_valid:
         blocking_reasons.append("retrieval required but no chunks were selected")
     selection_notes = traversal_manifest.get("selection_notes") if isinstance(traversal_manifest, dict) else []
     if isinstance(selection_notes, list) and any("ingestion database unavailable" in str(note).lower() for note in selection_notes):
@@ -1530,12 +3097,16 @@ def _coverage_report(
         "semantic_traversal_manifest_hash": sha256_json(traversal_manifest),
         "retrieval_packet_hash": sha256_json(retrieval_packet),
         "selected_chunk_count": selected_count,
+        "plan_completeness": plan_completeness,
+        "plan_executability": plan_executability,
     }
 
 
 def _blocked_turn_response(*, blocking_reasons: list[str]) -> str:
     """Return an honest assistant message for a turn that never reached synthesis."""
     reasons = " ".join(str(reason).strip() for reason in blocking_reasons if str(reason).strip()).lower()
+    if "non-executable retrieval plan" in reasons:
+        return "I couldn't search the vault because the retrieval plan did not contain usable search inputs."
     if "semantic compiler" in reasons:
         return "I couldn't interpret that turn because the semantic compiler is unavailable or returned invalid output."
     if "ingestion database" in reasons:
@@ -1551,6 +3122,75 @@ def _build_visible_transcript_tail(messages: list[dict[str, Any]], *, limit: int
     return messages[-limit:]
 
 
+def _build_synthesis_traversal_summary(traversal_manifest: dict[str, Any]) -> dict[str, Any]:
+    """Project only bounded execution metadata into the frontier packet."""
+    layer_manifests = traversal_manifest.get("layer_manifests") if isinstance(traversal_manifest.get("layer_manifests"), dict) else {}
+    layer_statuses: dict[str, Any] = {}
+    for name in ("exact", "lexical", "vector", "graph", "temporal"):
+        layer = layer_manifests.get(name) if isinstance(layer_manifests.get(name), dict) else {}
+        if name == "exact":
+            layer_statuses[name] = {
+                "status": str(layer.get("status") or "not_requested"),
+                "returned_candidate_count": int(layer.get("returned_candidate_count") or 0),
+                "total_match_count": layer.get("total_match_count"),
+                "matching_note_count": layer.get("matching_note_count"),
+            }
+        else:
+            layer_statuses[name] = {
+                "status": str(layer.get("status") or "not_requested"),
+                "candidate_count": int(layer.get("candidate_count") or 0),
+            }
+    scope = traversal_manifest.get("scope_resolution") if isinstance(traversal_manifest.get("scope_resolution"), dict) else {}
+    bound_requests = scope.get("bound_requests") if isinstance(scope.get("bound_requests"), dict) else {}
+    fusion = traversal_manifest.get("fusion") if isinstance(traversal_manifest.get("fusion"), dict) else {}
+    reservation = fusion.get("required_reservation") if isinstance(fusion.get("required_reservation"), dict) else {}
+    full_coverage = traversal_manifest.get("coverage") if isinstance(traversal_manifest.get("coverage"), dict) else {}
+    coverage = {
+        key: full_coverage.get(key)
+        for key in (
+            "exact_search_performed", "exact_status", "total_exact_matches", "matching_note_count",
+            "total_occurrence_count", "count_status", "coverage_claims_allowed",
+            "negative_claims_allowed", "negative_claims_require_exact_layer", "required_layer_results",
+        )
+        if key in full_coverage
+    }
+    return {
+        "execution": {
+            "layers_executed": list((traversal_manifest.get("execution") or {}).get("layers_executed") or []),
+            "layers_skipped": list((traversal_manifest.get("execution") or {}).get("layers_skipped") or []),
+        },
+        "candidate_counts": dict(traversal_manifest.get("candidate_counts") or {}),
+        "selected_counts": dict(traversal_manifest.get("selected_counts") or {}),
+        "coverage": coverage,
+        "limits": list(traversal_manifest.get("limits") or []),
+        "plan_completeness": dict(traversal_manifest.get("plan_completeness") or {}),
+        "plan_executability": dict(traversal_manifest.get("plan_executability") or {}),
+        "unsupported_layer_requests": [
+            {
+                "operator": str(item.get("operator") or ""),
+                "required": bool(item.get("required")),
+                "reason": str(item.get("reason") or ""),
+            }
+            for item in traversal_manifest.get("unsupported_layer_requests") or []
+            if isinstance(item, dict)
+        ],
+        "scope_resolution": {
+            "requested_aliases": list(bound_requests.get("requested_aliases") or bound_requests.get("bound_requests") or []),
+            "hard_applied": dict(scope.get("hard") or {}),
+            "preferred_applied": dict(scope.get("preferred") or {}),
+        },
+        "layer_statuses": layer_statuses,
+        "fusion_summary": {
+            "selector": str(fusion.get("selector") or ""),
+            "candidate_count": int(fusion.get("candidate_count") or 0),
+            "selected_count": int(fusion.get("selected_count") or 0),
+            "selected_unique_note_count": int(fusion.get("selected_unique_note_count") or 0),
+            "max_selected_chunks_per_note": int(fusion.get("max_selected_chunks_per_note") or 0),
+            "required_reservation": reservation,
+        },
+    }
+
+
 def _build_synthesis_context_packet(
     *,
     thread_id: str,
@@ -1559,7 +3199,7 @@ def _build_synthesis_context_packet(
     prior_thread_state: dict[str, Any],
     visible_transcript_tail: list[dict[str, Any]],
     semantic_compiler_packet: dict[str, Any],
-    semantic_traversal_manifest: dict[str, Any],
+    synthesis_traversal_summary: dict[str, Any],
     approved_retrieval_packet: dict[str, Any] | None,
     coverage_report: dict[str, Any],
     runtime_outcome: str,
@@ -1572,7 +3212,7 @@ def _build_synthesis_context_packet(
         "prior_thread_state": prior_thread_state,
         "visible_transcript_tail": visible_transcript_tail,
         "semantic_compiler_packet": semantic_compiler_packet,
-        "semantic_traversal_manifest": semantic_traversal_manifest,
+        "synthesis_traversal_summary": synthesis_traversal_summary,
         "approved_retrieval_packet": approved_retrieval_packet,
         "coverage_report": coverage_report,
         "runtime_outcome": runtime_outcome,
@@ -1822,11 +3462,11 @@ def run_thread_turn(
     turn_root.mkdir(parents=True, exist_ok=True)
 
     database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
-    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "scope_aliases": resolved_config.retrieval_scope_aliases}
+    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "scope_aliases": resolved_config.retrieval_scope_aliases, "inventory_diagnostics": {"source": "config_only_fallback", "status": "unavailable", "snapshot_load_count": 0, "full_inventory_rebuilds": 0}}
     if database_path.exists():
         try:
             with sqlite3.connect(database_path) as inventory_connection:
-                resource_inventory_summary = build_resource_inventory(connection=inventory_connection, config=resolved_config)
+                resource_inventory_summary, _ = load_persisted_inventory(connection=inventory_connection, config=resolved_config)
         except sqlite3.Error:
             resource_inventory_summary = build_resource_inventory(connection=None, config=resolved_config)
 
@@ -1858,11 +3498,29 @@ def run_thread_turn(
         response=compiler_response,
         config=resolved_config,
     )
+    planner_for_completeness = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
+    initial_completeness = validate_plan_completeness(planner_retrieval_plan=planner_for_completeness, config=resolved_config)
+    semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = initial_completeness
+    repair_record = {"attempted": False, "outcome": "not_needed", "latency_ms": 0}
+    if initial_completeness.get("status") != "complete" and compiler_response.status == "parsed":
+        semantic_compiler_packet, semantic_compiler_status, compiler_response, repair_record = _repair_incomplete_compiler_plan(
+            raw_user_input=user_input,
+            compiler_request=compiler_request,
+            compiler_backend=compiler_backend,
+            compiler_response=compiler_response,
+            semantic_compiler_packet=semantic_compiler_packet,
+            prior_thread_state=prior_thread_state,
+            active_focus=active_focus,
+            recent_semantic_turns=recent_semantic_turns,
+            config=resolved_config,
+            resource_inventory_summary=resource_inventory_summary,
+        )
     semantic_compiler_diagnostic = _semantic_compiler_diagnostic_packet(
         response=compiler_response,
         semantic_compiler_status=semantic_compiler_status,
         config=resolved_config,
     )
+    semantic_compiler_diagnostic["plan_repair"] = repair_record
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
         planner_retrieval_plan = build_default_retrieval_plan(
@@ -1874,13 +3532,30 @@ def run_thread_turn(
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
             planner_defaults=resolved_config.retrieval_planner_defaults,
         )
+    plan_executability = validate_plan_executability(planner_retrieval_plan=planner_retrieval_plan, config=resolved_config)
+    semantic_compiler_packet.setdefault("planner_diagnostics", {})["plan_executability"] = plan_executability
     # The database-backed path binds inside _semantic_traversal, where the same
     # live inventory is already loaded. Only bind here for the no-database
     # diagnostic path so resolver work is not performed twice per turn.
     bound_retrieval_plan = planner_retrieval_plan
     resolver_adjustments: list[dict[str, Any]] = []
 
-    if database_path.exists():
+    final_completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    if final_completeness.get("status") != "complete":
+        semantic_traversal_manifest, retrieval_packet = _incomplete_plan_artifacts(
+            semantic_compiler_packet=semantic_compiler_packet,
+            config=resolved_config,
+            resource_inventory_summary=resource_inventory_summary,
+            prior_thread_state=prior_thread_state,
+        )
+    elif plan_executability.get("status") != "executable":
+        semantic_traversal_manifest, retrieval_packet = _non_executable_plan_artifacts(
+            semantic_compiler_packet=semantic_compiler_packet,
+            config=resolved_config,
+            resource_inventory_summary=resource_inventory_summary,
+            plan_executability=plan_executability,
+        )
+    elif database_path.exists():
         if embedding_backend is None:
             embedding_backend = resolve_embedding_backend(resolved_config)
         connection = sqlite3.connect(database_path)
@@ -1892,6 +3567,7 @@ def run_thread_turn(
                 semantic_compiler_packet=semantic_compiler_packet,
                 prior_thread_state=prior_thread_state,
                 embedding_backend=embedding_backend,
+                resource_inventory_summary=resource_inventory_summary,
             )
         finally:
             connection.close()
@@ -1907,6 +3583,7 @@ def run_thread_turn(
             "bound_retrieval_plan": bound_retrieval_plan,
             "resolver_adjustments": resolver_adjustments,
             "resource_inventory_summary": resource_inventory_summary,
+            "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
             "execution": {"layers_executed": [], "layers_skipped": []},
             "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
             "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
@@ -1958,13 +3635,12 @@ def run_thread_turn(
         prior_thread_state=prior_thread_state,
         visible_transcript_tail=visible_transcript_tail,
         semantic_compiler_packet=semantic_compiler_packet,
-        semantic_traversal_manifest=semantic_traversal_manifest,
+        synthesis_traversal_summary=_build_synthesis_traversal_summary(semantic_traversal_manifest),
         approved_retrieval_packet=approved_retrieval_packet,
         coverage_report=coverage_report,
         runtime_outcome=runtime_outcome,
         blocking_reasons=blocking_reasons,
     )
-
     assistant_response_text: str | None = None
     llm_metadata: dict[str, Any] = {
         "mode": getattr(llm_backend, "mode_name", "unknown"),
@@ -1995,7 +3671,7 @@ def run_thread_turn(
                 prior_thread_state=prior_thread_state,
                 visible_transcript_tail=visible_transcript_tail,
                 semantic_compiler_packet=semantic_compiler_packet,
-                semantic_traversal_manifest=semantic_traversal_manifest,
+                synthesis_traversal_summary=_build_synthesis_traversal_summary(semantic_traversal_manifest),
                 approved_retrieval_packet=None,
                 coverage_report=coverage_report,
                 runtime_outcome=runtime_outcome,

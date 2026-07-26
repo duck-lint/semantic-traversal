@@ -111,10 +111,17 @@ KNOWN_PLANNER_FIELDS = {
     "semantic_queries",
     "lexical_queries",
     "graph_seeds",
+    "evidence_requirements",
     "retrieval_layers",
-    "selection_policy",
-    "claim_policy",
 }
+
+SUPPORTED_EVIDENCE_REQUIREMENTS = (
+    "literal_exhaustive",
+    "lexical_relevance",
+    "semantic_similarity",
+    "graph_relation",
+    "chronology",
+)
 
 
 def _quoted_terms_from_text(text: str) -> list[str]:
@@ -200,15 +207,6 @@ def _append_compact_term(terms: list[str], candidate: str, *, max_terms: int) ->
         terms.append(cleaned)
 
 
-def _append_query_terms(terms: list[str], candidate: str, *, max_terms: int) -> None:
-    for token in collect_plan_terms(candidate):
-        if token in SEARCH_NOISE_WORDS or token in DISCOURSE_OPERATOR_WORDS:
-            continue
-        _append_compact_term(terms, token, max_terms=max_terms)
-        if len(terms) >= max_terms:
-            return
-
-
 def _focus_carry_terms(
     *,
     active_focus: dict[str, Any] | None,
@@ -218,22 +216,11 @@ def _focus_carry_terms(
     carried: list[str] = []
 
     def consume_source(source: dict[str, Any]) -> None:
-        for field in ("resolved_referents", "concepts", "literal_terms", "graph_seeds", "lexical_queries"):
+        for field in ("resolved_referents", "concepts"):
             for item in coerce_string_list(source.get(field)):
                 _append_compact_term(carried, item, max_terms=max_terms)
                 if len(carried) >= max_terms:
                     return
-        query = str(source.get("query") or "").strip()
-        if query:
-            _append_query_terms(carried, query, max_terms=max_terms)
-            if len(carried) >= max_terms:
-                return
-        for field in ("semantic_queries",):
-            for item in coerce_string_list(source.get(field)):
-                _append_query_terms(carried, item, max_terms=max_terms)
-                if len(carried) >= max_terms:
-                    return
-
     if isinstance(active_focus, dict):
         consume_source(active_focus)
     if isinstance(recent_semantic_turns, list):
@@ -243,15 +230,6 @@ def _focus_carry_terms(
             if len(carried) >= max_terms:
                 break
 
-    if len(carried) < max_terms:
-        for source in (active_focus or {}, *(recent_semantic_turns[-2:] if isinstance(recent_semantic_turns, list) else [])):
-            if not isinstance(source, dict):
-                continue
-            for field in ("selected_note_titles", "selected_section_labels"):
-                for item in coerce_string_list(source.get(field)):
-                    _append_compact_term(carried, item, max_terms=max_terms)
-                    if len(carried) >= max_terms:
-                        return carried[:max_terms]
     return carried[:max_terms]
 
 
@@ -346,6 +324,7 @@ def _retrieval_layer(
     limit: int | None = None,
     depth: int | None = None,
     return_total_count: bool | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     layer: dict[str, Any] = {"operator": operator, "required": required}
     if limit is not None:
@@ -354,6 +333,8 @@ def _retrieval_layer(
         layer["depth"] = depth
     if return_total_count is not None:
         layer["return_total_count"] = return_total_count
+    if mode is not None:
+        layer["mode"] = mode
     return layer
 
 
@@ -365,6 +346,7 @@ def build_default_retrieval_plan(
     scope_requests: list[str],
     graph_seeds: list[str],
     resolved_referents: list[str] | None = None,
+    evidence_requirements: list[str] | None = None,
     planner_defaults: dict[str, Any],
 ) -> dict[str, Any]:
     search_intent = is_search_intent(raw_user_input)
@@ -387,28 +369,20 @@ def build_default_retrieval_plan(
         layers.append(_retrieval_layer("vector_search", limit=planner_defaults["vector_limit"]))
         layers.append(_retrieval_layer("graph_expand", depth=planner_defaults["graph_depth"]))
 
-    selection_policy = planner_defaults["selection_policy"]
-    claim_policy = planner_defaults["claim_policy"]
+    if evidence_requirements is None:
+        evidence_requirements = ["literal_exhaustive"] if search_intent else ["lexical_relevance", "semantic_similarity"]
 
     return {
         "intent_type": intent_type,
         "scope_requests": list(dict.fromkeys(scope_requests)),
         "concepts": list(dict.fromkeys(concepts)),
         "resolved_referents": list(dict.fromkeys(resolved_referents or [])),
+        "evidence_requirements": list(dict.fromkeys(str(value).strip() for value in evidence_requirements if str(value).strip())),
         "literal_terms": _literal_term_entries(literal_terms, required=search_intent),
         "semantic_queries": list(dict.fromkeys(semantic_queries)),
         "lexical_queries": list(dict.fromkeys(lexical_queries)),
         "graph_seeds": list(dict.fromkeys(graph_seeds)),
         "retrieval_layers": layers,
-        "selection_policy": {
-            "max_chunks": selection_policy["max_chunks"],
-            "preserve_required_layers": selection_policy["preserve_required_layers"],
-            "budgets": dict(selection_policy["budgets"]),
-        },
-        "claim_policy": {
-            "coverage_claims_allowed": bool(search_intent),
-            "negative_claims_require_exact_layer": claim_policy["negative_claims_require_exact_layer"],
-        },
     }
 
 
@@ -420,8 +394,9 @@ def _coerce_literal_terms(value: Any, fallback: list[dict[str, Any]]) -> list[di
         if isinstance(entry, dict):
             term = str(entry.get("term") or entry.get("value") or "").strip()
             match = str(entry.get("match") or "case_insensitive_substring").strip() or "case_insensitive_substring"
-            if match not in {"case_insensitive_substring", "case_sensitive_substring"}:
-                match = "case_insensitive_substring"
+            # Preserve unsupported modes for runtime diagnostics. Coercing an
+            # accepted field here would make the compiler request look
+            # executed when the requested behavior was never run.
             required = bool(entry.get("required"))
         else:
             term = str(entry).strip()
@@ -429,11 +404,10 @@ def _coerce_literal_terms(value: Any, fallback: list[dict[str, Any]]) -> list[di
             required = False
         if term and not any(item["term"] == term for item in terms):
             terms.append({"term": term, "match": match, "required": required})
-    return terms or list(fallback)
+    return terms
 
 
 def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    allowed = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand"}
     if not isinstance(value, list):
         return list(fallback)
     layers: list[dict[str, Any]] = []
@@ -441,62 +415,88 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
         if not isinstance(entry, dict):
             continue
         operator = str(entry.get("operator") or "").strip()
-        if operator not in allowed:
+        if not operator:
             continue
         layer: dict[str, Any] = {"operator": operator, "required": bool(entry.get("required"))}
         if "limit" in entry:
             try:
-                layer["limit"] = max(0, int(entry["limit"]))
+                layer["limit"] = int(entry["limit"])
             except (TypeError, ValueError):
-                pass
+                # Preserve invalid accepted input for runtime-owned
+                # defaulting diagnostics instead of silently dropping it.
+                layer["limit"] = entry.get("limit")
         if "depth" in entry:
             try:
                 layer["depth"] = max(0, int(entry["depth"]))
             except (TypeError, ValueError):
-                pass
+                layer["depth"] = entry.get("depth")
         if "return_total_count" in entry:
             layer["return_total_count"] = bool(entry.get("return_total_count"))
+        if "mode" in entry:
+            layer["mode"] = str(entry.get("mode") or "").strip()
+        for field in ("anchor_types", "authorities"):
+            if field in entry and isinstance(entry.get(field), list):
+                layer[field] = [str(item).strip() for item in entry[field] if str(item).strip()]
+        for field in ("before", "after", "start", "end", "direction"):
+            if field in entry:
+                layer[field] = entry.get(field)
+        if "include_unresolved" in entry:
+            layer["include_unresolved"] = bool(entry.get("include_unresolved"))
         layers.append(layer)
-    return layers or list(fallback)
+    return layers
 
 
-def _coerce_selection_policy(value: Any, fallback: dict[str, Any], planner_defaults: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return dict(fallback)
-    raw_budgets = value.get("budgets") if isinstance(value.get("budgets"), dict) else {}
-    fallback_budgets = fallback.get("budgets") if isinstance(fallback.get("budgets"), dict) else planner_defaults["selection_policy"]["budgets"]
-    budgets: dict[str, int] = {}
-    for key in ("exact", "lexical", "vector", "graph"):
-        raw_value = raw_budgets.get(key, fallback_budgets.get(key, planner_defaults["selection_policy"]["budgets"][key]))
-        try:
-            budgets[key] = max(0, int(raw_value))
-        except (TypeError, ValueError):
-            budgets[key] = planner_defaults["selection_policy"]["budgets"][key]
-    return {
-        "max_chunks": max(
-            0,
-            int(value.get("max_chunks", fallback.get("max_chunks", planner_defaults["selection_policy"]["max_chunks"])))
-        ),
-        "preserve_required_layers": bool(
-            value.get("preserve_required_layers", fallback.get("preserve_required_layers", planner_defaults["selection_policy"]["preserve_required_layers"]))
-        ),
-        "budgets": budgets,
-    }
+_PLANNER_LIST_FIELDS = (
+    "scope_requests",
+    "concepts",
+    "resolved_referents",
+    "literal_terms",
+    "semantic_queries",
+    "lexical_queries",
+    "graph_seeds",
+    "evidence_requirements",
+    "retrieval_layers",
+)
 
 
-def _coerce_claim_policy(value: Any, fallback: dict[str, Any], planner_defaults: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return dict(fallback)
-    return {
-        "coverage_claims_allowed": bool(value.get("coverage_claims_allowed", fallback.get("coverage_claims_allowed", False))),
-        "negative_claims_require_exact_layer": bool(value.get("negative_claims_require_exact_layer", fallback.get("negative_claims_require_exact_layer", planner_defaults["claim_policy"]["negative_claims_require_exact_layer"]))),
-    }
+def _canonicalize_planner_list_field(
+    *,
+    value: dict[str, Any],
+    field: str,
+    fallback: Any,
+    diagnostics: dict[str, Any],
+) -> Any:
+    """Preserve explicit empty lists while diagnosing absent and invalid fields."""
+    if field not in value:
+        diagnostics["defaulted_missing_fields"].append(field)
+        return list(fallback) if isinstance(fallback, list) else fallback
+    raw_value = value[field]
+    if not isinstance(raw_value, list):
+        diagnostics["invalid_planner_fields"].append(
+            {"field": field, "reason": "expected_list", "received_type": type(raw_value).__name__}
+        )
+        return list(fallback) if isinstance(fallback, list) else fallback
+    if not raw_value:
+        diagnostics["explicit_empty_fields"].append(field)
+    if field == "literal_terms":
+        return _coerce_literal_terms(raw_value, fallback if isinstance(fallback, list) else [])
+    if field == "retrieval_layers":
+        return _coerce_retrieval_layers(raw_value, fallback if isinstance(fallback, list) else [])
+    if field == "evidence_requirements":
+        return list(dict.fromkeys(str(item).strip() for item in raw_value if str(item).strip()))
+    return coerce_string_list(raw_value)
 
 
 def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner_defaults: dict[str, Any], raw_user_input: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    diagnostics: dict[str, Any] = {"ignored_planner_fields": []}
+    diagnostics: dict[str, Any] = {
+        "ignored_planner_fields": [],
+        "defaulted_missing_fields": [],
+        "invalid_planner_fields": [],
+        "explicit_empty_fields": [],
+    }
     if not isinstance(value, dict):
         result = dict(fallback)
+        diagnostics["defaulted_missing_fields"] = list(_PLANNER_LIST_FIELDS)
         if raw_user_input:
             literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry.get("term", "") for entry in result.get("literal_terms", []) if isinstance(entry, dict)])
             if demoted:
@@ -510,23 +510,46 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
             result["lexical_queries"] = lexical_queries
         return result, diagnostics
 
-    unknown_fields = sorted(set(value) - KNOWN_PLANNER_FIELDS)
+    retired_fields = sorted(set(value) & {"selection_policy", "claim_policy"})
+    unknown_fields = sorted(set(value) - KNOWN_PLANNER_FIELDS - set(retired_fields))
     if unknown_fields:
         diagnostics["ignored_planner_fields"] = unknown_fields
+    if retired_fields:
+        diagnostics["retired_planner_fields"] = [
+            {"field": field, "action": "retired", "reason": "compiler does not own runtime selection or claim policy"}
+            for field in retired_fields
+        ]
 
     result = {
         "intent_type": str(value.get("intent_type") or fallback.get("intent_type") or "semantic_traversal"),
-        "scope_requests": coerce_string_list(value.get("scope_requests")) or coerce_string_list(fallback.get("scope_requests")),
-        "concepts": coerce_string_list(value.get("concepts")) or coerce_string_list(fallback.get("concepts")),
-        "resolved_referents": coerce_string_list(value.get("resolved_referents")) or coerce_string_list(fallback.get("resolved_referents")),
-        "literal_terms": _coerce_literal_terms(value.get("literal_terms"), fallback.get("literal_terms", [])),
-        "semantic_queries": coerce_string_list(value.get("semantic_queries")) or coerce_string_list(fallback.get("semantic_queries")),
-        "lexical_queries": coerce_string_list(value.get("lexical_queries")) or coerce_string_list(fallback.get("lexical_queries")),
-        "graph_seeds": coerce_string_list(value.get("graph_seeds")) or coerce_string_list(fallback.get("graph_seeds")),
-        "retrieval_layers": _coerce_retrieval_layers(value.get("retrieval_layers"), fallback.get("retrieval_layers", [])),
-        "selection_policy": _coerce_selection_policy(value.get("selection_policy"), fallback.get("selection_policy", {}), planner_defaults),
-        "claim_policy": _coerce_claim_policy(value.get("claim_policy"), fallback.get("claim_policy", {}), planner_defaults),
+        "scope_requests": _canonicalize_planner_list_field(value=value, field="scope_requests", fallback=coerce_string_list(fallback.get("scope_requests")), diagnostics=diagnostics),
+        "concepts": _canonicalize_planner_list_field(value=value, field="concepts", fallback=coerce_string_list(fallback.get("concepts")), diagnostics=diagnostics),
+        "resolved_referents": _canonicalize_planner_list_field(value=value, field="resolved_referents", fallback=coerce_string_list(fallback.get("resolved_referents")), diagnostics=diagnostics),
+        "literal_terms": _canonicalize_planner_list_field(value=value, field="literal_terms", fallback=fallback.get("literal_terms", []), diagnostics=diagnostics),
+        "semantic_queries": _canonicalize_planner_list_field(value=value, field="semantic_queries", fallback=coerce_string_list(fallback.get("semantic_queries")), diagnostics=diagnostics),
+        "lexical_queries": _canonicalize_planner_list_field(value=value, field="lexical_queries", fallback=coerce_string_list(fallback.get("lexical_queries")), diagnostics=diagnostics),
+        "graph_seeds": _canonicalize_planner_list_field(value=value, field="graph_seeds", fallback=coerce_string_list(fallback.get("graph_seeds")), diagnostics=diagnostics),
+        # A parsed model request that predates this field cannot be assigned
+        # evidentiary intent by runtime. Preserve the missing-field diagnostic
+        # and leave the declared requirement set empty rather than inventing
+        # requirements from the operator list.
+        "evidence_requirements": _canonicalize_planner_list_field(value=value, field="evidence_requirements", fallback=[], diagnostics=diagnostics),
+        "retrieval_layers": _canonicalize_planner_list_field(value=value, field="retrieval_layers", fallback=fallback.get("retrieval_layers", []), diagnostics=diagnostics),
     }
+    unsupported_requirements = [
+        value for value in result["evidence_requirements"]
+        if value not in SUPPORTED_EVIDENCE_REQUIREMENTS
+    ]
+    if unsupported_requirements:
+        diagnostics["invalid_planner_fields"].append(
+            {
+                "field": "evidence_requirements",
+                "reason": "unsupported_requirement_enum",
+                "values": unsupported_requirements,
+            }
+        )
+    if isinstance(value.get("retrieval_layers"), list) and value["retrieval_layers"] and not result["retrieval_layers"]:
+        diagnostics["invalid_planner_fields"].append({"field": "retrieval_layers", "reason": "no_valid_layer_entries"})
     if raw_user_input:
         literal_terms, demoted = _clean_discourse_operator_terms(raw_user_input, [entry["term"] for entry in result["literal_terms"]])
         if demoted:

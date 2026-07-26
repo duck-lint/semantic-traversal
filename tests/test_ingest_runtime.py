@@ -19,6 +19,8 @@ from semantic_traversal.ingest import IngestFrontmatterError, IngestSourceRoot, 
 from semantic_traversal.llm import LLMResponse
 from semantic_traversal.runtime import (
     _apply_retrieval_candidate_hygiene,
+    _candidate_source_layers,
+    _count_selected_by_layer,
     _merge_candidates,
     _select_retrieval_chunks,
     run_thread_turn,
@@ -178,6 +180,25 @@ class ResponseCompilerBackend:
         )
 
 
+class SequenceCompilerBackend:
+    mode_name = "sequence"
+
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        self.payloads = payloads
+        self.calls: list[dict[str, Any]] = []
+
+    def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
+        self.calls.append(packet)
+        payload = self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)]
+        return SemanticCompilerResponse(
+            parsed_payload=payload,
+            raw_response="sequence raw response",
+            metadata={"backend_mode": self.mode_name},
+            diagnostics={},
+            status="parsed",
+        )
+
+
 class RecordingCompilerBackend:
     mode_name = "recording"
 
@@ -258,6 +279,105 @@ def _prepare_graph_fixture_data_root() -> Path:
     return data_root
 
 
+def _prepare_preferred_scope_graph_data_root() -> Path:
+    data_root = _register_temp_data_root()
+    source_root = data_root / "preferred-scope-graph-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    _write_markdown_note(
+        source_root,
+        "Journal.md",
+        """
+        # Journal
+
+        The idea developed through an early geometry insight.
+
+        Links to [[Concept]].
+        """,
+        uuid_value="11111111-1111-4111-8111-111111111111",
+        frontmatter={"note_type": "journal_entry"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Concept.md",
+        """
+        # Concept
+
+        A conceptual precursor describes relational structure.
+        """,
+        uuid_value="22222222-2222-4222-8222-222222222222",
+        frontmatter={"note_type": "concept"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Reading.md",
+        """
+        # Reading
+
+        A later reading reinforced the same structural analogy.
+        """,
+        uuid_value="33333333-3333-4333-8333-333333333333",
+        frontmatter={"note_type": "reading_notes"},
+    )
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="scope-fixture", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+    )
+    return data_root
+
+
+def _prepare_directed_chain_data_root(*, reverse_edge_rows: bool = False) -> Path:
+    data_root = _register_temp_data_root()
+    source_root = data_root / "directed-chain-fixture"
+    source_root.mkdir(parents=True, exist_ok=True)
+    _write_markdown_note(
+        source_root,
+        "Journal.md",
+        "# Journal\n\nJournal evidence.\n\nLinks to [[Concept]].",
+        uuid_value="44444444-4444-4444-8444-444444444444",
+        frontmatter={"note_type": "journal_entry"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Concept.md",
+        "# Concept\n\nConcept evidence.\n\nLinks to [[Reading]].",
+        uuid_value="55555555-5555-4555-8555-555555555555",
+        frontmatter={"note_type": "concept"},
+    )
+    _write_markdown_note(
+        source_root,
+        "Reading.md",
+        "# Reading\n\nReading evidence.",
+        uuid_value="66666666-6666-4666-8666-666666666666",
+        frontmatter={"note_type": "reading_notes"},
+    )
+    run_ingest(
+        repo_root=REPO_ROOT,
+        data_root=data_root,
+        source_roots=(IngestSourceRoot(label="directed-chain", path=source_root),),
+        embedding_backend=FakeEmbeddingBackend(),
+    )
+    if reverse_edge_rows:
+        connection = sqlite3.connect(data_root / "ingestion" / "latent_space.sqlite3")
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        rows = connection.execute(
+            f"SELECT edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at FROM {config.graph_edges_table} ORDER BY edge_id DESC"
+        ).fetchall()
+        connection.execute(f"DELETE FROM {config.graph_edges_table}")
+        connection.executemany(
+            f"INSERT INTO {config.graph_edges_table} (edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.commit()
+        connection.close()
+    return data_root
+
+
+def _graph_direction_payload(seed: str, *, depth: int = 1) -> dict[str, Any]:
+    return _graph_compiler_payload(seed, graph_seeds=[seed], graph_depth=depth)
+
+
 def _turn_artifact(path: Path) -> dict[str, Any]:
     return load_json(path) or {}
 
@@ -285,10 +405,57 @@ def _write_markdown_note(
     return path
 
 
-def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> dict[str, Any]:
+def _graph_compiler_payload(
+    raw_user_input: str,
+    *,
+    graph_seeds: list[str],
+    graph_depth: int | None = 1,
+    scope_requests: list[str] | None = None,
+    intent_type: str = "semantic_traversal",
+) -> dict[str, Any]:
+    graph_layer = {"operator": "graph_expand", "required": False}
+    if graph_depth is not None:
+        graph_layer["depth"] = graph_depth
     return {
         "raw_user_input": raw_user_input,
         "intent": "fixture",
+        "query": raw_user_input,
+        "entities": [],
+        "relations": [],
+        "resolved_referents": [],
+        "planner_retrieval_plan": {
+            "intent_type": intent_type,
+            "scope_requests": list(scope_requests or []),
+            "concepts": [],
+            "resolved_referents": [],
+            "literal_terms": [],
+            "semantic_queries": [raw_user_input] if raw_user_input else [],
+            "lexical_queries": [],
+            "graph_seeds": graph_seeds,
+            "retrieval_layers": [
+                {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                {"operator": "vector_search", "required": False, "limit": 24},
+                graph_layer,
+            ],
+            "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+            "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
+        },
+        "limitations": [],
+    }
+
+
+def _controlled_layer_payload(
+    raw_user_input: str,
+    *,
+    layers: list[dict[str, Any]],
+    semantic_queries: list[str] | None = None,
+    lexical_queries: list[str] | None = None,
+    graph_seeds: list[str] | None = None,
+    selection_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "raw_user_input": raw_user_input,
+        "intent": "controlled required-layer fixture",
         "query": raw_user_input,
         "entities": [],
         "relations": [],
@@ -299,15 +466,11 @@ def _graph_compiler_payload(raw_user_input: str, *, graph_seeds: list[str]) -> d
             "concepts": [],
             "resolved_referents": [],
             "literal_terms": [],
-            "semantic_queries": [raw_user_input] if raw_user_input else [],
-            "lexical_queries": [],
-            "graph_seeds": graph_seeds,
-            "retrieval_layers": [
-                {"operator": "lexical_chunk_search", "required": False, "limit": 50},
-                {"operator": "vector_search", "required": False, "limit": 24},
-                {"operator": "graph_expand", "required": False, "depth": 1},
-            ],
-            "selection_policy": {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
+            "semantic_queries": list(semantic_queries or []),
+            "lexical_queries": list(lexical_queries or []),
+            "graph_seeds": list(graph_seeds or []),
+            "retrieval_layers": layers,
+            "selection_policy": selection_policy or {"max_chunks": 24, "preserve_required_layers": True, "budgets": {"exact": 12, "lexical": 6, "vector": 6, "graph": 4}},
             "claim_policy": {"coverage_claims_allowed": False, "negative_claims_require_exact_layer": True},
         },
         "limitations": [],
@@ -810,7 +973,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=0)),
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
@@ -821,13 +984,12 @@ class ThesisRuntimeTests(unittest.TestCase):
     def test_graph_traversal_hop_limit_one_retrieves_directly_linked_note(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         config = load_runtime_config(repo_root=REPO_ROOT)
-        config.raw["graph_traversal"]["hop_limit"] = 1
         result = run_thread_turn(
             repo_root=REPO_ROOT,
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
@@ -840,13 +1002,12 @@ class ThesisRuntimeTests(unittest.TestCase):
     def test_graph_traversal_hop_limit_zero_does_not_expand_linked_note(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         config = load_runtime_config(repo_root=REPO_ROOT)
-        config.raw["graph_traversal"]["hop_limit"] = 0
         result = run_thread_turn(
             repo_root=REPO_ROOT,
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=0)),
             embedding_backend=UnavailableEmbeddingBackend(),
             config=config,
         )
@@ -886,7 +1047,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["expanded_note_count"], 0)
         self.assertFalse(any("wikilink hop" in chunk["selection_reason"] for chunk in result.retrieval_packet["selected_chunks"]))
 
-    def test_active_focus_can_supply_graph_seeds_on_referential_second_turn(self) -> None:
+    def test_active_focus_cannot_supply_graph_seeds_on_referential_second_turn(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -906,9 +1067,9 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=UnavailableEmbeddingBackend(),
         )
         self.assertEqual(second_turn.semantic_traversal_manifest["graph_traversal"]["enabled"], True)
-        self.assertIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
-        self.assertGreater(second_turn.semantic_traversal_manifest["graph_traversal"]["matched_seed_count"], 0)
-        self.assertTrue(any("wikilink hop" in chunk["selection_reason"] for chunk in second_turn.retrieval_packet["selected_chunks"]))
+        self.assertNotIn("active_focus", second_turn.semantic_traversal_manifest["graph_traversal"]["seed_sources"])
+        self.assertEqual(second_turn.semantic_traversal_manifest["graph_traversal"]["matched_seed_count"], 0)
+        self.assertFalse(any("active_focus" in str(seed) for seed in second_turn.semantic_traversal_manifest["graph_traversal"]["submitted_seeds"]))
 
     def test_graph_traversal_notes_appear_in_manifest(self) -> None:
         data_root = _prepare_graph_fixture_data_root()
@@ -1075,7 +1236,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         for junk_term in ("raw_user_input", "assistant_response_snippet", "selected_chunk_ids", "selected_note_titles", "{"):
             self.assertNotIn(junk_term, planner_plan["concepts"])
 
-    def test_referential_second_turn_preserves_resolved_referents_after_canonicalization(self) -> None:
+    def test_compiler_canonicalization_does_not_inject_prior_focus(self) -> None:
         data_root = _prepare_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1124,12 +1285,10 @@ class ThesisRuntimeTests(unittest.TestCase):
             embedding_backend=FakeEmbeddingBackend(),
         )
         resolved_referents = second_turn.semantic_compiler_packet["planner_retrieval_plan"]["resolved_referents"]
-        self.assertIn("candy", resolved_referents)
-        self.assertIn("bed", resolved_referents)
-        self.assertIn("candy", second_turn.next_thread_state["active_focus"]["resolved_referents"])
-        self.assertIn("bed", second_turn.next_thread_state["active_focus"]["resolved_referents"])
+        self.assertEqual(resolved_referents, [])
+        self.assertNotIn("candy", " ".join(second_turn.semantic_compiler_packet["planner_retrieval_plan"]["semantic_queries"]))
 
-    def test_comparison_intent_carries_prior_active_focus_into_semantic_context(self) -> None:
+    def test_comparison_plan_uses_only_current_subjects(self) -> None:
         data_root = _prepare_data_root()
         first_turn = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1180,8 +1339,8 @@ class ThesisRuntimeTests(unittest.TestCase):
         planner_plan = second_turn.semantic_compiler_packet["planner_retrieval_plan"]
         joined_referents = " ".join(planner_plan["resolved_referents"]).lower()
         joined_semantic_queries = " ".join(planner_plan["semantic_queries"]).lower()
-        self.assertIn("schopenhauer", joined_referents)
-        self.assertIn("schopenhauer", joined_semantic_queries)
+        self.assertNotIn("schopenhauer", joined_referents)
+        self.assertNotIn("schopenhauer", joined_semantic_queries)
         self.assertLessEqual(len(planner_plan["resolved_referents"]), 12)
         self.assertNotIn("relate", [entry["term"] for entry in planner_plan["literal_terms"]])
         self.assertNotIn("contrast", [entry["term"] for entry in planner_plan["literal_terms"]])
@@ -1355,6 +1514,310 @@ class ThesisRuntimeTests(unittest.TestCase):
         ]
         selected = _select_retrieval_chunks(merged_candidates=candidates, max_chunks=3)
         self.assertEqual([chunk["chunk_id"] for chunk in selected], ["chunk-a", "chunk-c"])
+
+    def test_selected_multi_surface_provenance_survives_merge_and_selection(self) -> None:
+        candidates = [
+            {"chunk_id": "shared", "chunk_hash": "shared-hash", "selection_source": "lexical", "score": 3.0, "selection_reason": "lexical"},
+            {"chunk_id": "shared", "chunk_hash": "shared-hash", "selection_source": "vector", "score": 2.0, "selection_reason": "vector"},
+            {"chunk_id": "shared", "chunk_hash": "shared-hash", "selection_source": "graph", "score": 1.0, "selection_reason": "graph"},
+        ]
+        merged = _merge_candidates(candidates[:1], candidates[1:2], candidates[2:], config=load_runtime_config(repo_root=REPO_ROOT))
+        selected = _select_retrieval_chunks(merged_candidates=merged, max_chunks=1)
+        self.assertEqual(selected[0]["selection_source"], "lexical")
+        self.assertEqual(selected[0]["source_layers"], ["lexical", "vector", "graph"])
+        self.assertNotIn("sources", selected[0])
+        self.assertEqual(_candidate_source_layers(selected[0]), ["lexical", "vector", "graph"])
+        self.assertEqual(_count_selected_by_layer(selected), {"exact": 0, "lexical": 1, "vector": 1, "graph": 1})
+
+    def test_source_layer_order_and_duplicates_are_deterministic(self) -> None:
+        candidate = {"source_layers": ["graph", "vector", "graph", "lexical", "bogus", "exact"]}
+        self.assertEqual(_candidate_source_layers(candidate), ["exact", "lexical", "vector", "graph"])
+
+    def test_graph_materialization_is_round_robin_across_notes(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        graph_manifest = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertEqual(graph_manifest["candidate_note_ids"][:3], [
+            "graph-fixture::uuid::aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "graph-fixture::uuid::bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "graph-fixture::uuid::cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        ])
+        self.assertTrue(all(chunk["graph_provenance"] for chunk in result.retrieval_packet["selected_chunks"] if "graph" in chunk["source_layers"]))
+
+    def test_graph_depth_is_runtime_canonicalized_and_hop_limit_is_not_authoritative(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        graph = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertEqual(graph["requested_depth"], 1)
+        self.assertEqual(graph["effective_depth"], 1)
+        self.assertEqual(graph["depth_adjustment"], "none")
+        self.assertEqual(graph["expanded_note_count"], 2)
+
+    def test_graph_depth_two_and_clamping_are_visible(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        for requested, expected, adjustment in ((2, 2, "none"), (99, 2, "clamped_to_max")):
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="A",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=requested)),
+                embedding_backend=UnavailableEmbeddingBackend(),
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            self.assertEqual(graph["requested_depth"], requested)
+            self.assertEqual(graph["effective_depth"], expected)
+            self.assertEqual(graph["depth_adjustment"], adjustment)
+            self.assertTrue(any("graph_expand.depth" in str(item.get("field")) for item in result.semantic_traversal_manifest["resolver_adjustments"]))
+
+    def test_graph_direction_combines_with_depth(self) -> None:
+        for direction, expects_a in (("outbound", False), ("inbound", True), ("both", True)):
+            data_root = _prepare_graph_fixture_data_root()
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = direction
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="B",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("B", graph_seeds=["B"], graph_depth=1)),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            note_ids = result.semantic_traversal_manifest["graph_traversal"]["candidate_note_ids"]
+            self.assertEqual(any("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" in note_id for note_id in note_ids), expects_a)
+            self.assertEqual(result.semantic_traversal_manifest["graph_traversal"]["direction"], direction)
+
+    def test_directed_chain_outbound_inbound_and_both_are_true_unions(self) -> None:
+        expected = {
+            "Journal": "directed-chain::uuid::44444444-4444-4444-8444-444444444444",
+            "Concept": "directed-chain::uuid::55555555-5555-4555-8555-555555555555",
+            "Reading": "directed-chain::uuid::66666666-6666-4666-8666-666666666666",
+        }
+        for direction, expected_neighbors in (
+            ("outbound", {expected["Reading"]}),
+            ("inbound", {expected["Journal"]}),
+            ("both", {expected["Journal"], expected["Reading"]}),
+        ):
+            data_root = _prepare_directed_chain_data_root()
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = direction
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="Concept",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept")),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            note_ids = set(graph["candidate_note_ids"])
+            self.assertIn(expected["Concept"], note_ids)
+            self.assertEqual(note_ids - {expected["Concept"]}, expected_neighbors)
+            self.assertEqual(graph["direction"], direction)
+            self.assertEqual(len(graph["candidate_unique_note_ids"]), len(note_ids))
+            for chunk in result.retrieval_packet["selected_chunks"]:
+                if "graph" in chunk["source_layers"]:
+                    self.assertEqual(chunk["graph_direction"], direction)
+                    if chunk["note_id"] != expected["Concept"]:
+                        self.assertTrue(chunk["graph_hop_provenance"])
+
+    def test_directed_chain_depth_two_reaches_only_licensed_end(self) -> None:
+        for direction, seed, expected_notes in (
+            ("outbound", "Journal", {"directed-chain::uuid::44444444-4444-4444-8444-444444444444", "directed-chain::uuid::55555555-5555-4555-8555-555555555555", "directed-chain::uuid::66666666-6666-4666-8666-666666666666"}),
+            ("inbound", "Reading", {"directed-chain::uuid::66666666-6666-4666-8666-666666666666", "directed-chain::uuid::55555555-5555-4555-8555-555555555555", "directed-chain::uuid::44444444-4444-4444-8444-444444444444"}),
+        ):
+            data_root = _prepare_directed_chain_data_root()
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = direction
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input=seed,
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload(seed, depth=2)),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            self.assertEqual(set(graph["candidate_note_ids"]), expected_notes)
+            self.assertEqual(graph["effective_depth"], 2)
+
+    def test_graph_direction_is_deterministic_independent_of_edge_insertion_order(self) -> None:
+        manifests = []
+        packets = []
+        for reverse_edge_rows in (False, True, False):
+            data_root = _prepare_directed_chain_data_root(reverse_edge_rows=reverse_edge_rows)
+            config = load_runtime_config(repo_root=REPO_ROOT)
+            config.raw["graph_traversal"]["direction"] = "both"
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="Concept",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept")),
+                embedding_backend=UnavailableEmbeddingBackend(),
+                config=config,
+            )
+            graph = result.semantic_traversal_manifest["graph_traversal"]
+            manifests.append(graph)
+            packets.append(result.retrieval_packet["selected_chunks"])
+        self.assertEqual(manifests[0], manifests[1])
+        self.assertEqual(manifests[1], manifests[2])
+        self.assertEqual(packets[0], packets[1])
+        self.assertEqual(packets[1], packets[2])
+
+    def test_inbound_provenance_separates_stored_edge_from_traversal_step(self) -> None:
+        data_root = _prepare_directed_chain_data_root()
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        config.raw["graph_traversal"]["direction"] = "inbound"
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Concept",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept")),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        journal_id = "directed-chain::uuid::44444444-4444-4444-8444-444444444444"
+        concept_id = "directed-chain::uuid::55555555-5555-4555-8555-555555555555"
+        journal_chunks = [chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["note_id"] == journal_id]
+        self.assertTrue(journal_chunks)
+        hop = journal_chunks[0]["graph_hop_provenance"][0]
+        self.assertEqual(hop["traversal_direction"], "inbound")
+        self.assertEqual(hop["edge_source_note_id"], journal_id)
+        self.assertEqual(hop["edge_target_note_id"], concept_id)
+        self.assertEqual(hop["from_note_id"], concept_id)
+        self.assertEqual(hop["to_note_id"], journal_id)
+
+    def test_graph_cycles_reciprocal_links_and_self_links_remain_bounded(self) -> None:
+        data_root = _prepare_directed_chain_data_root()
+        db_path = data_root / "ingestion" / "latent_space.sqlite3"
+        connection = sqlite3.connect(db_path)
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        connection.executemany(
+            f"INSERT INTO {config.graph_edges_table} (edge_id, source_node_id, target_node_id, edge_type, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("extra-reciprocal", "note::55555555-5555-4555-8555-555555555555", "note::44444444-4444-4444-8444-444444444444", "note_links_note", "{}", "test", "test"),
+                ("extra-self", "note::55555555-5555-4555-8555-555555555555", "note::55555555-5555-4555-8555-555555555555", "note_links_note", "{}", "test", "test"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+        config.raw["graph_traversal"]["direction"] = "both"
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Concept",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_direction_payload("Concept", depth=2)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+            config=config,
+        )
+        graph = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertEqual(len(graph["candidate_unique_note_ids"]), len(set(graph["candidate_unique_note_ids"])))
+        self.assertLessEqual(graph["expanded_note_count"], 2)
+        self.assertTrue(all(len(chunk.get("graph_hop_provenance", [])) <= 8 for chunk in result.retrieval_packet["selected_chunks"] if "graph" in chunk["source_layers"]))
+
+    def test_missing_graph_depth_uses_yaml_default_with_diagnostic(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="A",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=None)),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        graph = result.semantic_traversal_manifest["graph_traversal"]
+        self.assertIsNone(graph["requested_depth"])
+        self.assertEqual(graph["effective_depth"], graph["default_depth"])
+        self.assertEqual(graph["depth_adjustment"], "defaulted")
+
+    def test_preferred_scope_keeps_nonjournal_graph_evidence_and_ranks_journal(self) -> None:
+        data_root = _prepare_preferred_scope_graph_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="Journal",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(
+                _graph_compiler_payload(
+                    "Journal",
+                    graph_seeds=["Journal"],
+                    scope_requests=["journal"],
+                )
+            ),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        bound = result.semantic_traversal_manifest["bound_retrieval_plan"]
+        self.assertEqual(bound["scope_filters"]["note_type"], [])
+        self.assertIn("journal_entry", bound["preferred_scope_filters"]["note_type"])
+        self.assertIn("journal", bound["scope_resolution"]["preferred"])
+        selected = result.retrieval_packet["selected_chunks"]
+        self.assertTrue(any(chunk["note_title"] == "Journal" and chunk["preferred_scope_match"] for chunk in selected))
+        self.assertTrue(any(chunk["note_title"] == "Concept" for chunk in selected))
+        self.assertEqual(selected[0]["note_title"], "Journal")
+        self.assertIn("preferred_scope_match", selected[0])
+        self.assertIn("scope_resolution", result.semantic_traversal_manifest)
+
+    def test_hard_scope_still_excludes_nonjournal_graph_candidates(self) -> None:
+        data_root = _prepare_preferred_scope_graph_data_root()
+        result = run_thread_turn(
+            repo_root=REPO_ROOT,
+            data_root=data_root,
+            user_input="search Journal",
+            llm_backend=RecordingLLMBackend(),
+            semantic_compiler_backend=RecordingCompilerBackend(
+                _graph_compiler_payload(
+                    "Journal",
+                    graph_seeds=["Journal"],
+                    scope_requests=["journal"],
+                    intent_type="scoped_exact_search",
+                )
+            ),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        bound = result.semantic_traversal_manifest["bound_retrieval_plan"]
+        self.assertIn("journal_entry", bound["scope_filters"]["note_type"])
+        self.assertEqual(bound["preferred_scope_filters"]["note_type"], [])
+        self.assertTrue(all(chunk["note_title"] == "Journal" for chunk in result.retrieval_packet["selected_chunks"]))
+        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["graph"], 2)
+
+    def test_preferred_scope_order_is_deterministic(self) -> None:
+        orders = []
+        for _ in range(2):
+            data_root = _prepare_preferred_scope_graph_data_root()
+            result = run_thread_turn(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                user_input="Journal",
+                llm_backend=RecordingLLMBackend(),
+                semantic_compiler_backend=RecordingCompilerBackend(
+                    _graph_compiler_payload("Journal", graph_seeds=["Journal"], scope_requests=["journal"])
+                ),
+                embedding_backend=UnavailableEmbeddingBackend(),
+            )
+            orders.append([chunk["chunk_id"] for chunk in result.retrieval_packet["selected_chunks"]])
+        self.assertEqual(orders[0], orders[1])
 
     def test_template_boilerplate_is_demoted_for_non_template_queries(self) -> None:
         semantic_compiler_packet = {
@@ -1549,7 +2012,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(result.semantic_traversal_manifest["coverage"]["exact_search_performed"])
         self.assertTrue(any("exact" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
 
-    def test_unknown_scope_request_demotes_in_resolver(self) -> None:
+    def test_unknown_scope_request_remains_non_authoritative(self) -> None:
         data_root = _prepare_data_root()
         compiler_backend = ResponseCompilerBackend(
             payload={
@@ -1590,7 +2053,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("philosophy", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
         self.assertTrue(result.semantic_traversal_manifest["resolver_adjustments"])
-        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "demoted_to_concept")
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "unavailable_scope_alias")
         self.assertIn("philosophy", result.semantic_traversal_manifest["planner_retrieval_plan"]["scope_requests"])
         self.assertIn("influence", result.semantic_traversal_manifest["planner_retrieval_plan"]["concepts"])
 
@@ -1734,7 +2197,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_alias")
         self.assertTrue(any(adjustment["action"] == "bound_to_alias_unobserved_in_inventory" for adjustment in result.semantic_traversal_manifest["resolver_adjustments"]))
 
-    def test_resolver_binds_observed_note_type_without_alias(self) -> None:
+    def test_resolver_rejects_observed_note_type_without_alias(self) -> None:
         data_root = _prepare_data_root()
         compiler_backend = ResponseCompilerBackend(
             payload={
@@ -1773,8 +2236,8 @@ class ThesisRuntimeTests(unittest.TestCase):
             semantic_compiler_backend=compiler_backend,
             embedding_backend=FakeEmbeddingBackend(),
         )
-        self.assertIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
-        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "bound_to_observed_note_type")
+        self.assertNotIn("journal_entry", result.semantic_traversal_manifest["bound_retrieval_plan"]["scope_filters"]["note_type"])
+        self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "unauthorized_inventory_scope")
 
     def test_alias_bound_unobserved_inventory_values_are_explicit(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -1964,7 +2427,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             data_root=data_root,
             user_input="A",
             llm_backend=RecordingLLMBackend(),
-            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"])),
+            semantic_compiler_backend=RecordingCompilerBackend(_graph_compiler_payload("A", graph_seeds=["A"], graph_depth=1)),
             embedding_backend=UnavailableEmbeddingBackend(),
         )
         selected_for_book = [chunk for chunk in result.retrieval_packet["selected_chunks"] if chunk["note_title"] == "The Parmenidean Ascent"]
@@ -2007,9 +2470,88 @@ class ThesisRuntimeTests(unittest.TestCase):
             "section_label",
             "paragraph_text",
             "chunk_hash",
+            "source_layers",
+            "selection_source",
             "selection_reason",
         ):
             self.assertIn(field, chunk)
+        self.assertIsInstance(chunk["source_layers"], list)
+        self.assertIsInstance(chunk["selection_source"], str)
+        vector_chunks = [item for item in result.retrieval_packet["selected_chunks"] if "vector" in item["source_layers"]]
+        if vector_chunks:
+            self.assertIn("vector_query_scores", vector_chunks[0])
+            self.assertIn("vector_best_query", vector_chunks[0])
+
+    def test_required_lexical_layer_uses_structured_status_and_selected_contribution(self) -> None:
+        data_root = _prepare_data_root()
+        payload = _controlled_layer_payload(
+            "alpha",
+            layers=[{"operator": "lexical_chunk_search", "required": True, "limit": 50}],
+            lexical_queries=["candy"],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="alpha",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        manifest = result.semantic_traversal_manifest["layer_manifests"]["lexical"]
+        self.assertEqual(manifest["status"], "completed_with_candidates")
+        self.assertGreater(manifest["candidate_count"], 0)
+        self.assertGreater(manifest["selected_contribution_count"], 0)
+        self.assertTrue(manifest["adequate_contribution"])
+        self.assertEqual(result.semantic_traversal_manifest["coverage"]["required_layer_results"][0]["adequate_contribution"], True)
+
+    def test_required_lexical_no_candidates_blocks_without_absence_permission(self) -> None:
+        data_root = _prepare_data_root()
+        payload = _controlled_layer_payload(
+            "absent",
+            layers=[{"operator": "lexical_chunk_search", "required": True, "limit": 50}],
+            lexical_queries=["qxvplmno"],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="absent",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        manifest = result.semantic_traversal_manifest["layer_manifests"]["lexical"]
+        self.assertEqual(manifest["status"], "completed_no_candidates")
+        self.assertFalse(manifest["adequate_contribution"])
+        self.assertEqual(result.coverage_report["decision"], "blocked")
+        self.assertFalse(result.semantic_traversal_manifest["coverage"]["negative_claims_allowed"])
+
+    def test_required_vector_and_graph_manifests_record_selected_surface_contribution(self) -> None:
+        data_root = _prepare_graph_fixture_data_root()
+        payload = _controlled_layer_payload(
+            "A",
+            layers=[
+                {"operator": "vector_search", "required": True, "limit": 24},
+                {"operator": "graph_expand", "required": True, "limit": 24, "depth": 1},
+            ],
+            semantic_queries=["A"], graph_seeds=["A"],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="A",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=FakeEmbeddingBackend(),
+        )
+        vector = result.semantic_traversal_manifest["layer_manifests"]["vector"]
+        graph = result.semantic_traversal_manifest["layer_manifests"]["graph"]
+        self.assertIn(vector["status"], {"completed_with_candidates", "completed_no_candidates"})
+        self.assertEqual(graph["status"], "completed_with_candidates")
+        self.assertTrue(graph["adequate_contribution"])
+        self.assertTrue(any("graph" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
+
+    def test_required_unknown_operator_is_preserved_and_blocks(self) -> None:
+        data_root = _prepare_data_root()
+        payload = _controlled_layer_payload(
+            "unknown",
+            layers=[{"operator": "future_surface", "required": True, "limit": 5}],
+            lexical_queries=[], semantic_queries=[],
+        )
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="unknown",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=RecordingCompilerBackend(payload), embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(result.semantic_traversal_manifest["unsupported_layer_requests"][0]["operator"], "future_surface")
+        self.assertEqual(result.coverage_report["decision"], "blocked")
+        self.assertIn("unsupported", " ".join(result.coverage_report["blocking_reasons"]))
 
     def test_approved_coverage_calls_llm(self) -> None:
         data_root = _prepare_data_root()
@@ -2242,6 +2784,73 @@ class ThesisRuntimeTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8").lower()
             for term in banned_terms:
                 self.assertNotIn(term, text, f"retired vocabulary leaked into {path.name}: {term}")
+
+
+    def test_incomplete_declared_requirement_triggers_one_bounded_repair(self) -> None:
+        data_root = _prepare_data_root()
+        base = {
+            "raw_user_input": "Where did concept X develop?",
+            "intent": "development",
+            "query": "development of concept X",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+        }
+        incomplete = {
+            **base,
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "scope_requests": [], "concepts": ["concept X"],
+                "resolved_referents": [], "literal_terms": [], "evidence_requirements": ["chronology"],
+                "semantic_queries": ["development of concept X"], "lexical_queries": ["development of concept X"],
+                "graph_seeds": [], "retrieval_layers": [{"operator": "lexical_chunk_search", "required": False, "limit": 50}],
+            },
+        }
+        repaired = {
+            **base,
+            "planner_retrieval_plan": {
+                **incomplete["planner_retrieval_plan"],
+                "retrieval_layers": [
+                    {"operator": "lexical_chunk_search", "required": False, "limit": 50},
+                    {"operator": "temporal_retrieve", "required": False, "limit": 10, "mode": "ordered"},
+                ],
+            },
+        }
+        compiler = SequenceCompilerBackend([incomplete, repaired])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input=base["raw_user_input"],
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertIn("repair_context", compiler.calls[1])
+        self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_completeness"]["status"], "complete")
+        self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_repair"]["outcome"], "complete")
+        self.assertEqual(result.semantic_traversal_manifest["plan_completeness"]["status"], "complete")
+        self.assertTrue(any(layer["operator"] == "temporal_retrieve" for layer in result.semantic_traversal_manifest["bound_retrieval_plan"]["retrieval_layers"]))
+
+    def test_failed_plan_repair_blocks_without_executing_retrieval(self) -> None:
+        data_root = _prepare_data_root()
+        payload = {
+            "raw_user_input": "Where did concept X develop?",
+            "intent": "development",
+            "query": "development of concept X",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "scope_requests": [], "concepts": ["concept X"],
+                "resolved_referents": [], "literal_terms": [], "evidence_requirements": ["chronology"],
+                "semantic_queries": ["development of concept X"], "lexical_queries": ["development of concept X"],
+                "graph_seeds": [], "retrieval_layers": [{"operator": "lexical_chunk_search", "required": False, "limit": 50}],
+            },
+        }
+        compiler = SequenceCompilerBackend([payload, payload])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input=payload["raw_user_input"],
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertEqual(result.coverage_report["decision"], "blocked")
+        self.assertIn("compiler-declared evidence requirements are incomplete", result.coverage_report["blocking_reasons"])
+        self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["lexical"], 0)
+        self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], [])
 
 
 if __name__ == "__main__":

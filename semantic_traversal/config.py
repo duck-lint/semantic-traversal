@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,14 +34,29 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         },
         "lexical": {
             "max_candidates": int,
+            "default_mode": str,
         },
         "vector": {
             "max_candidates": int,
+            "min_similarity": (int, float),
+            "per_query_max_candidates": int,
+            "max_chunks_per_note": int,
         },
         "graph": {
             "default_depth": int,
             "max_depth": int,
             "max_candidates": int,
+        },
+        "temporal": {
+            "enabled": bool,
+            "max_candidates": int,
+            "default_limit": int,
+            "default_mode": str,
+            "allowed_modes": [str],
+            "default_anchor_types": [str],
+            "allowed_authorities": [str],
+            "include_conflicted_by_default": bool,
+            "field_mappings": dict,
         },
         "planner_defaults": {
             "exact_limit": int,
@@ -51,13 +67,25 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
             "selection_policy": {
                 "max_chunks": int,
                 "preserve_required_layers": bool,
-                "budgets": dict,
             },
             "claim_policy": {
                 "negative_claims_require_exact_layer": bool,
             },
         },
         "scope_aliases": dict,
+        "evidence_requirement_operators": dict,
+        "scope_policy": {
+            "exact_request_mode": str,
+            "semantic_request_mode": str,
+        },
+        "resource_inventory": {
+            "schema_version": int,
+            "path_depth": int,
+            "max_values_per_facet": int,
+            "max_path_values": int,
+            "max_graph_types": int,
+            "max_temporal_types": int,
+        },
     },
     "runtime_conversation": {
         "stop_words": [str],
@@ -74,11 +102,10 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "vector_bonus": (int, float),
         "graph_bonus": (int, float),
         "demotion_penalty": (int, float),
-        "source_priority": dict,
     },
     "graph_traversal": {
         "enabled": bool,
-        "hop_limit": int,
+        "direction": str,
         "max_candidates": int,
         "seed_sources": [str],
         "edge_type_allowlist": [str],
@@ -107,6 +134,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
     "embeddings": {
         "provider": str,
         "model": str,
+        "dimensions": (int, type(None)),
         "base_url": (str, type(None)),
         "batch_size": int,
         "normalize_embeddings": bool,
@@ -201,8 +229,24 @@ class RuntimeConfig:
         return int(self.raw["retrieval"]["lexical"]["max_candidates"])
 
     @property
+    def retrieval_lexical_default_mode(self) -> str:
+        return str(self.raw["retrieval"]["lexical"]["default_mode"])
+
+    @property
     def retrieval_vector_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["vector"]["max_candidates"])
+
+    @property
+    def retrieval_vector_min_similarity(self) -> float:
+        return float(self.raw["retrieval"]["vector"]["min_similarity"])
+
+    @property
+    def retrieval_vector_per_query_max_candidates(self) -> int:
+        return int(self.raw["retrieval"]["vector"]["per_query_max_candidates"])
+
+    @property
+    def retrieval_vector_max_chunks_per_note(self) -> int:
+        return int(self.raw["retrieval"]["vector"]["max_chunks_per_note"])
 
     @property
     def retrieval_graph_default_depth(self) -> int:
@@ -215,6 +259,54 @@ class RuntimeConfig:
     @property
     def retrieval_graph_max_candidates(self) -> int:
         return int(self.raw["retrieval"]["graph"]["max_candidates"])
+
+    @property
+    def retrieval_temporal(self) -> dict[str, Any]:
+        return self.raw["retrieval"]["temporal"]
+
+    @property
+    def retrieval_temporal_enabled(self) -> bool:
+        return bool(self.retrieval_temporal["enabled"])
+
+    @property
+    def retrieval_temporal_max_candidates(self) -> int:
+        return int(self.retrieval_temporal["max_candidates"])
+
+    @property
+    def retrieval_temporal_default_limit(self) -> int:
+        return int(self.retrieval_temporal["default_limit"])
+
+    @property
+    def retrieval_temporal_default_mode(self) -> str:
+        return str(self.retrieval_temporal["default_mode"])
+
+    @property
+    def retrieval_temporal_allowed_modes(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.retrieval_temporal["allowed_modes"])
+
+    @property
+    def retrieval_temporal_default_anchor_types(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.retrieval_temporal["default_anchor_types"])
+
+    @property
+    def retrieval_temporal_allowed_authorities(self) -> tuple[str, ...]:
+        return tuple(str(value) for value in self.retrieval_temporal["allowed_authorities"])
+
+    @property
+    def retrieval_temporal_include_conflicted_by_default(self) -> bool:
+        return bool(self.retrieval_temporal["include_conflicted_by_default"])
+
+    @property
+    def retrieval_temporal_field_mappings(self) -> dict[str, dict[str, str]]:
+        mappings = self.retrieval_temporal.get("field_mappings", {})
+        return {
+            str(field): {
+                "anchor_type": str(value.get("anchor_type") or ""),
+                "authority": str(value.get("authority") or ""),
+            }
+            for field, value in mappings.items()
+            if isinstance(value, dict)
+        }
 
     @property
     def retrieval_scope_aliases(self) -> dict[str, dict[str, tuple[str, ...] | str | None]]:
@@ -237,6 +329,23 @@ class RuntimeConfig:
         return aliases
 
     @property
+    def retrieval_scope_policy(self) -> dict[str, str]:
+        policy = self.raw["retrieval"].get("scope_policy", {})
+        if not isinstance(policy, dict):
+            return {}
+        return {str(key): str(value) for key, value in policy.items()}
+
+    @property
+    def retrieval_evidence_requirement_operators(self) -> dict[str, str]:
+        mapping = self.raw["retrieval"].get("evidence_requirement_operators", {})
+        return {str(key): str(value) for key, value in mapping.items()}
+
+    @property
+    def retrieval_resource_inventory(self) -> dict[str, int]:
+        values = self.raw["retrieval"]["resource_inventory"]
+        return {str(key): int(value) for key, value in values.items()}
+
+    @property
     def runtime_conversation(self) -> dict[str, Any]:
         return self.raw["runtime_conversation"]
 
@@ -246,15 +355,15 @@ class RuntimeConfig:
 
     @property
     def retrieval_planner_defaults(self) -> dict[str, Any]:
-        return self.raw["retrieval"]["planner_defaults"]
+        return deepcopy(self.raw["retrieval"]["planner_defaults"])
 
     @property
     def graph_traversal_enabled(self) -> bool:
         return bool(self.raw["graph_traversal"]["enabled"])
 
     @property
-    def graph_traversal_hop_limit(self) -> int:
-        return int(self.raw["graph_traversal"]["hop_limit"])
+    def graph_traversal_direction(self) -> str:
+        return str(self.raw["graph_traversal"]["direction"])
 
     @property
     def graph_traversal_max_candidates(self) -> int:
@@ -324,6 +433,11 @@ class RuntimeConfig:
     @property
     def embedding_model(self) -> str:
         return str(self.raw["embeddings"]["model"])
+
+    @property
+    def embedding_dimensions(self) -> int | None:
+        value = self.raw["embeddings"].get("dimensions")
+        return int(value) if value is not None else None
 
     @property
     def embedding_provider(self) -> str:
@@ -593,20 +707,49 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
                 raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.{field} must be a list")
         if "source_label" in alias_payload and not isinstance(alias_payload["source_label"], (str, type(None))):
             raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.source_label must be a string or null")
+    requirement_mapping = parsed["retrieval"].get("evidence_requirement_operators", {})
+    supported_requirements = {"literal_exhaustive", "lexical_relevance", "semantic_similarity", "graph_relation", "chronology"}
+    supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+    for requirement, operator in requirement_mapping.items():
+        if str(requirement) not in supported_requirements:
+            raise ConfigError(f"Runtime config field retrieval.evidence_requirement_operators.{requirement} is unsupported")
+        if str(operator) not in supported_operators:
+            raise ConfigError(f"Runtime config field retrieval.evidence_requirement_operators.{requirement} must name a supported retrieval operator")
     for field in (
         "exact.max_matches",
         "exact.context_chars",
         "lexical.max_candidates",
         "vector.max_candidates",
+        "vector.per_query_max_candidates",
+        "vector.max_chunks_per_note",
         "graph.default_depth",
         "graph.max_depth",
         "graph.max_candidates",
+        "resource_inventory.schema_version",
+        "resource_inventory.path_depth",
+        "resource_inventory.max_values_per_facet",
+        "resource_inventory.max_path_values",
+        "resource_inventory.max_graph_types",
+        "resource_inventory.max_temporal_types",
     ):
         current: Any = parsed["retrieval"]
         for part in field.split("."):
             current = current[part]
         if int(current) < 0:
             raise ConfigError(f"Runtime config field retrieval.{field} must be non-negative")
+    min_similarity = float(parsed["retrieval"]["vector"]["min_similarity"])
+    if not 0.0 <= min_similarity <= 1.0:
+        raise ConfigError("Runtime config field retrieval.vector.min_similarity must be between 0.0 and 1.0")
+    configured_dimensions = parsed["embeddings"]["dimensions"]
+    if configured_dimensions is not None and int(configured_dimensions) <= 0:
+        raise ConfigError("Runtime config field embeddings.dimensions must be positive when provided")
+    for field in ("exact_request_mode", "semantic_request_mode"):
+        if str(parsed["retrieval"]["scope_policy"][field]).strip().lower() not in {"hard", "preferred"}:
+            raise ConfigError(f"Runtime config field retrieval.scope_policy.{field} must be hard or preferred")
+    if str(parsed["retrieval"]["lexical"]["default_mode"]) not in {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}:
+        raise ConfigError("Runtime config field retrieval.lexical.default_mode must be a supported FTS5 mode")
+    if str(parsed["retrieval"]["temporal"]["default_mode"]) not in set(str(value) for value in parsed["retrieval"]["temporal"]["allowed_modes"]):
+        raise ConfigError("Runtime config field retrieval.temporal.default_mode must be listed in allowed_modes")
     _validate_prompt_text(
         str(parsed["prompts"]["semantic_compiler"]["template"]),
         field="prompts.semantic_compiler.template",
@@ -627,6 +770,8 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
             raise ConfigError(f"Runtime config field chunking.low_signal_apparatus.{field} must be a boolean")
     if "short_all_caps_max_chars" in low_signal_apparatus and int(low_signal_apparatus["short_all_caps_max_chars"]) < 0:
         raise ConfigError("Runtime config field chunking.low_signal_apparatus.short_all_caps_max_chars must be non-negative")
+    if str(parsed["graph_traversal"]["direction"]) not in {"outbound", "inbound", "both"}:
+        raise ConfigError("Runtime config field graph_traversal.direction must be outbound, inbound, or both")
     validate_sql_identifier(str(parsed["indexes"]["vector_table"]), "indexes.vector_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_nodes_table"]), "indexes.graph_nodes_table")
     validate_sql_identifier(str(parsed["indexes"]["graph_edges_table"]), "indexes.graph_edges_table")

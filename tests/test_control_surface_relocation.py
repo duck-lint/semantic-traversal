@@ -20,8 +20,8 @@ from semantic_traversal.semantic_compiler import _render_ollama_prompt
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROMPT_BASELINE_SHA256 = "21e89d824fa2bf13515c49170d375cee1abb8c9d71f80f5c61215e63073b34f4"
-FRONTIER_PROMPT_BASELINE_SHA256 = "fdac281e48e765af09578be02e53ad65a443d49914fac53d017ade5391a18776"
+PROMPT_BASELINE_SHA256 = "d20b1973517cdd9b4705522c636160497972faf1c411d0ac0dd894e3880dc50f"
+FRONTIER_PROMPT_BASELINE_SHA256 = "c91bfde4f659d9a858498872f637f19d4909eee3ef42ff44a6b013eb3f73bb94"
 
 
 class ControlSurfaceRelocationTests(unittest.TestCase):
@@ -51,10 +51,11 @@ class ControlSurfaceRelocationTests(unittest.TestCase):
             "planner_retrieval_plan",
             "limitations",
             "retrieval_layers",
-            "selection_policy",
-            "claim_policy",
         ):
             self.assertIn(f'"{field}"', prompt)
+        self.assertNotIn('"selection_policy"', prompt)
+        self.assertNotIn('"claim_policy"', prompt)
+        self.assertNotIn("semantic_compiler_exact_budget", prompt)
 
     def test_planner_defaults_drive_plan_and_prompt_from_one_yaml_section(self) -> None:
         defaults = self.config.retrieval_planner_defaults
@@ -76,15 +77,15 @@ class ControlSurfaceRelocationTests(unittest.TestCase):
             resolved_referents=[],
             planner_defaults=defaults,
         )
-        self.assertEqual(semantic_plan["selection_policy"]["max_chunks"], 24)
+        self.assertNotIn("selection_policy", semantic_plan)
+        self.assertNotIn("claim_policy", semantic_plan)
         self.assertEqual(exact_plan["retrieval_layers"][0]["limit"], 200)
         self.assertEqual(exact_plan["retrieval_layers"][0]["return_total_count"], True)
         self.assertEqual(exact_plan["retrieval_layers"][1]["limit"], 50)
         self.assertEqual(exact_plan["retrieval_layers"][2]["limit"], 24)
         self.assertEqual(exact_plan["retrieval_layers"][3]["depth"], 1)
-        self.assertEqual(exact_plan["selection_policy"]["budgets"], {"exact": 12, "lexical": 6, "vector": 6, "graph": 4})
-        self.assertTrue(exact_plan["selection_policy"]["preserve_required_layers"])
-        self.assertTrue(exact_plan["claim_policy"]["negative_claims_require_exact_layer"])
+        self.assertNotIn("selection_policy", exact_plan)
+        self.assertNotIn("claim_policy", exact_plan)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "semantic_traversal.runtime.yaml"

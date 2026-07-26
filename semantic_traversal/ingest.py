@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import math
+import os
 import re
 import sqlite3
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -13,9 +16,17 @@ from typing import Any
 import yaml
 
 from .config import RuntimeConfig, load_runtime_config
-from .embeddings import EmbeddingBackend, resolve_embedding_backend
+from .embeddings import (
+    EmbeddingBackend,
+    embedding_identity_from_response,
+    embedding_identity_hash,
+    embedding_identity_hint,
+    resolve_embedding_backend,
+)
 from .hashing import sha256_json, sha256_text
 from .text_filters import is_low_signal_apparatus_text
+from .temporal import TemporalAnchor, build_temporal_anchors, temporal_diagnostics
+from .resource_inventory import build_inventory_snapshot, persist_inventory_snapshot, validate_inventory_snapshot
 
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -47,6 +58,7 @@ class IngestPaths:
     database_path: Path
     manifests_root: Path
     latest_manifest_path: Path
+    latest_success_manifest_path: Path
 
 
 @dataclass(frozen=True)
@@ -127,6 +139,15 @@ class IngestFrontmatterError(RuntimeError):
         self.manifest_path = manifest_path
 
 
+class IngestStageError(RuntimeError):
+    """Retain the bounded failure stage while preserving the originating error."""
+
+    def __init__(self, stage: str, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.stage = stage
+        self.cause = cause
+
+
 @dataclass(frozen=True)
 class _Block:
     kind: str
@@ -156,12 +177,62 @@ def create_ingest_paths(data_root: Path, *, config: RuntimeConfig) -> IngestPath
         database_path=ingest_root / config.storage_ingestion_database_filename,
         manifests_root=manifests_root,
         latest_manifest_path=manifests_root / config.storage_latest_ingest_manifest_filename,
+        latest_success_manifest_path=manifests_root / "latest-success.json",
     )
 
 
 def build_configured_source_roots(repo_root: Path, config: RuntimeConfig | None = None) -> tuple[IngestSourceRoot, ...]:
     resolved_config = config or load_runtime_config(repo_root=repo_root)
     return (IngestSourceRoot(label=resolved_config.vault_source_label, path=resolved_config.vault_root),)
+
+
+def _candidate_database_path(active_database_path: Path, run_id: str) -> Path:
+    return active_database_path.with_name(f"{active_database_path.name}.candidate-{run_id}")
+
+
+def _sqlite_sidecar_paths(database_path: Path) -> tuple[Path, ...]:
+    return tuple(database_path.parent / f"{database_path.name}{suffix}" for suffix in ("-journal", "-wal", "-shm"))
+
+
+def _clone_active_database(*, active_database_path: Path, candidate_database_path: Path) -> None:
+    if candidate_database_path.exists() or any(path.exists() for path in _sqlite_sidecar_paths(candidate_database_path)):
+        _cleanup_candidate_database(candidate_database_path)
+    if not active_database_path.exists():
+        return
+    source = sqlite3.connect(active_database_path)
+    target = sqlite3.connect(candidate_database_path)
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+
+
+def _cleanup_sqlite_sidecars(database_path: Path) -> None:
+    for path in _sqlite_sidecar_paths(database_path):
+        if path.exists():
+            path.unlink()
+
+
+def _cleanup_candidate_database(candidate_database_path: Path) -> None:
+    _cleanup_sqlite_sidecars(candidate_database_path)
+    if candidate_database_path.exists():
+        candidate_database_path.unlink()
+
+
+def _write_success_artifact(*, ingest_paths: IngestPaths, manifest_path: Path, manifest: dict[str, Any]) -> None:
+    serialized = json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
+    manifest_path.write_text(serialized, encoding="utf-8")
+    ingest_paths.latest_manifest_path.write_text(serialized, encoding="utf-8")
+    ingest_paths.latest_success_manifest_path.write_text(serialized, encoding="utf-8")
+
+
+def _write_failure_artifact(*, ingest_paths: IngestPaths, run_id: str, manifest: dict[str, Any]) -> Path:
+    manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
+    serialized = json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
+    manifest_path.write_text(serialized, encoding="utf-8")
+    ingest_paths.latest_manifest_path.write_text(serialized, encoding="utf-8")
+    return manifest_path
 
 
 def run_ingest(
@@ -198,52 +269,147 @@ def run_ingest(
             source_roots=resolved_source_roots,
             validation_issues=validation_issues,
             skipped_sources=skipped_sources,
+            failure_stage="frontmatter_validation",
+            active_database_replaced=False,
+            prior_active_database_preserved=ingest_paths.database_path.exists(),
+            candidate_database_cleaned=True,
+            error_type="IngestFrontmatterError",
+            error_message="frontmatter validation failed",
+            latest_success_manifest_path=ingest_paths.latest_success_manifest_path,
         )
-        manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
-        manifest_path.write_text(json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-        ingest_paths.latest_manifest_path.write_text(
-            json.dumps(failure_manifest, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
+        manifest_path = _write_failure_artifact(ingest_paths=ingest_paths, run_id=run_id, manifest=failure_manifest)
         raise IngestFrontmatterError(
             f"Ingest frontmatter validation failed; see failure manifest at {manifest_path}",
             manifest_path=manifest_path,
         )
     resolved_embedding_backend = embedding_backend or resolve_embedding_backend(resolved_config)
 
-    connection = sqlite3.connect(ingest_paths.database_path)
+    active_database_path = ingest_paths.database_path
+    candidate_database_path = _candidate_database_path(active_database_path, run_id)
+    prior_active_exists = active_database_path.exists()
+    failure_stage = "before_schema_initialization"
+    active_database_replaced = False
+    candidate_database_cleaned = False
+    lexical_index: dict[str, Any] | None = None
+    vector_index: dict[str, Any] | None = None
+    temporal_index: dict[str, Any] | None = None
+    resource_inventory: dict[str, Any] | None = None
     try:
+        _clone_active_database(
+            active_database_path=active_database_path,
+            candidate_database_path=candidate_database_path,
+        )
+        failure_stage = "schema_initialization"
+        connection = sqlite3.connect(candidate_database_path)
         connection.row_factory = sqlite3.Row
-        _initialize_schema(connection, config=resolved_config)
-        counts = _materialize_records(
-            connection=connection,
-            note_records=note_records,
-            source_roots=resolved_source_roots,
+        try:
+            _initialize_schema(connection, config=resolved_config)
+            failure_stage = "materialization"
+            counts = _materialize_records(
+                connection=connection,
+                note_records=note_records,
+                source_roots=resolved_source_roots,
+                run_id=run_id,
+                generated_at=generated_at,
+                config=resolved_config,
+                embedding_backend=resolved_embedding_backend,
+            )
+            failure_stage = "candidate_validation"
+            lexical_index = _validate_lexical_index(connection=connection, config=resolved_config)
+            if lexical_index.get("status") != "valid":
+                raise RuntimeError(
+                    f"candidate lexical index validation failed: {lexical_index.get('failure_reason', 'alignment mismatch')}"
+                )
+            vector_index = _validate_vector_index(
+                connection=connection,
+                config=resolved_config,
+                embedding_backend=resolved_embedding_backend,
+            )
+            if vector_index.get("status") == "invalid":
+                raise RuntimeError(
+                    f"candidate vector index validation failed: {vector_index.get('failure_reason', 'invalid vector index')}"
+                )
+            temporal_index = _validate_temporal_index(connection=connection, config=resolved_config)
+            if temporal_index.get("status") != "valid":
+                raise RuntimeError(
+                    f"candidate temporal index validation failed: {temporal_index.get('failure_reason', 'invalid temporal index')}"
+                )
+            failure_stage = "inventory_build"
+            resource_inventory = build_inventory_snapshot(
+                connection=connection,
+                config=resolved_config,
+                source_ingest_run_id=run_id,
+                generated_at=generated_at,
+            )
+            resource_inventory["validation_status"] = "valid"
+            failure_stage = "inventory_persistence"
+            persist_inventory_snapshot(connection=connection, snapshot=resource_inventory)
+            failure_stage = "inventory_validation"
+            inventory_validation = validate_inventory_snapshot(connection=connection, config=resolved_config, deep=True)
+            if inventory_validation.get("status") != "valid":
+                raise RuntimeError(
+                    f"candidate resource inventory validation failed: {inventory_validation.get('errors', ['unknown failure'])}"
+                )
+        finally:
+            connection.close()
+
+        failure_stage = "activation"
+        os.replace(candidate_database_path, active_database_path)
+        active_database_replaced = True
+        _cleanup_sqlite_sidecars(active_database_path)
+        manifest = _build_manifest(
             run_id=run_id,
             generated_at=generated_at,
-            config=resolved_config,
-            embedding_backend=resolved_embedding_backend,
+            repo_root=resolved_repo_root,
+            data_root=resolved_data_root,
+            database_path=active_database_path,
+            source_roots=resolved_source_roots,
+            note_records=note_records,
+            counts=counts,
+            skipped_sources=skipped_sources,
+            lexical_index=lexical_index or {},
+            vector_index=vector_index or {},
+            temporal_index=temporal_index or {},
+            resource_inventory=resource_inventory or {},
         )
-    finally:
-        connection.close()
-
-    manifest = _build_manifest(
-        run_id=run_id,
-        generated_at=generated_at,
-        repo_root=resolved_repo_root,
-        data_root=resolved_data_root,
-        database_path=ingest_paths.database_path,
-        source_roots=resolved_source_roots,
-        note_records=note_records,
-        counts=counts,
-        skipped_sources=skipped_sources,
-    )
-    manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    ingest_paths.latest_manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-    )
+        manifest_path = ingest_paths.manifests_root / f"{run_id}.json"
+        _write_success_artifact(ingest_paths=ingest_paths, manifest_path=manifest_path, manifest=manifest)
+        candidate_database_cleaned = True
+    except Exception as exc:
+        cleanup_error: Exception | None = None
+        try:
+            _cleanup_candidate_database(candidate_database_path)
+            candidate_database_cleaned = not any(path.exists() for path in _sqlite_sidecar_paths(candidate_database_path))
+        except Exception as cleanup_exc:
+            cleanup_error = cleanup_exc
+        cause = exc.cause if isinstance(exc, IngestStageError) else exc
+        if isinstance(exc, IngestStageError):
+            failure_stage = exc.stage
+        failure_manifest = _build_failure_manifest(
+            run_id=run_id,
+            generated_at=generated_at,
+            repo_root=resolved_repo_root,
+            data_root=resolved_data_root,
+            database_path=active_database_path,
+            source_roots=resolved_source_roots,
+            validation_issues=[],
+            skipped_sources=skipped_sources,
+            failure_stage=failure_stage,
+            active_database_replaced=active_database_replaced,
+            prior_active_database_preserved=prior_active_exists and not active_database_replaced,
+            candidate_database_cleaned=candidate_database_cleaned,
+            error_type=type(cause).__name__,
+            error_message=str(cause),
+            cleanup_error=cleanup_error,
+            latest_success_manifest_path=ingest_paths.latest_success_manifest_path,
+        )
+        try:
+            _write_failure_artifact(ingest_paths=ingest_paths, run_id=run_id, manifest=failure_manifest)
+        except Exception:
+            pass
+        if isinstance(exc, IngestStageError):
+            raise cause from exc
+        raise
 
     return IngestRunResult(
         run_id=run_id,
@@ -1045,12 +1211,48 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         CREATE INDEX IF NOT EXISTS idx_chunks_note_id ON chunks(note_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_source_root_label ON chunks(source_root_label);
 
+        CREATE TABLE IF NOT EXISTS temporal_anchors (
+            anchor_id TEXT PRIMARY KEY,
+            note_id TEXT NOT NULL,
+            chunk_id TEXT,
+            anchor_type TEXT NOT NULL,
+            canonical_start TEXT,
+            canonical_end TEXT,
+            precision TEXT,
+            source_field TEXT NOT NULL,
+            original_source_value TEXT NOT NULL,
+            authority TEXT NOT NULL,
+            parsing_status TEXT NOT NULL,
+            conflict_group TEXT,
+            unresolved INTEGER NOT NULL,
+            diagnostic_reason TEXT,
+            ingest_run_id TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_note_id ON temporal_anchors(note_id);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_chunk_id ON temporal_anchors(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_type ON temporal_anchors(anchor_type);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_start ON temporal_anchors(canonical_start);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_end ON temporal_anchors(canonical_end);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_authority ON temporal_anchors(authority);
+        CREATE INDEX IF NOT EXISTS idx_temporal_anchors_status ON temporal_anchors(parsing_status);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            chunk_id UNINDEXED,
+            paragraph_text,
+            note_title,
+            section_label,
+            relative_path,
+            metadata
+        );
+
         CREATE TABLE IF NOT EXISTS {vector_table} (
             chunk_id TEXT PRIMARY KEY,
             vector_json TEXT NOT NULL,
             vector_dimensions INTEGER NOT NULL,
             embedding_provider TEXT NOT NULL,
             embedding_model TEXT NOT NULL,
+            embedding_identity_json TEXT NOT NULL DEFAULT '{{}}',
+            embedding_identity_hash TEXT NOT NULL DEFAULT '',
             content_hash TEXT NOT NULL,
             last_indexed_run_id TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -1076,6 +1278,18 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS resource_inventory_snapshots (
+            snapshot_key TEXT PRIMARY KEY,
+            snapshot_id TEXT NOT NULL,
+            inventory_schema_version INTEGER NOT NULL,
+            source_ingest_run_id TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            inventory_policy_hash TEXT NOT NULL,
+            logical_inventory_hash TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            validation_status TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_{vector_table}_content_hash ON {vector_table}(content_hash);
         CREATE INDEX IF NOT EXISTS idx_{graph_nodes_table}_node_type ON {graph_nodes_table}(node_type);
         CREATE INDEX IF NOT EXISTS idx_{graph_edges_table}_source ON {graph_edges_table}(source_node_id);
@@ -1083,6 +1297,11 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         CREATE INDEX IF NOT EXISTS idx_{graph_edges_table}_type ON {graph_edges_table}(edge_type);
         """
     )
+    vector_columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({vector_table})").fetchall()}
+    if "embedding_identity_json" not in vector_columns:
+        connection.execute(f"ALTER TABLE {vector_table} ADD COLUMN embedding_identity_json TEXT NOT NULL DEFAULT '{{}}'")
+    if "embedding_identity_hash" not in vector_columns:
+        connection.execute(f"ALTER TABLE {vector_table} ADD COLUMN embedding_identity_hash TEXT NOT NULL DEFAULT ''")
     connection.commit()
 
 
@@ -1095,7 +1314,7 @@ def _materialize_records(
     generated_at: str,
     config: RuntimeConfig,
     embedding_backend: EmbeddingBackend | None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     counts = {
         "inserted_chunks": 0,
         "updated_chunks": 0,
@@ -1123,6 +1342,12 @@ def _materialize_records(
         source_root_labels=source_root_labels,
         processed_note_ids=processed_note_ids,
     )
+    counts["temporal_index"] = _refresh_temporal_index(
+        connection=connection,
+        note_records=note_records,
+        run_id=run_id,
+        config=config,
+    )
     _rebuild_graph_layer(
         connection=connection,
         note_records=note_records,
@@ -1138,6 +1363,10 @@ def _materialize_records(
         config=config,
         embedding_backend=embedding_backend,
     )
+    try:
+        _refresh_lexical_index(connection=connection)
+    except Exception as exc:
+        raise IngestStageError("lexical_index_refresh", exc) from exc
 
     connection.execute(
         """
@@ -1169,6 +1398,335 @@ def _materialize_records(
     )
     connection.commit()
     return counts
+
+
+def _refresh_temporal_index(
+    *, connection: sqlite3.Connection, note_records: tuple[NoteRecord, ...], run_id: str, config: RuntimeConfig
+) -> dict[str, Any]:
+    connection.execute("DELETE FROM temporal_anchors")
+    all_anchors: list[TemporalAnchor] = []
+    issues: list[dict[str, Any]] = []
+    for note_record in note_records:
+        anchors, note_issues = build_temporal_anchors(
+            note_id=note_record.note_id,
+            frontmatter=note_record.frontmatter,
+            mappings=config.retrieval_temporal_field_mappings,
+            ingest_run_id=run_id,
+        )
+        all_anchors.extend(anchors)
+        issues.extend(note_issues)
+    connection.executemany(
+        """
+        INSERT INTO temporal_anchors (
+            anchor_id, note_id, chunk_id, anchor_type, canonical_start,
+            canonical_end, precision, source_field, original_source_value,
+            authority, parsing_status, conflict_group, unresolved,
+            diagnostic_reason, ingest_run_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                anchor.anchor_id, anchor.note_id, anchor.chunk_id, anchor.anchor_type,
+                anchor.canonical_start, anchor.canonical_end, anchor.precision,
+                anchor.source_field, anchor.original_source_value, anchor.authority,
+                anchor.parsing_status, anchor.conflict_group, int(anchor.unresolved),
+                anchor.diagnostic_reason, anchor.ingest_run_id,
+            )
+            for anchor in all_anchors
+        ],
+    )
+    diagnostics = temporal_diagnostics(all_anchors, issues)
+    diagnostics["unanchored_note_count"] = max(0, len(note_records) - int(diagnostics.get("anchored_note_count") or 0))
+    return diagnostics
+
+
+def _validate_temporal_index(*, connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
+    result: dict[str, Any] = {"status": "invalid", "table": "temporal_anchors"}
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'temporal_anchors'").fetchone()
+    if table is None:
+        result["failure_reason"] = "temporal_anchors table is missing"
+        return result
+    rows = connection.execute("SELECT * FROM temporal_anchors ORDER BY anchor_id").fetchall()
+    note_ids = {str(row[0]) for row in connection.execute("SELECT note_id FROM notes")}
+    chunk_ids = {str(row[0]) for row in connection.execute("SELECT chunk_id FROM chunks")}
+    ids = [str(row["anchor_id"]) for row in rows]
+    errors: list[str] = []
+    for row in rows:
+        if str(row["note_id"]) not in note_ids:
+            errors.append("orphan note reference")
+        if row["chunk_id"] is not None and str(row["chunk_id"]) not in chunk_ids:
+            errors.append("orphan chunk reference")
+        if row["parsing_status"] == "valid":
+            if not row["canonical_start"] or not row["canonical_end"] or str(row["canonical_start"]) > str(row["canonical_end"]):
+                errors.append("invalid canonical interval")
+            if str(row["precision"] or "") not in {"year", "month", "day", "datetime"}:
+                errors.append("unknown precision")
+        if str(row["anchor_type"]) not in {"journal_entry", "authored", "created", "modified", "encountered_or_read", "publication", "event"}:
+            errors.append("unknown anchor type")
+        if str(row["authority"]) not in {"explicit_primary", "explicit_secondary", "operational_low"}:
+            errors.append("unknown authority")
+        if row["conflict_group"] is None and bool(row["unresolved"]) and row["parsing_status"] == "valid":
+            errors.append("unresolved anchor missing conflict group")
+    if len(ids) != len(set(ids)):
+        errors.append("duplicate anchor IDs")
+    valid_rows = [row for row in rows if str(row["parsing_status"]) == "valid"]
+    result.update({
+        "anchor_count": len(rows),
+        "total_anchor_count": len(rows),
+        "anchored_note_count": len({str(row["note_id"]) for row in valid_rows}),
+        "anchored_chunk_count": len({str(row["chunk_id"]) for row in valid_rows if row["chunk_id"] is not None}),
+        "unanchored_note_count": max(0, len(note_ids) - len({str(row["note_id"]) for row in valid_rows})),
+        "valid_count": len(valid_rows),
+        "invalid_count": sum(str(row["parsing_status"]) == "invalid" for row in rows),
+        "ambiguous_count": sum(str(row["parsing_status"]) == "ambiguous" for row in rows),
+        "conflict_count": len({str(row["conflict_group"]) for row in rows if row["conflict_group"]}),
+        "counts_by_anchor_type": dict(sorted(Counter(str(row["anchor_type"]) for row in valid_rows).items())),
+        "counts_by_authority": dict(sorted(Counter(str(row["authority"]) for row in valid_rows).items())),
+        "counts_by_precision": dict(sorted(Counter(str(row["precision"]) for row in valid_rows).items())),
+        "error_count": len(errors),
+        "error_samples": sorted(set(errors))[:10],
+    })
+    if errors:
+        result["failure_reason"] = "; ".join(sorted(set(errors)))
+        return result
+    result["status"] = "valid"
+    return result
+
+
+def _validate_lexical_index(*, connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": "invalid",
+        "table": "chunks_fts",
+        "canonical_chunk_count": 0,
+        "fts_row_count": 0,
+        "missing_chunk_count": 0,
+        "orphan_row_count": 0,
+        "duplicate_chunk_id_count": 0,
+        "field_mismatch_count": 0,
+        "query_probe_status": "not_run",
+        "validation_stage": "candidate_post_materialization",
+    }
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'"
+    ).fetchone()
+    if table is None:
+        result["failure_reason"] = "chunks_fts table is missing"
+        return result
+    canonical_rows = connection.execute(
+        "SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, frontmatter_semantics_json FROM chunks ORDER BY chunk_id"
+    ).fetchall()
+    fts_rows = connection.execute(
+        "SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, metadata FROM chunks_fts ORDER BY chunk_id"
+    ).fetchall()
+    canonical_by_id = {str(row["chunk_id"]): row for row in canonical_rows}
+    fts_ids = [str(row["chunk_id"]) for row in fts_rows]
+    fts_id_set = set(fts_ids)
+    duplicate_ids = sorted(chunk_id for chunk_id, count in Counter(fts_ids).items() if count > 1)
+    missing_ids = sorted(set(canonical_by_id) - fts_id_set)
+    orphan_ids = sorted(fts_id_set - set(canonical_by_id))
+    mismatch_ids: list[str] = []
+    for row in fts_rows:
+        chunk_id = str(row["chunk_id"])
+        canonical = canonical_by_id.get(chunk_id)
+        if canonical is None:
+            continue
+        if (
+            str(row["paragraph_text"]) != str(canonical["paragraph_text"])
+            or str(row["note_title"]) != str(canonical["note_title"])
+            or str(row["section_label"]) != str(canonical["section_label"])
+            or str(row["relative_path"]) != str(canonical["relative_path"])
+            or str(row["metadata"]) != str(canonical["frontmatter_semantics_json"])
+        ) and chunk_id not in mismatch_ids:
+            mismatch_ids.append(chunk_id)
+    result.update(
+        {
+            "canonical_chunk_count": len(canonical_rows),
+            "fts_row_count": len(fts_rows),
+            "missing_chunk_count": len(missing_ids),
+            "orphan_row_count": len(orphan_ids),
+            "duplicate_chunk_id_count": len(duplicate_ids),
+            "field_mismatch_count": len(mismatch_ids),
+            "missing_chunk_sample": missing_ids[:5],
+            "orphan_row_sample": orphan_ids[:5],
+            "field_mismatch_sample": sorted(mismatch_ids)[:5],
+        }
+    )
+    try:
+        connection.execute("SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1", ("a",)).fetchone()
+        result["query_probe_status"] = "passed"
+    except sqlite3.Error as exc:
+        result["query_probe_status"] = "failed"
+        result["failure_reason"] = f"FTS query probe failed: {exc}"
+        return result
+    if any(
+        result[key]
+        for key in ("missing_chunk_count", "orphan_row_count", "duplicate_chunk_id_count", "field_mismatch_count")
+    ) or result["canonical_chunk_count"] != result["fts_row_count"]:
+        result["failure_reason"] = "canonical chunks and chunks_fts are not aligned"
+        return result
+    result["status"] = "valid"
+    return result
+
+
+def _refresh_lexical_index(*, connection: sqlite3.Connection) -> None:
+    """Keep the FTS surface transactionally aligned with the active chunks."""
+    connection.execute("DELETE FROM chunks_fts")
+    connection.execute(
+        """
+        INSERT INTO chunks_fts (chunk_id, paragraph_text, note_title, section_label, relative_path, metadata)
+        SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, frontmatter_semantics_json
+        FROM chunks
+        ORDER BY chunk_id
+        """
+    )
+
+
+def _validate_vector_index(
+    *,
+    connection: sqlite3.Connection,
+    config: RuntimeConfig,
+    embedding_backend: EmbeddingBackend | None,
+) -> dict[str, Any]:
+    vector_table = config.vector_table
+    configured_hint = embedding_identity_hint(backend=embedding_backend, config=config) if embedding_backend is not None else None
+    result: dict[str, Any] = {
+        "status": "invalid",
+        "table": vector_table,
+        "canonical_chunk_count": 0,
+        "vector_row_count": 0,
+        "compatible_vector_count": 0,
+        "missing_vector_count": 0,
+        "orphan_vector_count": 0,
+        "invalid_json_count": 0,
+        "invalid_numeric_count": 0,
+        "empty_vector_count": 0,
+        "dimension_mismatch_count": 0,
+        "identity_mismatch_count": 0,
+        "zero_norm_count": 0,
+        "configured_identity": configured_hint or {
+            "provider": config.embedding_provider,
+            "model": config.embedding_model,
+            "dimensions": config.embedding_dimensions,
+            "normalize_embeddings": config.embedding_normalize_embeddings,
+            "encoding_strategy": "chunk_embedding_text_v1",
+        },
+        "observed_identities": [],
+        "bad_chunk_id_sample": [],
+    }
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
+    ).fetchone()
+    if table is None:
+        result["status"] = "degraded_unavailable"
+        result["failure_reason"] = "vector table is missing"
+        return result
+    canonical_ids = {
+        str(row[0]) for row in connection.execute("SELECT chunk_id FROM chunks ORDER BY chunk_id").fetchall()
+    }
+    rows = connection.execute(
+        f"SELECT chunk_id, vector_json, vector_dimensions, embedding_provider, embedding_model, embedding_identity_json, embedding_identity_hash FROM {vector_table} ORDER BY chunk_id"
+    ).fetchall()
+    observed: dict[str, dict[str, Any]] = {}
+    bad_ids: set[str] = set()
+    compatible_count = 0
+    for row in rows:
+        chunk_id = str(row["chunk_id"])
+        if chunk_id not in canonical_ids:
+            result["orphan_vector_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        try:
+            identity = json.loads(str(row["embedding_identity_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        required_identity_fields = {"provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy"}
+        if not isinstance(identity, dict) or not required_identity_fields.issubset(identity):
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        identity_key = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        observed[identity_key] = identity
+        try:
+            columns_match = (
+                str(row["embedding_provider"]) == str(identity["provider"])
+                and str(row["embedding_model"]) == str(identity["model"])
+                and int(row["vector_dimensions"]) == int(identity["dimensions"])
+            )
+        except (TypeError, ValueError):
+            columns_match = False
+        if not columns_match:
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if str(row["embedding_identity_hash"] or "") != embedding_identity_hash(identity):
+            result["identity_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if configured_hint is not None:
+            for field in ("provider", "model", "normalize_embeddings", "encoding_strategy"):
+                if identity.get(field) != configured_hint.get(field):
+                    result["identity_mismatch_count"] += 1
+                    bad_ids.add(chunk_id)
+                    break
+            else:
+                if configured_hint.get("dimensions") is not None and identity.get("dimensions") != configured_hint.get("dimensions"):
+                    result["dimension_mismatch_count"] += 1
+                    bad_ids.add(chunk_id)
+                    continue
+            if chunk_id in bad_ids:
+                continue
+        try:
+            vector = json.loads(str(row["vector_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            result["invalid_json_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if not isinstance(vector, list):
+            result["invalid_numeric_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if not vector:
+            result["empty_vector_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if not all(isinstance(value, (int, float)) for value in vector):
+            result["invalid_numeric_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        if len(vector) != int(identity["dimensions"]) or len(vector) != int(row["vector_dimensions"]):
+            result["dimension_mismatch_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        norm = math.sqrt(sum(float(value) * float(value) for value in vector))
+        if norm == 0.0:
+            result["zero_norm_count"] += 1
+            bad_ids.add(chunk_id)
+            continue
+        compatible_count += 1
+    result.update(
+        {
+            "canonical_chunk_count": len(canonical_ids),
+            "vector_row_count": len(rows),
+            "compatible_vector_count": compatible_count,
+            "missing_vector_count": len(canonical_ids - {str(row["chunk_id"]) for row in rows}),
+            "observed_identities": list(sorted(observed.values(), key=lambda value: json.dumps(value, sort_keys=True)))[:5],
+            "bad_chunk_id_sample": sorted(bad_ids)[:10],
+            "mixed_identity_count": max(0, len(observed) - 1),
+        }
+    )
+    if not rows:
+        result["status"] = "valid" if not canonical_ids else "degraded_unavailable"
+    elif compatible_count == len(canonical_ids) and len(rows) == len(canonical_ids) and not bad_ids and result["mixed_identity_count"] == 0:
+        result["status"] = "valid"
+    elif compatible_count or result["missing_vector_count"]:
+        result["status"] = "degraded_partial"
+    else:
+        result["status"] = "invalid"
+    if result["status"] != "valid":
+        result["failure_reason"] = "vector rows are missing, malformed, incompatible, or degraded"
+    return result
 
 
 def _upsert_note(
@@ -1592,21 +2150,49 @@ def _refresh_chunk_vectors(
 
     placeholders = ",".join("?" for _ in processed_chunk_ids)
     existing_rows = connection.execute(
-        f"SELECT chunk_id, content_hash FROM {vector_table} WHERE chunk_id IN ({placeholders})",
+        f"SELECT chunk_id, content_hash, embedding_identity_json, embedding_identity_hash FROM {vector_table} WHERE chunk_id IN ({placeholders})",
         tuple(processed_chunk_ids),
     ).fetchall()
-    existing_hashes = {str(row["chunk_id"]): str(row["content_hash"]) for row in existing_rows}
+    identity_hint = embedding_identity_hint(backend=embedding_backend, config=config) if embedding_backend is not None else None
+    existing_rows_by_id = {str(row["chunk_id"]): row for row in existing_rows}
     rows_to_index: list[ChunkRecord] = []
     for note_record in note_records:
         for chunk in note_record.chunks:
-            if existing_hashes.get(chunk.chunk_id) != chunk.chunk_hash:
+            existing = existing_rows_by_id.get(chunk.chunk_id)
+            reusable = False
+            if existing is not None and str(existing["content_hash"]) == chunk.chunk_hash:
+                try:
+                    stored_identity = json.loads(str(existing["embedding_identity_json"]))
+                    reusable = _embedding_identity_compatible_for_reuse(
+                        stored_identity=stored_identity,
+                        expected_identity=identity_hint,
+                        configured_dimensions=config.embedding_dimensions,
+                    ) and str(existing["embedding_identity_hash"] or "") == embedding_identity_hash(stored_identity)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    reusable = False
+            if not reusable:
                 rows_to_index.append(chunk)
 
     if embedding_backend is not None and rows_to_index:
         response = embedding_backend.embed_texts([_embedding_text_for_chunk(chunk) for chunk in rows_to_index])
         if response.status == "embedded" and response.vectors is not None and len(response.vectors) == len(rows_to_index):
-            model_name = str(response.metadata.get("model") or "unknown")
-            provider_name = str(response.metadata.get("backend_mode") or getattr(embedding_backend, "mode_name", "unknown"))
+            vector_rows = []
+            for chunk, vector in zip(rows_to_index, response.vectors, strict=True):
+                identity = embedding_identity_from_response(response, config=config, vector=vector)
+                vector_rows.append(
+                    (
+                        chunk.chunk_id,
+                        json.dumps(vector, ensure_ascii=True),
+                        len(vector),
+                        str(identity["provider"]),
+                        str(identity["model"]),
+                        json.dumps(identity, sort_keys=True, ensure_ascii=True),
+                        embedding_identity_hash(identity),
+                        chunk.chunk_hash,
+                        run_id,
+                        generated_at,
+                    )
+                )
             connection.executemany(
                 f"""
                 INSERT INTO {vector_table} (
@@ -1615,32 +2201,24 @@ def _refresh_chunk_vectors(
                     vector_dimensions,
                     embedding_provider,
                     embedding_model,
+                    embedding_identity_json,
+                    embedding_identity_hash,
                     content_hash,
                     last_indexed_run_id,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chunk_id) DO UPDATE SET
                     vector_json=excluded.vector_json,
                     vector_dimensions=excluded.vector_dimensions,
                     embedding_provider=excluded.embedding_provider,
                     embedding_model=excluded.embedding_model,
+                    embedding_identity_json=excluded.embedding_identity_json,
+                    embedding_identity_hash=excluded.embedding_identity_hash,
                     content_hash=excluded.content_hash,
                     last_indexed_run_id=excluded.last_indexed_run_id,
                     updated_at=excluded.updated_at
                 """,
-                [
-                    (
-                        chunk.chunk_id,
-                        json.dumps(vector, ensure_ascii=True),
-                        len(vector),
-                        provider_name,
-                        model_name,
-                        chunk.chunk_hash,
-                        run_id,
-                        generated_at,
-                    )
-                    for chunk, vector in zip(rows_to_index, response.vectors, strict=True)
-                ],
+                vector_rows,
             )
         else:
             placeholders = ",".join("?" for _ in rows_to_index)
@@ -1657,6 +2235,29 @@ def _refresh_chunk_vectors(
 
 def _embedding_text_for_chunk(chunk: ChunkRecord) -> str:
     return chunk.embedding_text
+
+
+def _embedding_identity_compatible_for_reuse(
+    *,
+    stored_identity: Any,
+    expected_identity: dict[str, Any] | None,
+    configured_dimensions: int | None,
+) -> bool:
+    if not isinstance(stored_identity, dict):
+        return False
+    required = {"provider", "model", "dimensions", "normalize_embeddings", "encoding_strategy"}
+    if not required.issubset(stored_identity):
+        return False
+    if expected_identity is not None:
+        for field in ("provider", "model", "normalize_embeddings", "encoding_strategy"):
+            if stored_identity.get(field) != expected_identity.get(field):
+                return False
+    if configured_dimensions is not None and int(stored_identity.get("dimensions", -1)) != configured_dimensions:
+        return False
+    try:
+        return int(stored_identity["dimensions"]) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _note_node_id(note_id: str) -> str:
@@ -1710,6 +2311,10 @@ def _build_manifest(
     note_records: tuple[NoteRecord, ...],
     counts: dict[str, int],
     skipped_sources: list[dict[str, Any]],
+    lexical_index: dict[str, Any],
+    vector_index: dict[str, Any],
+    temporal_index: dict[str, Any],
+    resource_inventory: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "status": "success",
@@ -1730,6 +2335,27 @@ def _build_manifest(
             "skipped_source_count": len(skipped_sources),
         },
         "skipped_sources": skipped_sources,
+        "lexical_index": lexical_index,
+        "vector_index": vector_index,
+        "temporal_index": temporal_index,
+        "resource_inventory": {
+            "status": "valid" if resource_inventory.get("validation_status") == "valid" else resource_inventory.get("validation_status", "unknown"),
+            "schema_version": resource_inventory.get("inventory_schema_version"),
+            "snapshot_id": resource_inventory.get("snapshot_id"),
+            "source_ingest_run_id": resource_inventory.get("source_ingest_run_id"),
+            "logical_inventory_hash": resource_inventory.get("logical_inventory_hash"),
+            "inventory_policy_hash": resource_inventory.get("inventory_policy_hash"),
+            "note_count": (resource_inventory.get("payload") or {}).get("corpus_note_count"),
+            "chunk_count": (resource_inventory.get("payload") or {}).get("corpus_chunk_count"),
+            "path_depth": ((resource_inventory.get("payload") or {}).get("path_topology") or {}).get("path_depth"),
+            "capabilities": {
+                "exact_fts": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("exact_fts", {}),
+                "vector": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("vector", {}),
+                "graph": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("graph", {}),
+                "temporal": ((resource_inventory.get("payload") or {}).get("capabilities") or {}).get("temporal", {}),
+            },
+            "validation": resource_inventory.get("validation_status"),
+        },
         "notes": [
             {
                 "note_id": note_record.note_id,
@@ -1790,6 +2416,14 @@ def _build_failure_manifest(
     source_roots: tuple[IngestSourceRoot, ...],
     validation_issues: list[dict[str, Any]],
     skipped_sources: list[dict[str, Any]],
+    failure_stage: str = "frontmatter_validation",
+    active_database_replaced: bool = False,
+    prior_active_database_preserved: bool = False,
+    candidate_database_cleaned: bool = True,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    cleanup_error: Exception | None = None,
+    latest_success_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
         "status": "failed",
@@ -1798,6 +2432,14 @@ def _build_failure_manifest(
         "repo_root": str(repo_root),
         "data_root": str(data_root),
         "database_path": str(database_path),
+        "latest_success_manifest_path": str(latest_success_manifest_path) if latest_success_manifest_path else None,
+        "failure_stage": failure_stage,
+        "active_database_replaced": active_database_replaced,
+        "prior_active_database_preserved": prior_active_database_preserved,
+        "candidate_database_cleaned": candidate_database_cleaned,
+        "error_type": error_type,
+        "error_message": error_message,
+        "cleanup_error": type(cleanup_error).__name__ if cleanup_error else None,
         "source_roots": [{"label": root.label, "path": str(root.path)} for root in source_roots],
         "summary": {
             "note_count": 0,

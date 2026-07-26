@@ -40,7 +40,9 @@ For each turn, the runtime:
 2. Loads the prior thread state and ledger parent.
 3. Sends the message and compact thread context to the configured semantic compiler.
 4. Canonicalizes the compiler response into `semantic_compiler_packet`.
-5. Binds soft scope requests to observed corpus metadata.
+5. Binds compiler scope requests only through configured YAML aliases; observed
+   inventory values remain descriptive context and never become executable
+   scope by themselves.
 6. Activates available lexical, vector, graph, and primary-corpus surfaces.
 7. Builds a `semantic_traversal_manifest` from those activation results.
 8. Materializes `retrieval_packet` only from traversal-selected chunks.
@@ -215,6 +217,15 @@ The most useful turn artifacts are:
 
 `synthesis_context_packet.json` is especially useful for checking what the frontier model actually received. A blocked turn must not contain approved retrieval for synthesis.
 
+The full `semantic_traversal_manifest.json` is an audit artifact. Frontier
+synthesis receives `synthesis_traversal_summary` for bounded execution and
+coverage metadata, plus `approved_retrieval_packet` as the sole current-turn
+corpus-passage evidence source. Inventory descriptions, compiler queries,
+aliases, counts, diagnostics, and unselected candidates are not answer
+evidence. A complete plan must also be executable; empty or inputless plans
+block before retrieval, and zero selected evidence fails closed except for the
+existing exhaustive exact no-match contract.
+
 ## Compiler and coverage statuses
 
 Semantic compiler statuses include:
@@ -233,15 +244,16 @@ The probe runner exercises isolated behavior with fixture or probe backends. Pro
 Examples:
 
 ```powershell
-python -m semantic_traversal.probes new-thread `
-  --data-root $env:TEMP\semantic-traversal-probes-new
+python -m semantic_traversal.probes new-thread
 
-python -m semantic_traversal.probes continue-thread `
-  --data-root $env:TEMP\semantic-traversal-probes-continuation
+python -m semantic_traversal.probes continue-thread
 
-python -m semantic_traversal.probes fixture-lexical-hit `
-  --data-root $env:TEMP\semantic-traversal-probes-fixture
+python -m semantic_traversal.probes fixture-lexical-hit
 ```
+
+The probe runner uses its deterministic default root under the system
+temporary directory; it currently accepts only the probe name. Probe success
+is not equivalent to a successful live runtime turn.
 
 These are useful for artifact persistence, thread continuity, lexical retrieval, and blocked-runtime behavior. They do not prove that Ollama, Sentence Transformers, OpenAI, or the Obsidian plugin are working on a particular machine.
 
@@ -256,6 +268,40 @@ The project is intentionally conservative about authority:
 - Missing required runtime surfaces block completion rather than becoming a softer success mode.
 
 The current implementation is still under active development around canonical semantic compilation and human UAT. The artifacts are designed to make weak evidence, missing surfaces, and blocked turns visible instead of hiding them behind a plausible answer.
+
+## Operational migration and recovery
+
+- Use Python 3.11 or newer, install `requirements.txt`, and install `openai`
+  when frontier synthesis is required. The plugin has its own locked npm
+  dependencies under `obsidian-plugin/`.
+- Configure `paths.vault_root` and `paths.data_root` in
+  `semantic_traversal.runtime.yaml`. The default data root is relative to the
+  vault and contains `ingestion/latent_space.sqlite3`, manifests, and thread
+  artifacts.
+- Every ingested Markdown note must contain the configured UUID frontmatter
+  field (`uuid` by default). Missing, invalid, or duplicate UUIDs fail ingest;
+  they are not generated or silently skipped.
+- Run `python -m semantic_traversal ingest --repo-root . --config
+  semantic_traversal.runtime.yaml` for a normal reingest. Reingest is required
+  after corpus content, metadata, graph links, embedding identity, or temporal
+  projection inputs change, and when a legacy database lacks the accepted
+  projections or persisted inventory snapshot. It is not required after a
+  compiler/docs or plugin restart-only change.
+- A failed staged ingest must preserve the prior active database. Inspect the
+  latest manifest under `<data-root>/ingestion/manifests/latest.json`; it
+  records success/failure and activation diagnostics. Remove no operator data
+  as a recovery step.
+- Confirm persisted inventory health in the traversal manifest or compiler
+  packet: `inventory_diagnostics.source` should be `persisted`, status
+  `valid`, with one snapshot load and zero full inventory rebuilds for the
+  normal path. Legacy or stale databases report explicit fallback diagnostics.
+- Thread artifacts are under `<data-root>/threads/<thread-id>/turns/`. The
+  retrieval packet and traversal manifest are the bounded evidence boundary;
+  the synthesis context is the exact context sent to the frontier model.
+- Restarting or reloading the plugin does not require reingest. Configure its
+  Python executable, runtime root, YAML path, and artifact root, then use the
+  plugin's ingest command only when the data/projection conditions above call
+  for it.
 
 ## License and project status
 

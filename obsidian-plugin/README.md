@@ -24,3 +24,7 @@ visible thread label is derived from the first user message.
 Build with `npm run build`. The generated `main.js`, together with
 `manifest.json` and `styles.css`, can then be copied into the vault's
 `.obsidian/plugins/semantic-traversal/` directory for local testing.
+
+The desktop Obsidian runtime supplies Electron's `shell` module. The checked-in
+`electron.d.ts` file types only the `shell.openPath` API used by this plugin;
+the package does not add Electron as a separately bundled runtime dependency.

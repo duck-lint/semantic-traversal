@@ -7,17 +7,59 @@ retrieval:
     personal_reflection:
       note_type:
         - journal_entry
+  evidence_requirement_operators:
+    literal_exhaustive: exact_chunk_search
+    lexical_relevance: lexical_chunk_search
+    semantic_similarity: vector_search
+    graph_relation: graph_expand
+    chronology: temporal_retrieve
+  scope_policy:
+    exact_request_mode: hard
+    semantic_request_mode: preferred
+  resource_inventory:
+    schema_version: 1
+    path_depth: 2
+    max_values_per_facet: 32
+    max_path_values: 128
+    max_graph_types: 32
+    max_temporal_types: 32
   exact:
     max_matches: 200
     context_chars: 240
   lexical:
     max_candidates: 100
+    default_mode: any_tokens
   vector:
     max_candidates: 200
+    min_similarity: 0.5
+    per_query_max_candidates: 50
+    max_chunks_per_note: 4
   graph:
     default_depth: 1
     max_depth: 2
     max_candidates: 24
+  temporal:
+    enabled: true
+    max_candidates: 100
+    default_limit: 24
+    default_mode: earliest
+    allowed_modes:
+      - earliest
+      - latest
+      - before
+      - after
+      - between
+      - ordered
+    default_anchor_types:
+      - journal_entry
+    allowed_authorities:
+      - explicit_primary
+      - explicit_secondary
+    include_conflicted_by_default: false
+    field_mappings:
+      journal_entry_date:
+        anchor_type: journal_entry
+        authority: explicit_primary
   planner_defaults:
     exact_limit: 200
     exact_return_total_count: true
@@ -27,14 +69,8 @@ retrieval:
     selection_policy:
       max_chunks: 24
       preserve_required_layers: true
-      budgets:
-        exact: 12
-        lexical: 6
-        vector: 6
-        graph: 4
     claim_policy:
       negative_claims_require_exact_layer: true
-
 runtime_conversation:
   stop_words: [a, an, and, are, as, at, be, but, by, about, do, for, from, how, i, if, in, into, is, it, my, of, "on", or, our, retrieve, retrieved, retrieves, retrieving, note, notes, regarding, search, the, find, found, locate, mention, mentions, show, to, with, you, your]
   referential_surface_words: [it, that, this, those, they, them]
@@ -50,19 +86,13 @@ retrieval_scoring:
   vector_bonus: 1.0
   graph_bonus: 1.5
   demotion_penalty: 10.0
-  source_priority:
-    exact: 4
-    lexical: 3
-    vector: 2
-    graph: 1
 
 graph_traversal:
   enabled: true
-  hop_limit: 2
+  direction: outbound
   max_candidates: 24
   seed_sources:
     - graph_seeds
-    - active_focus
     - semantic_queries
   edge_type_allowlist:
     - note_links_note
@@ -91,6 +121,7 @@ semantic_compiler:
 embeddings:
   provider: "sentence_transformers"
   model: "sentence-transformers/all-MiniLM-L6-v2"
+  dimensions: null
   base_url: null
   batch_size: 32
   normalize_embeddings: true
@@ -114,11 +145,21 @@ prompts:
   semantic_compiler:
     template: |
       Return JSON only.
-      Compile a soft retrieval plan for deterministic resolution and retrieval execution. Do not answer the user.
+      Compile a semantic retrieval request for deterministic runtime resolution and retrieval execution. Do not answer the user.
       Do not emit planner_diagnostics; runtime adds diagnostics.
-      Separate conversational meaning into distinct roles: scope requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
-      Treat search/find/list/mentions/occurrences requests as exact-search requests when possible.
-      Treat words like journal or daily as soft scope requests when the user asks for journal material; do not emit note_type, path, or source filters.
+      Separate conversational meaning into scope alias requests, concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
+      Declare evidence_requirements as an ordered, deduplicated list of supported constitutive evidence enums only: literal_exhaustive, lexical_relevance, semantic_similarity, graph_relation, or chronology. Use it to state what evidence is necessary for the interpreted request, not every optional surface that may help.
+      Use only scope aliases present in the supplied resource inventory summary. Never emit raw note_type, path, source, author, book, or filesystem filters.
+      Treat explicit search/find/list/mention/occurrence/count or absence requests as exact-search requests when possible. A quoted concept alone does not require exact search.
+      For exact search, preserve each literal term, its requested case-sensitive or case-insensitive substring match mode, required flag, and return_total_count when exhaustive counts or absence are requested.
+      Preserve lexical mode when the user requests a lexical operator. Preserve graph depth when traversal is explicit. Do not emit graph direction; runtime/YAML owns it.
+      The top-level query must be human-readable retrieval text that preserves the principal subject. It must not be an identifier, slug, enum label, internal-looking name, or intent-only category. Semantic and lexical queries must preserve the target concept, entity, or resolved referent; intent words qualify the subject rather than replacing it. Do not emit bare origin, development, precursor, history, relation, comparison, or similar labels as retrieval queries.
+      Graph seeds must name an actual concept, entity, note, or resolved referent. If no meaningful subject-bearing graph seed exists, leave graph_seeds empty. Temporal retrieval still requires subject-bearing lexical and/or semantic relevance queries; temporal ordering alone does not establish relevance.
+      Request temporal retrieval when chronology, earliest/latest, before/after/between, development ordering, origin, precursors, what came before, or autobiographical development is constitutive of the question. For an origin or precursor question, use temporal_retrieve with an appropriate ordered/earliest mode and required true when chronology is necessary to answer; do not treat conceptual resemblance as chronology. Do not infer temporal retrieval from current, old, or history alone. Do not invent dates or causal influence.
+      When the inventory presents an available alias for the requested autobiographical or chronological evidence, emit that alias in scope_requests; runtime decides whether it is hard or preferred.
+      Requiredness is sparse: exact exhaustive search, strict temporal relations, and explicitly requested graph traversal may be required; otherwise prefer optional layers.
+      Before returning JSON, self-audit that every constitutive evidentiary aspect of the interpreted intent appears in evidence_requirements and every declared evidence requirement has a corresponding requested retrieval operator. Do not answer the user or emit prose for this audit.
+      The compiler requests operators and bounded limits only. Do not emit selection_policy, budgets, max_chunks, preserve_required_layers, claim_policy, coverage flags, or negative-claim permission.
       Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.
       Preserve the raw user input exactly.
       Use this exact canonical shape:
@@ -135,26 +176,48 @@ prompts:
           "concepts": [],
           "resolved_referents": [],
           "literal_terms": [],
+          "evidence_requirements": [],
           "semantic_queries": [],
           "lexical_queries": [],
           "graph_seeds": [],
           "retrieval_layers": [
-            {"operator": "lexical_chunk_search", "required": false, "limit": {semantic_compiler_lexical_limit}},
+            {"operator": "lexical_chunk_search", "required": false, "limit": {semantic_compiler_lexical_limit}, "mode": "any_tokens"},
             {"operator": "vector_search", "required": false, "limit": {semantic_compiler_vector_limit}},
             {"operator": "graph_expand", "required": false, "depth": {semantic_compiler_graph_depth}}
-          ],
-          "selection_policy": {"max_chunks": {semantic_compiler_max_chunks}, "preserve_required_layers": true, "budgets": {"exact": {semantic_compiler_exact_budget}, "lexical": {semantic_compiler_lexical_budget}, "vector": {semantic_compiler_vector_budget}, "graph": {semantic_compiler_graph_budget}}},
-          "claim_policy": {"coverage_claims_allowed": false, "negative_claims_require_exact_layer": true}
+          ]
         },
         "limitations": []
       }
+
+      Generic request examples:
+      - exact count: literal_terms with required true and return_total_count true;
+      - broad conceptual: optional lexical and vector layers, no invented exact term;
+      - graph relation: graph_expand with explicit seeds and requested depth;
+      - temporal development: temporal_retrieve with mode ordered or earliest when chronology is constitutive;
+      - preferred inventory alias: scope_requests containing an available alias, leaving hard/preferred binding to runtime;
+      - narrow factual: concise semantic/vector request without unnecessary temporal or graph operators.
+      - broad conceptual: evidence_requirements may include lexical_relevance and semantic_similarity when both forms of evidence are constitutive.
+      - exhaustive occurrence/count/absence: evidence_requirements includes literal_exhaustive.
+      - explicit relationship traversal: evidence_requirements includes graph_relation and retrieval_layers includes graph_expand.
+      - origin, development, earliest/latest, before/after/between, or chronology: evidence_requirements includes chronology and retrieval_layers includes temporal_retrieve.
+      - origin/development of concept X: use a subject-bearing top-level query, subject-bearing semantic and lexical queries, an available chronology scope alias when present, and a required temporal_retrieve layer with mode ordered or earliest; absence of a supplied date does not remove the need for temporal retrieval when chronology is the question.
+      For that origin/development shape, do not emit an explicit empty lexical query list or omit an available matching scope alias merely because the target has no date in the user wording; use the inventory projection to request the available evidence surface.
+      Subject-bearing query shapes:
+      - concept X origin;
+      - development of concept X;
+      - earliest formulation of concept X;
+      - relation between concept X and concept Y.
+      Never use origin_of_idea, graph_relation, temporal_query, development, or precursor as the query by itself.
+
+      Resource inventory summary:
+      {resource_inventory_summary}
 
       Packet:
       {packet}
   frontier_synthesis:
     instructions: |
       You are a helpful assistant inside the semantic-traversal runtime.
-      Use semantic_compiler_packet, semantic_traversal_manifest, and approved_retrieval_packet as runtime-bounded synthesis inputs.
+      Use semantic_compiler_packet, synthesis_traversal_summary, and approved_retrieval_packet as runtime-bounded synthesis inputs.
       Respond directly to the user using the provided synthesis context packet only.
       Surface tension between the implicit/explicit semantic structure present in the provided synthesis context packet and the user message.
       If conversationally relevant, provide bounded inference claims with evidence linked to provided synthesis context packet.
@@ -163,6 +226,10 @@ prompts:
       Do not decide evidence validity or repair traversal, retrieval, or coverage.
       Never make corpus-wide negative claims unless approved_retrieval_packet.coverage.negative_claims_allowed is true.
       If exact search did not run, phrase absence claims as limited to the selected semantic retrieval packet.
+      approved_retrieval_packet.selected_chunks is the only current-turn corpus passage evidence.
+      synthesis_traversal_summary is execution and coverage metadata, not factual corpus evidence.
+      Do not use compiler queries, inventory descriptions, counts, aliases, or diagnostics as substitute answer evidence.
+      An exact completed-no-match result may support only the negative claim permitted by coverage.
       Answer directly from the runtime-bounded synthesis context.
       Prefer careful uncertainty over overconfident synthesis.
 
