@@ -745,3 +745,15 @@ an earlier topic remains an unresolved semantic-targeting/control-plane issue;
 it was not fixed here. Conversation context remains available to compiler and
 synthesis, while only current-plan fields reach executors. Machine status
 remains complete/operator-UAT-pending; no UI UAT or new CI success is claimed.
+# Final runtime-integrity UAT addendum (2026-07-26)
+
+Machine checks prove the bounded deterministic seam; they do not claim operator
+UI UAT. After machine completion, the operator must:
+
+1. Restart the app and Obsidian plugin. Ask one normal corpus question known to retrieve evidence. Confirm a normal answer appears and artifacts persist.
+2. Stop the local Ollama/compiler runtime while leaving the app/plugin open. Ask a corpus question. Confirm the UI shows an explicit recoverable compiler/runtime error: no fabricated answer, no empty “successful” answer, no frontier synthesis attempt, and artifacts persist with blocked status.
+3. Restart the local runtime. Retry in the same thread or ask a follow-up. Confirm normal operation returns without reingest or thread corruption.
+4. Supply the resulting thread ZIP and screenshot/error text.
+
+Implementation 07 remains operator-UAT-pending until this is supplied or the
+operator explicitly waives the runtime-off test.

@@ -435,3 +435,22 @@ not fixed by this repair and remains an unresolved control-plane issue.
 Status remains machine-complete/operator-UAT-pending. No compiler context,
 executor, threshold, fusion, selection, temporal, inventory, ingest, or
 frontier behavior was changed; UI and new CI evidence remain open.
+## Final bounded runtime-integrity seam addendum (2026-07-26)
+
+Implemented deterministic plan executability and the audit/evidence synthesis
+boundary. Starting SHA `2e292faf95a6c0298672552da853642d53474c1e`; starting
+worktree was clean; baseline was 188 passing tests. Historical operator-supplied
+visual CI evidence remains tests #113 green for commit `2e292faf` only; it was
+not independently inspected through GitHub APIs.
+
+The new validator reports ordered requested/executable operators,
+operator-level missing/invalid inputs, retrieval intent, and blocking reasons.
+Non-executable plans write artifacts, perform zero retrieval calls, and do not
+call frontier synthesis. Coverage now fails closed on zero selected evidence,
+with only the existing valid exhaustive exact no-match exception. The full
+manifest remains persisted; synthesis receives only the whitelist summary and
+approved retrieval packet.
+
+Local result: 192 tests passing, compileall and diff check passing. New CI and
+operator UI/runtime-off recovery UAT remain pending. Status is
+machine-complete / operator-UAT-pending, not archived.

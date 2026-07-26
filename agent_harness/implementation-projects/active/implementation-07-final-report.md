@@ -177,3 +177,24 @@ input were absent. The stale compiler target remains unresolved and was not
 claimed fixed. No executor, threshold, fusion, selection, temporal, inventory,
 ingest, compiler-context, or frontier behavior changed. Status remains
 machine-complete/operator-UAT-pending; UI and new CI evidence remain open.
+## Final bounded runtime-integrity seam addendum (2026-07-26)
+
+This continuation fixes two production defects only: complete-but-inputless
+plans now block before retrieval, and the full audit manifest is no longer
+passed to frontier synthesis. `validate_plan_executability` is YAML-aware and
+deterministic for exact, lexical (including explicit semantic fallback),
+vector, graph, temporal, and unsupported operators. `_coverage_report` now
+records executability and fails closed on zero selected chunks except for the
+existing valid exhaustive exact no-match policy.
+
+The persisted `semantic_traversal_manifest.json`, ledger, and returned result
+retain the full manifest. `_build_synthesis_traversal_summary` admits only
+execution, bounded counts, coverage, limits, plan diagnostics, scope-resolution
+metadata, layer statuses, and bounded fusion status. Inventory descriptions,
+queries/seeds, candidate records, snippets, graph/temporal values, and other
+arbitrary manifest data are excluded. The approved retrieval packet remains
+the sole current-turn corpus-passage evidence source.
+
+Starting commit: `2e292faf95a6c0298672552da853642d53474c1e`. Historical
+operator-supplied visual CI: tests #113 green for that starting commit only.
+Local suite: 192 passing; operator UAT and new final-commit CI remain pending.

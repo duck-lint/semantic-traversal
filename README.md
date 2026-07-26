@@ -217,6 +217,15 @@ The most useful turn artifacts are:
 
 `synthesis_context_packet.json` is especially useful for checking what the frontier model actually received. A blocked turn must not contain approved retrieval for synthesis.
 
+The full `semantic_traversal_manifest.json` is an audit artifact. Frontier
+synthesis receives `synthesis_traversal_summary` for bounded execution and
+coverage metadata, plus `approved_retrieval_packet` as the sole current-turn
+corpus-passage evidence source. Inventory descriptions, compiler queries,
+aliases, counts, diagnostics, and unselected candidates are not answer
+evidence. A complete plan must also be executable; empty or inputless plans
+block before retrieval, and zero selected evidence fails closed except for the
+existing exhaustive exact no-match contract.
+
 ## Compiler and coverage statuses
 
 Semantic compiler statuses include:

@@ -53,3 +53,18 @@ a duplicated codebase; compatibility is opt-in and requires explicit approval.
 | 7 | inventory/ingest/runtime, inventory tests | prompts, UI | persisted inventory reused without full scans |
 | 8 | compiler prompt/schema only | frontier prompt unless proven incompatible | hashes, line diff, golden output retention |
 | 9 | docs/tests/benchmarks/guards | aspirational capability claims | final UAT and risk ledger |
+
+## Implementation 07 final runtime-integrity addendum (2026-07-26)
+
+- A complete compiler plan is not necessarily executable. Every requested
+  operator must have usable current-plan input before binding or retrieval.
+- Empty plans cannot act as implicit direct-answer turns. Traversal with zero
+  selected chunks fails closed except for the existing exhaustive exact
+  no-match contract.
+- The full traversal manifest is an audit artifact, not synthesis evidence.
+  Synthesis receives only the whitelisted `synthesis_traversal_summary` plus
+  the approved retrieval packet; descriptive inventory cannot substitute for
+  retrieved evidence.
+- Direct-answer routing, planner-model selection, inventory capability
+  representation, structured entity retrieval, reranking, and adaptive
+  retrieval remain deferred to Implementation 08.
