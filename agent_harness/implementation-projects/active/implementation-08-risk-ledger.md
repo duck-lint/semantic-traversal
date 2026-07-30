@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: in progress
+Seam 0: machine-complete / operator-acceptance-pending
 
 | Risk | Failure mode | Mitigation / stop gate |
 | --- | --- | --- |

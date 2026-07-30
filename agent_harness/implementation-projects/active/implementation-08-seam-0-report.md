@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: in progress
+Seam 0: machine-complete / operator-acceptance-pending
 
 ## Baseline
 
@@ -25,7 +25,7 @@ Seam 0: in progress
 | Serializer repair | passed | `_lexical_candidates` now uses quoted FTS5 atoms and bound MATCH parameter across five modes |
 | Evaluation matrix | passed | 29 generic scenario-turn records; real two-turn shared-thread cases included |
 | Baseline harness | passed | JSONL fsync checkpointing, resume skip, controlled unavailable/timeout/malformed doubles |
-| Machine closeout | pending | Full test/build/push/clean gate |
+| Machine closeout | passed | Full local test/build/push/clean gate |
 
 ## FTS evidence
 
@@ -41,4 +41,4 @@ The persisted generic baseline is `implementation-08-baseline-records-final.json
 
 ## Closeout rule
 
-Only update every Seam-0 record to `Seam 0: machine-complete / operator-acceptance-pending` after every required machine gate passes. Then stop; do not begin Seam 1.
+Seam 0 is machine-complete / operator-acceptance-pending. Stop here; do not begin Seam 1.

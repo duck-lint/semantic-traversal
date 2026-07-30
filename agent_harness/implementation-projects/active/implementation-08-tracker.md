@@ -2,8 +2,8 @@
 
 ## Status
 
-- State: active
-- Project status: Seam 0: in progress
+- State: reviewing
+- Project status: Seam 0: machine-complete / operator-acceptance-pending
 - Current work: FTS serializer repaired; generic evaluation harness and qwen3:8b baseline persisted; final machine gates pending.
 - Next action: run complete verification, inspect diff, commit, push, and stop for operator acceptance.
 
@@ -21,12 +21,12 @@
 
 | Work | Status | Verification |
 | --- | --- | --- |
-| Seam-0 records | in progress | This bundle |
+| Seam-0 records | machine-complete / operator-acceptance-pending | This bundle |
 | FTS reproduction | passed | Independent starting-tree fixture |
 | Serializer repair | passed | 8 focused lexical/runtime tests |
 | Evaluation matrix | passed | 29 persisted scenario-turn records |
 | Resumable baseline harness | passed | 2 harness tests; JSONL fsync checkpoints |
-| Machine closeout | pending | Full verification gate |
+| Machine closeout | passed | Full verification, push, and clean-worktree gate |
 
 ## Blockers
 
@@ -34,4 +34,4 @@
 | --- | --- | --- |
 | Persisted inventory unavailable locally | Read-only environment state | Record unavailable; do not reingest |
 
-All records remain `Seam 0: in progress` until the machine gate passes.
+All records agree: `Seam 0: machine-complete / operator-acceptance-pending`.

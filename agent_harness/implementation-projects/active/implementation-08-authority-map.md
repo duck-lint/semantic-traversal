@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: in progress
+Seam 0: machine-complete / operator-acceptance-pending
 
 | Concern | Authoritative surface | Seam-0 treatment |
 | --- | --- | --- |

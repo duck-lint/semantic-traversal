@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: in progress
+Seam 0: machine-complete / operator-acceptance-pending
 
 This request is intentionally fillable and contains no private corpus assumptions. It is not required to construct the machine baseline.
 

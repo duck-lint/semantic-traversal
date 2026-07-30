@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: in progress
+Seam 0: machine-complete / operator-acceptance-pending
 
 ## Intent
 
@@ -37,4 +37,4 @@ Provider abstraction, planner bakeoff, production direct/traverse routing, direc
 
 ## Completion rule
 
-Remain `Seam 0: in progress` until defect reproduction, repair, regressions, evaluation persistence, baseline terminal records, and all machine gates pass. Then use `Seam 0: machine-complete / operator-acceptance-pending` and stop.
+Use `Seam 0: machine-complete / operator-acceptance-pending` only after defect reproduction, repair, regressions, evaluation persistence, baseline terminal records, and all machine gates pass. Stop here; do not begin Seam 1.
