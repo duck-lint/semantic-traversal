@@ -34,7 +34,11 @@ from .semantic_compiler import (
 from .storage import append_ledger_record, create_thread_paths, load_json, write_json
 
 
-QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+# FTS5 grammar is separate from SQL grammar.  These tokens are only used to
+# identify literal search atoms; `_serialize_fts5_atom` performs the grammar
+# quoting before the complete expression is passed as a bound MATCH value.
+QUERY_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
+MAX_SERIALIZED_FTS_QUERY_CHARS = 4096
 LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph", "temporal_retrieve": "temporal"}
 EXACT_SEARCH_STATUSES = {
     "not_requested",
@@ -1143,6 +1147,24 @@ def _graph_match_note_nodes(
     return exact_matches or overlap_matches
 
 
+def _serialize_fts5_atom(value: str) -> str:
+    """Quote one literal FTS5 value without granting it operator syntax."""
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _serialize_fts5_query_atoms(tokens: list[str], *, mode: str) -> str:
+    """Serialize literal atoms while keeping the accepted mode grammar fixed."""
+    atoms = [_serialize_fts5_atom(token) for token in tokens if token]
+    if mode == "prefix":
+        # The wildcard belongs outside the quoted literal, where FTS5 treats
+        # it as prefix grammar rather than as user-controlled text.
+        atoms = [f"{atom}*" for atom in atoms]
+    if not atoms:
+        return ""
+    joiner = " AND " if mode == "all_tokens" else " OR "
+    return joiner.join(atoms)
+
+
 def _lexical_candidates(
     chunk_rows: list[dict[str, Any]],
     query_terms: list[str],
@@ -1158,6 +1180,7 @@ def _lexical_candidates(
     notes: list[str] = []
     diagnostics: dict[str, Any] = {
         "requested_queries": list(query_terms),
+        "original_query": list(query_terms),
         "effective_query": None,
         "requested_mode": mode,
         "effective_mode": None,
@@ -1186,16 +1209,24 @@ def _lexical_candidates(
         message = [f"lexical search unavailable: unsupported mode {selected_mode}"]
         return ([], message, diagnostics) if return_diagnostics else ([], message)
     terms = [str(term).strip() for term in query_terms if str(term).strip()]
+    tokens = [token for term in terms for token in QUERY_TOKEN_RE.findall(term.casefold())]
+    if not tokens:
+        diagnostics["status"] = "skipped_no_input"
+        return finish()
     if selected_mode == "exact_phrase":
-        fts_query = '"' + " ".join(terms).replace('"', '""') + '"'
+        # Keep phrase punctuation as literal content while rejecting a
+        # punctuation-only request before it reaches FTS5.
+        normalized_phrase = " ".join(" ".join(terms).split())
+        fts_query = _serialize_fts5_atom(normalized_phrase)
     else:
-        tokens = [token for term in terms for token in QUERY_TOKEN_RE.findall(term.lower())]
-        if selected_mode == "prefix":
-            tokens = [f"{token}*" for token in tokens]
-        joiner = " AND " if selected_mode == "all_tokens" else " OR "
-        fts_query = joiner.join(tokens)
+        fts_query = _serialize_fts5_query_atoms(tokens, mode=selected_mode)
     if not fts_query:
         diagnostics["status"] = "skipped_no_input"
+        return finish()
+    if len(fts_query) > MAX_SERIALIZED_FTS_QUERY_CHARS:
+        diagnostics["status"] = "failed"
+        diagnostics["failure_reason"] = "serialized FTS5 expression exceeds diagnostic and execution bound"
+        notes.append("lexical search failed: serialized FTS5 expression is too large")
         return finish()
     diagnostics["effective_query"] = fts_query
     try:
@@ -1203,7 +1234,7 @@ def _lexical_candidates(
             "SELECT chunk_id, bm25(chunks_fts) AS fts_rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY fts_rank ASC, chunk_id ASC",
             (fts_query,),
         ).fetchall()
-    except sqlite3.OperationalError as exc:
+    except sqlite3.Error as exc:
         diagnostics["status"] = "unavailable" if "no such table" in str(exc).lower() else "failed"
         diagnostics["fts_available"] = False
         message = [f"lexical search unavailable: FTS5 index error: {exc}"]
