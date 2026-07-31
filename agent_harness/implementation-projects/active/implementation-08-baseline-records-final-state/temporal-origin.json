@@ -1,0 +1,170 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:47:36.732607+00:00",
+    "latest_perturbation_hash": "67a58aa1c20afcaaa46185d2aef35bf1b87a2455cfcde2035fd40309ebee6335",
+    "latest_thread_state_hash": "b0a22c275252cb275856314d558c89f83e83555cff3a5de34ae87112185886ca",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "What is the origin of concept alpha?",
+        "created_at": "2026-07-31T00:47:50.930215Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "temporal-origin",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:47:50.930212+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "concept alpha"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": "origin of concept alpha",
+      "relations": [],
+      "resolved_referents": [
+        "concept alpha"
+      ],
+      "retrieval_layers": [
+        {
+          "limit": 1,
+          "mode": "ordered",
+          "operator": "temporal_retrieve",
+          "required": true
+        }
+      ],
+      "scope_requests": [
+        "journal"
+      ],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "origin of concept alpha"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "b0a22c275252cb275856314d558c89f83e83555cff3a5de34ae87112185886ca",
+    "latest_turn_id": 1,
+    "latest_user_input": "What is the origin of concept alpha?",
+    "recent_messages": [
+      {
+        "content": "What is the origin of concept alpha?",
+        "created_at": "2026-07-31T00:47:50.930134Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "concept alpha"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "origin of concept alpha",
+        "raw_user_input": "What is the origin of concept alpha?",
+        "relations": [],
+        "resolved_referents": [
+          "concept alpha"
+        ],
+        "retrieval_layers": [
+          {
+            "limit": 1,
+            "mode": "ordered",
+            "operator": "temporal_retrieve",
+            "required": true
+          }
+        ],
+        "scope_requests": [
+          "journal"
+        ],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "origin of concept alpha"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "temporal-origin",
+    "updated_at": "2026-07-31T00:47:50.930122+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [
+          "concept alpha"
+        ],
+        "intent": "origin_of_concept",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "concept alpha"
+          ],
+          "evidence_requirements": [
+            "chronology"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [],
+          "literal_terms": [],
+          "resolved_referents": [
+            "concept alpha"
+          ],
+          "retrieval_layers": [
+            {
+              "limit": 1,
+              "mode": "ordered",
+              "operator": "temporal_retrieve",
+              "required": true
+            }
+          ],
+          "scope_requests": [
+            "journal"
+          ],
+          "semantic_queries": [
+            "origin of concept alpha"
+          ]
+        },
+        "query": "origin of concept alpha",
+        "raw_user_input": "What is the origin of concept alpha?",
+        "relations": [
+          "temporal_relation"
+        ],
+        "resolved_referents": [
+          "concept alpha"
+        ]
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [],
+      "raw_model_output": "{\n  \"raw_user_input\": \"What is the origin of concept alpha?\",\n  \"intent\": \"origin_of_concept\",\n  \"query\": \"origin of concept alpha\",\n  \"entities\": [\"concept alpha\"],\n  \"relations\": [\"temporal_relation\"],\n  \"resolved_referents\": [\"concept alpha\"],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [\"journal\"],\n    \"concepts\": [\"concept alpha\"],\n    \"resolved_referents\": [\"concept alpha\"],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"chronology\"],\n    \"semantic_queries\": [\"origin of concept alpha\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"temporal_retrieve\", \"required\": true, \"limit\": 1, \"mode\": \"ordered\"}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [
+        "concept alpha"
+      ],
+      "subjects": [
+        "concept alpha"
+      ],
+      "turn_id": "1",
+      "user_input": "What is the origin of concept alpha?"
+    }
+  ]
+}

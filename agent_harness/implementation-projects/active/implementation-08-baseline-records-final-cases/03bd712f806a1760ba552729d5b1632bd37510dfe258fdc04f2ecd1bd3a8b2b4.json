@@ -1,0 +1,828 @@
+{
+  "ambiguity_preserved": true,
+  "answer_bearing_candidate_present": false,
+  "available_planner_cost": null,
+  "available_planner_input_tokens": null,
+  "available_planner_output_tokens": null,
+  "available_synthesis_cost": null,
+  "available_synthesis_tokens": null,
+  "backend_instance": "ControlledPlannerBackend:2694472933584",
+  "backend_metadata": {
+    "backend_mode": "controlled_malformed"
+  },
+  "baseline_capability_gap": "production_response_mode_schema_missing",
+  "blocking_reason": "planner output was not valid JSON",
+  "candidate_count_by_surface": {
+    "exact": 0,
+    "graph": 0,
+    "lexical": 0,
+    "temporal": 0,
+    "vector": 0
+  },
+  "canonical_packet": {
+    "entities": [],
+    "intent": "deterministic retrieval planning fallback",
+    "limitations": [
+      "semantic compiler backend unavailable; deterministic lexical fallback used"
+    ],
+    "planner_diagnostics": {
+      "ignored_planner_fields": []
+    },
+    "planner_retrieval_plan": {
+      "concepts": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "evidence_requirements": [
+        "literal_exhaustive"
+      ],
+      "graph_seeds": [
+        "evidence concept alpha malformed planner output"
+      ],
+      "intent_type": "exact_search",
+      "lexical_queries": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "literal_terms": [
+        {
+          "match": "case_insensitive_substring",
+          "required": true,
+          "term": "evidence"
+        },
+        {
+          "match": "case_insensitive_substring",
+          "required": true,
+          "term": "concept"
+        },
+        {
+          "match": "case_insensitive_substring",
+          "required": true,
+          "term": "alpha"
+        },
+        {
+          "match": "case_insensitive_substring",
+          "required": true,
+          "term": "malformed"
+        },
+        {
+          "match": "case_insensitive_substring",
+          "required": true,
+          "term": "planner"
+        },
+        {
+          "match": "case_insensitive_substring",
+          "required": true,
+          "term": "output"
+        }
+      ],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 200,
+          "operator": "exact_chunk_search",
+          "required": true,
+          "return_total_count": true
+        },
+        {
+          "limit": 50,
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "semantic_queries": [
+        "evidence concept alpha malformed planner output"
+      ]
+    },
+    "query": "evidence concept alpha malformed planner output",
+    "raw_user_input": "Find evidence for concept alpha with malformed planner output.",
+    "relations": [],
+    "resolved_referents": []
+  },
+  "canonical_plan": {
+    "concepts": [
+      "evidence",
+      "concept",
+      "alpha",
+      "malformed",
+      "planner",
+      "output"
+    ],
+    "evidence_requirements": [
+      "literal_exhaustive"
+    ],
+    "graph_seeds": [
+      "evidence concept alpha malformed planner output"
+    ],
+    "intent_type": "exact_search",
+    "lexical_queries": [
+      "evidence",
+      "concept",
+      "alpha",
+      "malformed",
+      "planner",
+      "output"
+    ],
+    "literal_terms": [
+      {
+        "match": "case_insensitive_substring",
+        "required": true,
+        "term": "evidence"
+      },
+      {
+        "match": "case_insensitive_substring",
+        "required": true,
+        "term": "concept"
+      },
+      {
+        "match": "case_insensitive_substring",
+        "required": true,
+        "term": "alpha"
+      },
+      {
+        "match": "case_insensitive_substring",
+        "required": true,
+        "term": "malformed"
+      },
+      {
+        "match": "case_insensitive_substring",
+        "required": true,
+        "term": "planner"
+      },
+      {
+        "match": "case_insensitive_substring",
+        "required": true,
+        "term": "output"
+      }
+    ],
+    "resolved_referents": [],
+    "retrieval_layers": [
+      {
+        "limit": 200,
+        "operator": "exact_chunk_search",
+        "required": true,
+        "return_total_count": true
+      },
+      {
+        "limit": 50,
+        "operator": "lexical_chunk_search",
+        "required": false
+      },
+      {
+        "limit": 24,
+        "operator": "vector_search",
+        "required": false
+      },
+      {
+        "depth": 1,
+        "operator": "graph_expand",
+        "required": false
+      }
+    ],
+    "scope_requests": [],
+    "semantic_queries": [
+      "evidence concept alpha malformed planner output"
+    ]
+  },
+  "carry_source": null,
+  "case_duration_ms": 0.482,
+  "case_id": "planner-malformed:1",
+  "compiler_status": "fallback",
+  "component_scores": {
+    "current_turn_target_correctness": {
+      "expected": [
+        "concept alpha"
+      ],
+      "missing": [
+        "concept alpha"
+      ],
+      "observed": [
+        "alpha",
+        "concept",
+        "evidence",
+        "malformed",
+        "output",
+        "planner"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "alpha",
+        "concept",
+        "evidence",
+        "malformed",
+        "output",
+        "planner"
+      ]
+    },
+    "evidence_requirement_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [
+        "literal_exhaustive"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "literal_exhaustive"
+      ]
+    },
+    "operator_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [
+        "exact_chunk_search",
+        "graph_expand",
+        "lexical_chunk_search",
+        "vector_search"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "exact_chunk_search",
+        "graph_expand",
+        "lexical_chunk_search",
+        "vector_search"
+      ]
+    },
+    "plan_completeness": {
+      "observed": {
+        "declared_requirements": [
+          "literal_exhaustive"
+        ],
+        "invalid_operator_configuration": [],
+        "missing_operators": [],
+        "repair_attempted": false,
+        "repair_result": null,
+        "satisfied_requirements": [
+          "literal_exhaustive"
+        ],
+        "status": "complete",
+        "unavailable_operators": [],
+        "unsupported_requirements": []
+      },
+      "status": "complete"
+    },
+    "plan_executability": {
+      "observed": {
+        "blocking_reasons": [],
+        "executable_operators": [
+          "exact_chunk_search",
+          "lexical_chunk_search",
+          "vector_search",
+          "graph_expand"
+        ],
+        "has_retrieval_intent": true,
+        "operator_results": [
+          {
+            "operator": "exact_chunk_search",
+            "present_inputs": [
+              "literal_terms"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "literal_terms"
+            ],
+            "status": "executable"
+          },
+          {
+            "operator": "lexical_chunk_search",
+            "present_inputs": [
+              "lexical_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "lexical_queries",
+              "semantic_queries"
+            ],
+            "status": "executable"
+          },
+          {
+            "operator": "vector_search",
+            "present_inputs": [
+              "semantic_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "semantic_queries"
+            ],
+            "status": "executable"
+          },
+          {
+            "operator": "graph_expand",
+            "present_inputs": [
+              "graph_seeds",
+              "semantic_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "graph_seeds",
+              "semantic_queries"
+            ],
+            "status": "executable"
+          }
+        ],
+        "requested_operators": [
+          "exact_chunk_search",
+          "lexical_chunk_search",
+          "vector_search",
+          "graph_expand"
+        ],
+        "status": "executable"
+      },
+      "status": "executable"
+    },
+    "referent_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [],
+      "status": "match",
+      "unexpected": []
+    }
+  },
+  "current_routing_assumption": "always_traverse",
+  "emitted_current_turn_subjects": [
+    "evidence",
+    "concept",
+    "alpha",
+    "malformed",
+    "planner",
+    "output"
+  ],
+  "emitted_response_mode": null,
+  "evidence_requirements": [
+    "literal_exhaustive"
+  ],
+  "executed_operators": [],
+  "execution_outcome": "blocked_control",
+  "expected_current_turn_subjects": [
+    "concept alpha"
+  ],
+  "expected_evidence_requirements": [],
+  "expected_operators": [],
+  "expected_referents": [],
+  "expected_response_mode": "traverse",
+  "final_support_grade": null,
+  "input": "Find evidence for concept alpha with malformed planner output.",
+  "irrelevant_selected_evidence_count": 0,
+  "malformed_status": "planner_malformed",
+  "metric_availability": {
+    "candidate_recall": {
+      "reason": "retrieval not executed; persisted inventory unavailable",
+      "status": "unavailable"
+    },
+    "final_answer_quality": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    },
+    "selection_precision": {
+      "reason": "retrieval and selection not executed",
+      "status": "unavailable"
+    },
+    "synthesis_support": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    }
+  },
+  "next_conversation_thread": {
+    "created_at": "2026-07-31T00:49:00.161751+00:00",
+    "latest_perturbation_hash": "91a36ec533bd75cd80ac017dd5abd5781bc7c1ec0db55d38599311c25a8c41d0",
+    "latest_thread_state_hash": "2637f794a9f79bde4cb7078b5e1a422940f7fb2ab666088b74806e1a5d84848e",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Find evidence for concept alpha with malformed planner output.",
+        "created_at": "2026-07-31T00:49:00.162236Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "planner-malformed",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:49:00.162234+00:00"
+  },
+  "next_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "entities": [],
+      "graph_seeds": [
+        "evidence concept alpha malformed planner output"
+      ],
+      "lexical_queries": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "literal_terms": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "query": "evidence concept alpha malformed planner output",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 200,
+          "operator": "exact_chunk_search",
+          "required": true,
+          "return_total_count": true
+        },
+        {
+          "limit": 50,
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "evidence concept alpha malformed planner output"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "2637f794a9f79bde4cb7078b5e1a422940f7fb2ab666088b74806e1a5d84848e",
+    "latest_turn_id": 1,
+    "latest_user_input": "Find evidence for concept alpha with malformed planner output.",
+    "recent_messages": [
+      {
+        "content": "Find evidence for concept alpha with malformed planner output.",
+        "created_at": "2026-07-31T00:49:00.162154Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "entities": [],
+        "graph_seeds": [
+          "evidence concept alpha malformed planner output"
+        ],
+        "lexical_queries": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "literal_terms": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "query": "evidence concept alpha malformed planner output",
+        "raw_user_input": "Find evidence for concept alpha with malformed planner output.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 200,
+            "operator": "exact_chunk_search",
+            "required": true,
+            "return_total_count": true
+          },
+          {
+            "limit": 50,
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "evidence concept alpha malformed planner output"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "planner-malformed",
+    "updated_at": "2026-07-31T00:49:00.162147+00:00"
+  },
+  "persisted_state_path": "agent_harness\\implementation-projects\\active\\implementation-08-baseline-records-corrected2-state\\planner-malformed.json",
+  "plan_completeness": {
+    "declared_requirements": [
+      "literal_exhaustive"
+    ],
+    "invalid_operator_configuration": [],
+    "missing_operators": [],
+    "repair_attempted": false,
+    "repair_result": null,
+    "satisfied_requirements": [
+      "literal_exhaustive"
+    ],
+    "status": "complete",
+    "unavailable_operators": [],
+    "unsupported_requirements": []
+  },
+  "plan_executability": {
+    "blocking_reasons": [],
+    "executable_operators": [
+      "exact_chunk_search",
+      "lexical_chunk_search",
+      "vector_search",
+      "graph_expand"
+    ],
+    "has_retrieval_intent": true,
+    "operator_results": [
+      {
+        "operator": "exact_chunk_search",
+        "present_inputs": [
+          "literal_terms"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "literal_terms"
+        ],
+        "status": "executable"
+      },
+      {
+        "operator": "lexical_chunk_search",
+        "present_inputs": [
+          "lexical_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "lexical_queries",
+          "semantic_queries"
+        ],
+        "status": "executable"
+      },
+      {
+        "operator": "vector_search",
+        "present_inputs": [
+          "semantic_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "semantic_queries"
+        ],
+        "status": "executable"
+      },
+      {
+        "operator": "graph_expand",
+        "present_inputs": [
+          "graph_seeds",
+          "semantic_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "graph_seeds",
+          "semantic_queries"
+        ],
+        "status": "executable"
+      }
+    ],
+    "requested_operators": [
+      "exact_chunk_search",
+      "lexical_chunk_search",
+      "vector_search",
+      "graph_expand"
+    ],
+    "status": "executable"
+  },
+  "planner_call_status": "invalid_json",
+  "planner_latency_ms": 0.251,
+  "prior_message_history": [],
+  "prior_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": null,
+    "latest_turn_id": 0,
+    "latest_user_input": null,
+    "recent_messages": [],
+    "recent_semantic_turns": [],
+    "thread_id": "planner-malformed",
+    "updated_at": "2026-07-31T00:49:00.161751+00:00"
+  },
+  "raw_model_output": "not-json",
+  "requested_operators": [
+    "exact_chunk_search",
+    "lexical_chunk_search",
+    "vector_search",
+    "graph_expand"
+  ],
+  "requiredness": {
+    "exact_chunk_search": true,
+    "graph_expand": false,
+    "lexical_chunk_search": false,
+    "vector_search": false
+  },
+  "resolved_referents": [],
+  "restart_backend_instance": false,
+  "retrieval_latency_ms": null,
+  "retrieval_results": [],
+  "scenario_id": "planner-malformed",
+  "selected_evidence_present": false,
+  "setup_turn": false,
+  "state_turn_record": {
+    "canonical_packet": {
+      "entities": [],
+      "intent": "deterministic retrieval planning fallback",
+      "limitations": [
+        "semantic compiler backend unavailable; deterministic lexical fallback used"
+      ],
+      "planner_diagnostics": {
+        "ignored_planner_fields": []
+      },
+      "planner_retrieval_plan": {
+        "concepts": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "evidence_requirements": [
+          "literal_exhaustive"
+        ],
+        "graph_seeds": [
+          "evidence concept alpha malformed planner output"
+        ],
+        "intent_type": "exact_search",
+        "lexical_queries": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "literal_terms": [
+          {
+            "match": "case_insensitive_substring",
+            "required": true,
+            "term": "evidence"
+          },
+          {
+            "match": "case_insensitive_substring",
+            "required": true,
+            "term": "concept"
+          },
+          {
+            "match": "case_insensitive_substring",
+            "required": true,
+            "term": "alpha"
+          },
+          {
+            "match": "case_insensitive_substring",
+            "required": true,
+            "term": "malformed"
+          },
+          {
+            "match": "case_insensitive_substring",
+            "required": true,
+            "term": "planner"
+          },
+          {
+            "match": "case_insensitive_substring",
+            "required": true,
+            "term": "output"
+          }
+        ],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 200,
+            "operator": "exact_chunk_search",
+            "required": true,
+            "return_total_count": true
+          },
+          {
+            "limit": 50,
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "semantic_queries": [
+          "evidence concept alpha malformed planner output"
+        ]
+      },
+      "query": "evidence concept alpha malformed planner output",
+      "raw_user_input": "Find evidence for concept alpha with malformed planner output.",
+      "relations": [],
+      "resolved_referents": []
+    },
+    "compiler_response_status": "invalid_json",
+    "compiler_status": "invalid_json",
+    "prior_message_history": [],
+    "raw_model_output": "not-json",
+    "resolved_referents": [],
+    "subjects": [
+      "evidence",
+      "concept",
+      "alpha",
+      "malformed",
+      "planner",
+      "output"
+    ],
+    "turn_id": "1",
+    "user_input": "Find evidence for concept alpha with malformed planner output."
+  },
+  "synthesis_called": false,
+  "synthesis_latency_ms": null,
+  "terminal_status": "malformed",
+  "thread_id": "planner-malformed",
+  "topic_reset_stale_subjects_emitted": [],
+  "turn_id": "1"
+}

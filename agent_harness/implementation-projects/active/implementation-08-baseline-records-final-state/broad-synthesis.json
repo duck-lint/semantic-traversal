@@ -1,0 +1,182 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:47:27.875020+00:00",
+    "latest_perturbation_hash": "056a00c1611d12976cac590d612d3ffc8847515ff3f9a0e926f62bf94ba8a233",
+    "latest_thread_state_hash": "0427ca2d19e392a61cc2daeb56e4964b5c62073b30cbbcb9e421cfee4dd51197",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Give a broad synthesis of concept alpha.",
+        "created_at": "2026-07-31T00:47:36.725900Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "broad-synthesis",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:47:36.725897+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "alpha"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [
+        "concept alpha"
+      ],
+      "literal_terms": [],
+      "query": "concept alpha",
+      "relations": [],
+      "resolved_referents": [
+        "alpha"
+      ],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "concept alpha"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "0427ca2d19e392a61cc2daeb56e4964b5c62073b30cbbcb9e421cfee4dd51197",
+    "latest_turn_id": 1,
+    "latest_user_input": "Give a broad synthesis of concept alpha.",
+    "recent_messages": [
+      {
+        "content": "Give a broad synthesis of concept alpha.",
+        "created_at": "2026-07-31T00:47:36.725819Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "alpha"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [
+          "concept alpha"
+        ],
+        "literal_terms": [],
+        "query": "concept alpha",
+        "raw_user_input": "Give a broad synthesis of concept alpha.",
+        "relations": [],
+        "resolved_referents": [
+          "alpha"
+        ],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "concept alpha"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "broad-synthesis",
+    "updated_at": "2026-07-31T00:47:36.725807+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "broad_synthesis",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "alpha"
+          ],
+          "evidence_requirements": [
+            "lexical_relevance",
+            "semantic_similarity"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [
+            "concept alpha"
+          ],
+          "literal_terms": [],
+          "resolved_referents": [
+            "alpha"
+          ],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "concept alpha"
+          ]
+        },
+        "query": "concept alpha",
+        "raw_user_input": "Give a broad synthesis of concept alpha.",
+        "relations": [],
+        "resolved_referents": [
+          "alpha"
+        ]
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Give a broad synthesis of concept alpha.\",\n  \"intent\": \"broad_synthesis\",\n  \"query\": \"concept alpha\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [\"alpha\"],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"alpha\"],\n    \"resolved_referents\": [\"alpha\"],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"lexical_relevance\", \"semantic_similarity\"],\n    \"semantic_queries\": [\"concept alpha\"],\n    \"lexical_queries\": [\"concept alpha\"],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [
+        "alpha"
+      ],
+      "subjects": [
+        "alpha"
+      ],
+      "turn_id": "1",
+      "user_input": "Give a broad synthesis of concept alpha."
+    }
+  ]
+}
