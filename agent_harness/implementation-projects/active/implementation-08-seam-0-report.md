@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: machine-complete / operator-acceptance-pending
+Seam 0: operator-accepted
 
 ## Baseline
 
@@ -39,7 +39,7 @@ Focused lexical coverage passes: 8 tests, including candidates, zero candidates,
 
 The old baseline was discarded as non-authoritative. The replacement baseline is `implementation-08-baseline-records-final.jsonl`, with one authoritative per-case JSON checkpoint under `implementation-08-baseline-records-final-cases/` and persisted scenario state under `implementation-08-baseline-records-final-state/`. It contains 29 terminal records and 29 unique case IDs. Planner-call status counts: parsed 26, timed_out 1, unavailable 1, invalid_json 1. Response/execution terminal counts: completed 20, timed_out 1, unavailable 1, malformed 1, blocked 2, unsupported_baseline_capability 4, harness_error 0.
 
-`completed` means only that the planner call reached a terminal parsed state. It does not mean retrieval or synthesis succeeded. The unavailable, controlled timeout, and malformed cases use backend doubles; one additional timeout was observed from the live qwen3:8b call. The blocked records are the expected zero-evidence/private-evidence cases. Direct-mode records are expected unsupported baseline capabilities because production response-mode routing is not implemented. Persisted inventory was unavailable, so retrieval and synthesis were not executed.
+`completed` means only that the planner call reached a terminal parsed state. It does not mean retrieval or synthesis succeeded. The unavailable, controlled timeout, and malformed cases use backend doubles. The blocked records are the expected zero-evidence/private-evidence cases. Direct-mode records are expected unsupported baseline capabilities because production response-mode routing is not implemented. Persisted inventory was unavailable, so retrieval and synthesis were not executed. This baseline succeeded as a planner-evaluation baseline; it is not evidence of acceptable qwen3:8b quality or successful retrieval/synthesis.
 
 Real multi-turn state is persisted after each turn using the current production context shape: actual `prior_thread_state`, `conversation_thread`, recent message history, recent semantic turns, active focus, compiler response status/raw output, and canonical packet. Turn 2 reloads that state and its packet contains the actual turn-1 input/history. Restart recovery creates a new backend instance for turn 2. Topic reset emitted no stale turn-1 subjects. The qwen3:8b ambiguous-reference continuation did not preserve ambiguity (`ambiguity_preserved: false`); this is recorded as a baseline observation, not hidden or repaired in Seam 0.
 
@@ -53,4 +53,4 @@ The Python-owned FTS query limit was removed. No replacement YAML limit was adde
 
 ## Closeout rule
 
-Seam 0: machine-complete / operator-acceptance-pending. The machine gates passed locally, the corrected records are committed and pushed, and the worktree is clean. Stop for operator acceptance. Do not begin Seam 1.
+Seam 0: operator-accepted. The machine gates passed locally, the corrected records are committed and pushed, and the worktree is clean. Do not begin Seam 1 in this documentation correction.

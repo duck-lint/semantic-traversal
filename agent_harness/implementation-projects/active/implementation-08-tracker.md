@@ -2,10 +2,10 @@
 
 ## Status
 
-- State: reviewing
-- Project status: Seam 0: machine-complete / operator-acceptance-pending
-- Current work: correction implementation, replacement baseline, and machine verification complete.
-- Next action: operator acceptance; do not begin Seam 1.
+- State: accepted
+- Project status: Seam 0: operator-accepted
+- Current work: corrected Seam-0 bundle accepted as a planner-evaluation baseline.
+- Next action: preserve Seam-0 boundary; do not begin Seam 1 in this correction.
 
 ## Work log
 
@@ -24,7 +24,7 @@
 
 | Work | Status | Verification |
 | --- | --- | --- |
-| Seam-0 records | in progress | This correction pass |
+| Seam-0 records | machine-complete / operator-accepted | Corrected Seam-0 bundle |
 | FTS reproduction | passed | Independent starting-tree fixture |
 | Serializer repair | passed | 8 focused lexical/runtime tests |
 | Evaluation matrix | passed | 29 persisted scenario-turn records |
@@ -37,4 +37,4 @@
 | --- | --- | --- |
 | Persisted inventory unavailable locally | Read-only environment state | Record unavailable; do not reingest |
 
-All records agree: `Seam 0: machine-complete / operator-acceptance-pending`. Operator acceptance is the next action; Seam 1 has not begun.
+All records agree: `Seam 0: operator-accepted`. The baseline is accepted as a planner-evaluation baseline, not as evidence of acceptable qwen3:8b quality or successful retrieval/synthesis. Seam 1 has not begun.
