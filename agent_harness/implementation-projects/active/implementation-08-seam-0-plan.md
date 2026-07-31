@@ -29,12 +29,15 @@ Establish the control-plane evaluation boundary without introducing production r
 
 Provider abstraction, planner bakeoff, production direct/traverse routing, direct mode, control-packet cutover, focus migration, inventory/schema work, structured facts, candidate adjudication, adaptive retrieval, and any frozen retrieval/synthesis boundary.
 
-## Later seams
+## Later dependency order
 
-- Seam 1: provider/control assistant boundary; depends on accepted Seam 0 records and stops at route-schema review.
-- Seam 2: production response-mode routing; depends on accepted control schema and stops before traversal execution cutover.
-- Later retrieval/context seams: distinct `conversation_focus` and `retrieval_focus`; depend on explicit state migration review.
+1. Provider-neutral control boundary and planner-model comparison; depends on accepted Seam 0 evidence.
+2. Canonical control/response-mode schema; depends on the provider-neutral boundary and comparison evidence.
+3. Production direct/traverse routing; depends on the canonical schema and runtime validation review.
+4. Conversation-context packet cleanup and the explicit `conversation_focus` / `retrieval_focus` split; depends on production routing and state-migration review.
+
+The focus objects do not own routing. `conversation_focus` supplies bounded conversational context; `retrieval_focus` supplies bounded referents from the last successful approved traversal. Runtime owns whether either focus transition is accepted. Blocked turns preserve both; fallback plans and unapproved candidates update neither. None of these later seams is implemented here.
 
 ## Completion rule
 
-Use `Seam 0: machine-complete / operator-acceptance-pending` only after defect reproduction, repair, regressions, evaluation persistence, baseline terminal records, and all machine gates pass. Stop here; do not begin Seam 1.
+The correction pass, replacement baseline, and complete verification pass are complete. Use `Seam 0: machine-complete / operator-acceptance-pending` and stop; do not begin Seam 1.
