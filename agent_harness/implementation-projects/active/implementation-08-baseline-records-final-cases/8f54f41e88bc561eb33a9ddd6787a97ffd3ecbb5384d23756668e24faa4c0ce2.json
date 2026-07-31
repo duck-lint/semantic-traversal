@@ -1,0 +1,553 @@
+{
+  "ambiguity_preserved": true,
+  "answer_bearing_candidate_present": false,
+  "available_planner_cost": null,
+  "available_planner_input_tokens": null,
+  "available_planner_output_tokens": null,
+  "available_synthesis_cost": null,
+  "available_synthesis_tokens": null,
+  "backend_instance": "OllamaSemanticCompilerBackend:2694473058240",
+  "backend_metadata": {
+    "backend_mode": "ollama",
+    "base_url": "http://localhost:11434",
+    "model": "qwen3:8b",
+    "semantic_compiler_prompt_hash": "9442e0754d3ceaf488132dfe6f3911a7f87dc9580d2db49df6d76a301c366a7a"
+  },
+  "baseline_capability_gap": "production_response_mode_schema_missing",
+  "blocking_reason": "planner parsed; retrieval and synthesis were not executed because persisted inventory was unavailable",
+  "candidate_count_by_surface": {
+    "exact": 0,
+    "graph": 0,
+    "lexical": 0,
+    "temporal": 0,
+    "vector": 0
+  },
+  "canonical_packet": {
+    "entities": [
+      "alpha"
+    ],
+    "intent": "exact_count",
+    "limitations": [],
+    "planner_diagnostics": {
+      "ignored_planner_fields": []
+    },
+    "planner_retrieval_plan": {
+      "concepts": [
+        "alpha"
+      ],
+      "evidence_requirements": [
+        "literal_exhaustive"
+      ],
+      "graph_seeds": [],
+      "intent_type": "semantic_traversal",
+      "lexical_queries": [],
+      "literal_terms": [
+        {
+          "match": "case_insensitive_substring",
+          "required": false,
+          "term": "alpha"
+        }
+      ],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [
+        "journal",
+        "personal_reflection"
+      ],
+      "semantic_queries": []
+    },
+    "query": "How many times does concept alpha occur?",
+    "raw_user_input": "How many times does concept alpha occur?",
+    "relations": [],
+    "resolved_referents": []
+  },
+  "canonical_plan": {
+    "concepts": [
+      "alpha"
+    ],
+    "evidence_requirements": [
+      "literal_exhaustive"
+    ],
+    "graph_seeds": [],
+    "intent_type": "semantic_traversal",
+    "lexical_queries": [],
+    "literal_terms": [
+      {
+        "match": "case_insensitive_substring",
+        "required": false,
+        "term": "alpha"
+      }
+    ],
+    "resolved_referents": [],
+    "retrieval_layers": [
+      {
+        "limit": 50,
+        "mode": "any_tokens",
+        "operator": "lexical_chunk_search",
+        "required": false
+      },
+      {
+        "limit": 24,
+        "operator": "vector_search",
+        "required": false
+      }
+    ],
+    "scope_requests": [
+      "journal",
+      "personal_reflection"
+    ],
+    "semantic_queries": []
+  },
+  "carry_source": null,
+  "case_duration_ms": 9069.243,
+  "case_id": "exact-count:1",
+  "compiler_status": "parsed",
+  "component_scores": {
+    "current_turn_target_correctness": {
+      "expected": [
+        "concept alpha"
+      ],
+      "missing": [
+        "concept alpha"
+      ],
+      "observed": [
+        "alpha"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "alpha"
+      ]
+    },
+    "evidence_requirement_correctness": {
+      "expected": [
+        "literal_exhaustive"
+      ],
+      "missing": [],
+      "observed": [
+        "literal_exhaustive"
+      ],
+      "status": "match",
+      "unexpected": []
+    },
+    "operator_correctness": {
+      "expected": [
+        "exact_chunk_search"
+      ],
+      "missing": [
+        "exact_chunk_search"
+      ],
+      "observed": [
+        "lexical_chunk_search",
+        "vector_search"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "lexical_chunk_search",
+        "vector_search"
+      ]
+    },
+    "plan_completeness": {
+      "observed": {
+        "declared_requirements": [
+          "literal_exhaustive"
+        ],
+        "invalid_operator_configuration": [],
+        "missing_operators": [
+          {
+            "operator": "exact_chunk_search",
+            "requirement": "literal_exhaustive"
+          }
+        ],
+        "repair_attempted": false,
+        "repair_result": null,
+        "satisfied_requirements": [],
+        "status": "incomplete",
+        "unavailable_operators": [],
+        "unsupported_requirements": []
+      },
+      "status": "incomplete"
+    },
+    "plan_executability": {
+      "observed": {
+        "blocking_reasons": [
+          "lexical_chunk_search: ",
+          "vector_search: no usable semantic_queries value is present in the current plan"
+        ],
+        "executable_operators": [],
+        "has_retrieval_intent": true,
+        "operator_results": [
+          {
+            "operator": "lexical_chunk_search",
+            "present_inputs": [],
+            "reason": "",
+            "required_inputs": [
+              "lexical_queries",
+              "semantic_queries"
+            ],
+            "status": "missing_input"
+          },
+          {
+            "operator": "vector_search",
+            "present_inputs": [],
+            "reason": "no usable semantic_queries value is present in the current plan",
+            "required_inputs": [
+              "semantic_queries"
+            ],
+            "status": "missing_input"
+          }
+        ],
+        "requested_operators": [
+          "lexical_chunk_search",
+          "vector_search"
+        ],
+        "status": "non_executable"
+      },
+      "status": "non_executable"
+    },
+    "referent_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [],
+      "status": "match",
+      "unexpected": []
+    }
+  },
+  "current_routing_assumption": "always_traverse",
+  "emitted_current_turn_subjects": [
+    "alpha"
+  ],
+  "emitted_response_mode": null,
+  "evidence_requirements": [
+    "literal_exhaustive"
+  ],
+  "executed_operators": [],
+  "execution_outcome": "blocked_retrieval",
+  "expected_current_turn_subjects": [
+    "concept alpha"
+  ],
+  "expected_evidence_requirements": [
+    "literal_exhaustive"
+  ],
+  "expected_operators": [
+    "exact_chunk_search"
+  ],
+  "expected_referents": [],
+  "expected_response_mode": "traverse",
+  "final_support_grade": null,
+  "input": "How many times does concept alpha occur?",
+  "irrelevant_selected_evidence_count": 0,
+  "malformed_status": null,
+  "metric_availability": {
+    "candidate_recall": {
+      "reason": "retrieval not executed; persisted inventory unavailable",
+      "status": "unavailable"
+    },
+    "final_answer_quality": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    },
+    "selection_precision": {
+      "reason": "retrieval and selection not executed",
+      "status": "unavailable"
+    },
+    "synthesis_support": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    }
+  },
+  "next_conversation_thread": {
+    "created_at": "2026-07-31T00:46:56.838039+00:00",
+    "latest_perturbation_hash": "d891b7beb87877020d89d7421fc6b74c8f687e316e3004c53085eb9db96f249c",
+    "latest_thread_state_hash": "9c6b4c1e02a54f6ffdabbd695deb78849a79716647e379c777a25b7f136c3b7b",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "How many times does concept alpha occur?",
+        "created_at": "2026-07-31T00:47:05.907292Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "exact-count",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:47:05.907289+00:00"
+  },
+  "next_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "alpha"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [
+        "alpha"
+      ],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [
+        "journal",
+        "personal_reflection"
+      ],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "9c6b4c1e02a54f6ffdabbd695deb78849a79716647e379c777a25b7f136c3b7b",
+    "latest_turn_id": 1,
+    "latest_user_input": "How many times does concept alpha occur?",
+    "recent_messages": [
+      {
+        "content": "How many times does concept alpha occur?",
+        "created_at": "2026-07-31T00:47:05.907208Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "alpha"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [
+          "alpha"
+        ],
+        "query": "",
+        "raw_user_input": "How many times does concept alpha occur?",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [
+          "journal",
+          "personal_reflection"
+        ],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "exact-count",
+    "updated_at": "2026-07-31T00:47:05.907197+00:00"
+  },
+  "persisted_state_path": "agent_harness\\implementation-projects\\active\\implementation-08-baseline-records-corrected2-state\\exact-count.json",
+  "plan_completeness": {
+    "declared_requirements": [
+      "literal_exhaustive"
+    ],
+    "invalid_operator_configuration": [],
+    "missing_operators": [
+      {
+        "operator": "exact_chunk_search",
+        "requirement": "literal_exhaustive"
+      }
+    ],
+    "repair_attempted": false,
+    "repair_result": null,
+    "satisfied_requirements": [],
+    "status": "incomplete",
+    "unavailable_operators": [],
+    "unsupported_requirements": []
+  },
+  "plan_executability": {
+    "blocking_reasons": [
+      "lexical_chunk_search: ",
+      "vector_search: no usable semantic_queries value is present in the current plan"
+    ],
+    "executable_operators": [],
+    "has_retrieval_intent": true,
+    "operator_results": [
+      {
+        "operator": "lexical_chunk_search",
+        "present_inputs": [],
+        "reason": "",
+        "required_inputs": [
+          "lexical_queries",
+          "semantic_queries"
+        ],
+        "status": "missing_input"
+      },
+      {
+        "operator": "vector_search",
+        "present_inputs": [],
+        "reason": "no usable semantic_queries value is present in the current plan",
+        "required_inputs": [
+          "semantic_queries"
+        ],
+        "status": "missing_input"
+      }
+    ],
+    "requested_operators": [
+      "lexical_chunk_search",
+      "vector_search"
+    ],
+    "status": "non_executable"
+  },
+  "planner_call_status": "parsed",
+  "planner_latency_ms": 9068.936,
+  "prior_message_history": [],
+  "prior_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": null,
+    "latest_turn_id": 0,
+    "latest_user_input": null,
+    "recent_messages": [],
+    "recent_semantic_turns": [],
+    "thread_id": "exact-count",
+    "updated_at": "2026-07-31T00:46:56.838039+00:00"
+  },
+  "raw_model_output": "{\n  \"raw_user_input\": \"How many times does concept alpha occur?\",\n  \"intent\": \"exact_count\",\n  \"query\": \"How many times does concept alpha occur?\",\n  \"entities\": [\"alpha\"],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [\"journal\", \"personal_reflection\"],\n    \"concepts\": [\"alpha\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [\"alpha\"],\n    \"evidence_requirements\": [\"literal_exhaustive\"],\n    \"semantic_queries\": [],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24}\n    ]\n  },\n  \"limitations\": []\n}",
+  "requested_operators": [
+    "lexical_chunk_search",
+    "vector_search"
+  ],
+  "requiredness": {
+    "lexical_chunk_search": false,
+    "vector_search": false
+  },
+  "resolved_referents": [],
+  "restart_backend_instance": false,
+  "retrieval_latency_ms": null,
+  "retrieval_results": [],
+  "scenario_id": "exact-count",
+  "selected_evidence_present": false,
+  "setup_turn": false,
+  "state_turn_record": {
+    "canonical_packet": {
+      "entities": [
+        "alpha"
+      ],
+      "intent": "exact_count",
+      "limitations": [],
+      "planner_diagnostics": {
+        "ignored_planner_fields": []
+      },
+      "planner_retrieval_plan": {
+        "concepts": [
+          "alpha"
+        ],
+        "evidence_requirements": [
+          "literal_exhaustive"
+        ],
+        "graph_seeds": [],
+        "intent_type": "semantic_traversal",
+        "lexical_queries": [],
+        "literal_terms": [
+          {
+            "match": "case_insensitive_substring",
+            "required": false,
+            "term": "alpha"
+          }
+        ],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [
+          "journal",
+          "personal_reflection"
+        ],
+        "semantic_queries": []
+      },
+      "query": "How many times does concept alpha occur?",
+      "raw_user_input": "How many times does concept alpha occur?",
+      "relations": [],
+      "resolved_referents": []
+    },
+    "compiler_response_status": "parsed",
+    "compiler_status": "parsed",
+    "prior_message_history": [],
+    "raw_model_output": "{\n  \"raw_user_input\": \"How many times does concept alpha occur?\",\n  \"intent\": \"exact_count\",\n  \"query\": \"How many times does concept alpha occur?\",\n  \"entities\": [\"alpha\"],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [\"journal\", \"personal_reflection\"],\n    \"concepts\": [\"alpha\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [\"alpha\"],\n    \"evidence_requirements\": [\"literal_exhaustive\"],\n    \"semantic_queries\": [],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24}\n    ]\n  },\n  \"limitations\": []\n}",
+    "resolved_referents": [],
+    "subjects": [
+      "alpha"
+    ],
+    "turn_id": "1",
+    "user_input": "How many times does concept alpha occur?"
+  },
+  "synthesis_called": false,
+  "synthesis_latency_ms": null,
+  "terminal_status": "completed",
+  "thread_id": "exact-count",
+  "topic_reset_stale_subjects_emitted": [],
+  "turn_id": "1"
+}

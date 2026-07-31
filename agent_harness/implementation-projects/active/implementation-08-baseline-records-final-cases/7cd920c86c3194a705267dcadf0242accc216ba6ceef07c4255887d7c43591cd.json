@@ -1,0 +1,537 @@
+{
+  "ambiguity_preserved": true,
+  "answer_bearing_candidate_present": false,
+  "available_planner_cost": null,
+  "available_planner_input_tokens": null,
+  "available_planner_output_tokens": null,
+  "available_synthesis_cost": null,
+  "available_synthesis_tokens": null,
+  "backend_instance": "OllamaSemanticCompilerBackend:2694487383168",
+  "backend_metadata": {
+    "backend_mode": "ollama",
+    "base_url": "http://localhost:11434",
+    "model": "qwen3:8b",
+    "semantic_compiler_prompt_hash": "c930adae911cbeeb20fc4c2844288dff6f35cca90445d0fa310312c300686cfd"
+  },
+  "baseline_capability_gap": "production_response_mode_schema_missing",
+  "blocking_reason": "planner parsed; retrieval and synthesis were not executed because persisted inventory was unavailable",
+  "candidate_count_by_surface": {
+    "exact": 0,
+    "graph": 0,
+    "lexical": 0,
+    "temporal": 0,
+    "vector": 0
+  },
+  "canonical_packet": {
+    "entities": [],
+    "intent": "comparison",
+    "limitations": [
+      "no applicable scope aliases for semantic comparison retrieval"
+    ],
+    "planner_diagnostics": {
+      "ignored_planner_fields": []
+    },
+    "planner_retrieval_plan": {
+      "concepts": [
+        "alpha",
+        "beta"
+      ],
+      "evidence_requirements": [
+        "semantic_similarity"
+      ],
+      "graph_seeds": [],
+      "intent_type": "semantic_traversal",
+      "lexical_queries": [],
+      "literal_terms": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "semantic_queries": [
+        "comparison of concept alpha",
+        "comparison of concept beta"
+      ]
+    },
+    "query": "comparison of concept alpha and concept beta",
+    "raw_user_input": "Set up a comparison of concept alpha and concept beta.",
+    "relations": [],
+    "resolved_referents": []
+  },
+  "canonical_plan": {
+    "concepts": [
+      "alpha",
+      "beta"
+    ],
+    "evidence_requirements": [
+      "semantic_similarity"
+    ],
+    "graph_seeds": [],
+    "intent_type": "semantic_traversal",
+    "lexical_queries": [],
+    "literal_terms": [],
+    "resolved_referents": [],
+    "retrieval_layers": [
+      {
+        "limit": 24,
+        "operator": "vector_search",
+        "required": false
+      },
+      {
+        "limit": 50,
+        "mode": "any_tokens",
+        "operator": "lexical_chunk_search",
+        "required": false
+      }
+    ],
+    "scope_requests": [],
+    "semantic_queries": [
+      "comparison of concept alpha",
+      "comparison of concept beta"
+    ]
+  },
+  "carry_source": null,
+  "case_duration_ms": 9418.322,
+  "case_id": "comparative-continuation:1",
+  "compiler_status": "parsed",
+  "component_scores": {
+    "current_turn_target_correctness": {
+      "expected": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "missing": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "observed": [
+        "alpha",
+        "beta"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "alpha",
+        "beta"
+      ]
+    },
+    "evidence_requirement_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [
+        "semantic_similarity"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "semantic_similarity"
+      ]
+    },
+    "operator_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [
+        "lexical_chunk_search",
+        "vector_search"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "lexical_chunk_search",
+        "vector_search"
+      ]
+    },
+    "plan_completeness": {
+      "observed": {
+        "declared_requirements": [
+          "semantic_similarity"
+        ],
+        "invalid_operator_configuration": [],
+        "missing_operators": [],
+        "repair_attempted": false,
+        "repair_result": null,
+        "satisfied_requirements": [
+          "semantic_similarity"
+        ],
+        "status": "complete",
+        "unavailable_operators": [],
+        "unsupported_requirements": []
+      },
+      "status": "complete"
+    },
+    "plan_executability": {
+      "observed": {
+        "blocking_reasons": [],
+        "executable_operators": [
+          "vector_search",
+          "lexical_chunk_search"
+        ],
+        "has_retrieval_intent": true,
+        "operator_results": [
+          {
+            "operator": "vector_search",
+            "present_inputs": [
+              "semantic_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "semantic_queries"
+            ],
+            "status": "executable"
+          },
+          {
+            "operator": "lexical_chunk_search",
+            "present_inputs": [
+              "semantic_queries"
+            ],
+            "reason": "lexical_queries absent; using current-plan semantic_queries as the explicit lexical fallback",
+            "required_inputs": [
+              "lexical_queries",
+              "semantic_queries"
+            ],
+            "status": "executable"
+          }
+        ],
+        "requested_operators": [
+          "vector_search",
+          "lexical_chunk_search"
+        ],
+        "status": "executable"
+      },
+      "status": "executable"
+    },
+    "referent_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [],
+      "status": "match",
+      "unexpected": []
+    }
+  },
+  "current_routing_assumption": "always_traverse",
+  "emitted_current_turn_subjects": [
+    "alpha",
+    "beta"
+  ],
+  "emitted_response_mode": null,
+  "evidence_requirements": [
+    "semantic_similarity"
+  ],
+  "executed_operators": [],
+  "execution_outcome": "blocked_retrieval",
+  "expected_current_turn_subjects": [
+    "concept alpha",
+    "concept beta"
+  ],
+  "expected_evidence_requirements": [],
+  "expected_operators": [],
+  "expected_referents": [],
+  "expected_response_mode": "traverse",
+  "final_support_grade": null,
+  "input": "Set up a comparison of concept alpha and concept beta.",
+  "irrelevant_selected_evidence_count": 0,
+  "malformed_status": null,
+  "metric_availability": {
+    "candidate_recall": {
+      "reason": "retrieval not executed; persisted inventory unavailable",
+      "status": "unavailable"
+    },
+    "final_answer_quality": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    },
+    "selection_precision": {
+      "reason": "retrieval and selection not executed",
+      "status": "unavailable"
+    },
+    "synthesis_support": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    }
+  },
+  "next_conversation_thread": {
+    "created_at": "2026-07-31T00:49:29.919718+00:00",
+    "latest_perturbation_hash": "4a56a4a51c97bc485baddbbb2a57f5703e779d9c43e553c78fa3f029cc79295c",
+    "latest_thread_state_hash": "9997704eafe323abdf5a808101f2618e700c2b6e44f88ab9859e1ae9a329c7a3",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Set up a comparison of concept alpha and concept beta.",
+        "created_at": "2026-07-31T00:49:39.338058Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "comparative-continuation",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:49:39.338055+00:00"
+  },
+  "next_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "alpha",
+        "beta"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": "comparison of concept alpha",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "comparison of concept alpha",
+        "comparison of concept beta"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "9997704eafe323abdf5a808101f2618e700c2b6e44f88ab9859e1ae9a329c7a3",
+    "latest_turn_id": 1,
+    "latest_user_input": "Set up a comparison of concept alpha and concept beta.",
+    "recent_messages": [
+      {
+        "content": "Set up a comparison of concept alpha and concept beta.",
+        "created_at": "2026-07-31T00:49:39.337979Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "alpha",
+          "beta"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "comparison of concept alpha",
+        "raw_user_input": "Set up a comparison of concept alpha and concept beta.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "comparison of concept alpha",
+          "comparison of concept beta"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "comparative-continuation",
+    "updated_at": "2026-07-31T00:49:39.337967+00:00"
+  },
+  "persisted_state_path": "agent_harness\\implementation-projects\\active\\implementation-08-baseline-records-corrected2-state\\comparative-continuation.json",
+  "plan_completeness": {
+    "declared_requirements": [
+      "semantic_similarity"
+    ],
+    "invalid_operator_configuration": [],
+    "missing_operators": [],
+    "repair_attempted": false,
+    "repair_result": null,
+    "satisfied_requirements": [
+      "semantic_similarity"
+    ],
+    "status": "complete",
+    "unavailable_operators": [],
+    "unsupported_requirements": []
+  },
+  "plan_executability": {
+    "blocking_reasons": [],
+    "executable_operators": [
+      "vector_search",
+      "lexical_chunk_search"
+    ],
+    "has_retrieval_intent": true,
+    "operator_results": [
+      {
+        "operator": "vector_search",
+        "present_inputs": [
+          "semantic_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "semantic_queries"
+        ],
+        "status": "executable"
+      },
+      {
+        "operator": "lexical_chunk_search",
+        "present_inputs": [
+          "semantic_queries"
+        ],
+        "reason": "lexical_queries absent; using current-plan semantic_queries as the explicit lexical fallback",
+        "required_inputs": [
+          "lexical_queries",
+          "semantic_queries"
+        ],
+        "status": "executable"
+      }
+    ],
+    "requested_operators": [
+      "vector_search",
+      "lexical_chunk_search"
+    ],
+    "status": "executable"
+  },
+  "planner_call_status": "parsed",
+  "planner_latency_ms": 9418.019,
+  "prior_message_history": [],
+  "prior_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": null,
+    "latest_turn_id": 0,
+    "latest_user_input": null,
+    "recent_messages": [],
+    "recent_semantic_turns": [],
+    "thread_id": "comparative-continuation",
+    "updated_at": "2026-07-31T00:49:29.919718+00:00"
+  },
+  "raw_model_output": "{\n  \"raw_user_input\": \"Set up a comparison of concept alpha and concept beta.\",\n  \"intent\": \"comparison\",\n  \"query\": \"comparison of concept alpha and concept beta\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"alpha\", \"beta\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"semantic_similarity\"],\n    \"semantic_queries\": [\"comparison of concept alpha\", \"comparison of concept beta\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"}\n    ]\n  },\n  \"limitations\": [\"no applicable scope aliases for semantic comparison retrieval\"]\n}",
+  "requested_operators": [
+    "vector_search",
+    "lexical_chunk_search"
+  ],
+  "requiredness": {
+    "lexical_chunk_search": false,
+    "vector_search": false
+  },
+  "resolved_referents": [],
+  "restart_backend_instance": false,
+  "retrieval_latency_ms": null,
+  "retrieval_results": [],
+  "scenario_id": "comparative-continuation",
+  "selected_evidence_present": false,
+  "setup_turn": true,
+  "state_turn_record": {
+    "canonical_packet": {
+      "entities": [],
+      "intent": "comparison",
+      "limitations": [
+        "no applicable scope aliases for semantic comparison retrieval"
+      ],
+      "planner_diagnostics": {
+        "ignored_planner_fields": []
+      },
+      "planner_retrieval_plan": {
+        "concepts": [
+          "alpha",
+          "beta"
+        ],
+        "evidence_requirements": [
+          "semantic_similarity"
+        ],
+        "graph_seeds": [],
+        "intent_type": "semantic_traversal",
+        "lexical_queries": [],
+        "literal_terms": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "semantic_queries": [
+          "comparison of concept alpha",
+          "comparison of concept beta"
+        ]
+      },
+      "query": "comparison of concept alpha and concept beta",
+      "raw_user_input": "Set up a comparison of concept alpha and concept beta.",
+      "relations": [],
+      "resolved_referents": []
+    },
+    "compiler_response_status": "parsed",
+    "compiler_status": "parsed",
+    "prior_message_history": [],
+    "raw_model_output": "{\n  \"raw_user_input\": \"Set up a comparison of concept alpha and concept beta.\",\n  \"intent\": \"comparison\",\n  \"query\": \"comparison of concept alpha and concept beta\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"alpha\", \"beta\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"semantic_similarity\"],\n    \"semantic_queries\": [\"comparison of concept alpha\", \"comparison of concept beta\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"}\n    ]\n  },\n  \"limitations\": [\"no applicable scope aliases for semantic comparison retrieval\"]\n}",
+    "resolved_referents": [],
+    "subjects": [
+      "alpha",
+      "beta"
+    ],
+    "turn_id": "1",
+    "user_input": "Set up a comparison of concept alpha and concept beta."
+  },
+  "synthesis_called": false,
+  "synthesis_latency_ms": null,
+  "terminal_status": "completed",
+  "thread_id": "comparative-continuation",
+  "topic_reset_stale_subjects_emitted": [],
+  "turn_id": "1"
+}

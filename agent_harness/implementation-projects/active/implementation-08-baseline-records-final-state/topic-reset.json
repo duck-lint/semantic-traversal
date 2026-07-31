@@ -1,0 +1,302 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:49:50.788870+00:00",
+    "latest_perturbation_hash": "d8c673d8177582499dc9c104b0d5bd526165c6b160eec321fc0bc03087ae16bc",
+    "latest_thread_state_hash": "c5e429505083c3318b96760d4536d61c255ae4f32212460ceadd9832aeade4b5",
+    "latest_turn_id": 2,
+    "messages": [
+      {
+        "content": "Discuss concept alpha.",
+        "created_at": "2026-07-31T00:50:02.922029Z",
+        "role": "user",
+        "turn_id": 1
+      },
+      {
+        "content": "What is the boiling point of water?",
+        "created_at": "2026-07-31T00:50:15.267874Z",
+        "role": "user",
+        "turn_id": 2
+      }
+    ],
+    "thread_id": "topic-reset",
+    "turn_count": 2,
+    "updated_at": "2026-07-31T00:50:15.267870+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "boiling point",
+        "water"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [
+        "boiling point",
+        "water"
+      ],
+      "literal_terms": [],
+      "query": "boiling point of water",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "boiling point of water"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "c5e429505083c3318b96760d4536d61c255ae4f32212460ceadd9832aeade4b5",
+    "latest_turn_id": 2,
+    "latest_user_input": "What is the boiling point of water?",
+    "recent_messages": [
+      {
+        "content": "Discuss concept alpha.",
+        "created_at": "2026-07-31T00:50:02.921942Z",
+        "role": "user",
+        "turn_id": 1
+      },
+      {
+        "content": "What is the boiling point of water?",
+        "created_at": "2026-07-31T00:50:15.267770Z",
+        "role": "user",
+        "turn_id": 2
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "concept alpha"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [
+          "concept alpha"
+        ],
+        "literal_terms": [],
+        "query": "concept alpha",
+        "raw_user_input": "Discuss concept alpha.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [
+          "journal",
+          "personal_reflection"
+        ],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "concept alpha"
+        ],
+        "turn_id": 1
+      },
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "boiling point",
+          "water"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [
+          "boiling point",
+          "water"
+        ],
+        "literal_terms": [],
+        "query": "boiling point of water",
+        "raw_user_input": "What is the boiling point of water?",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "boiling point of water"
+        ],
+        "turn_id": 2
+      }
+    ],
+    "thread_id": "topic-reset",
+    "updated_at": "2026-07-31T00:50:15.267757+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "Discuss concept alpha.",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "concept alpha"
+          ],
+          "evidence_requirements": [
+            "lexical_relevance",
+            "semantic_similarity"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [
+            "concept alpha"
+          ],
+          "literal_terms": [],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            }
+          ],
+          "scope_requests": [
+            "journal",
+            "personal_reflection"
+          ],
+          "semantic_queries": [
+            "concept alpha"
+          ]
+        },
+        "query": "Discuss concept alpha. regarding concept alpha",
+        "raw_user_input": "Discuss concept alpha.",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Discuss concept alpha.\",\n  \"intent\": \"Discuss concept alpha.\",\n  \"query\": \"Discuss concept alpha.\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [\"journal\", \"personal_reflection\"],\n    \"concepts\": [\"concept alpha\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"lexical_relevance\", \"semantic_similarity\"],\n    \"semantic_queries\": [\"concept alpha\"],\n    \"lexical_queries\": [\"concept alpha\"],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [],
+      "subjects": [
+        "concept alpha"
+      ],
+      "turn_id": "1",
+      "user_input": "Discuss concept alpha."
+    },
+    {
+      "canonical_packet": {
+        "entities": [
+          "water"
+        ],
+        "intent": "factual_retrieval",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "boiling point",
+            "water"
+          ],
+          "evidence_requirements": [
+            "semantic_similarity",
+            "lexical_relevance"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [
+            "boiling point",
+            "water"
+          ],
+          "literal_terms": [],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "boiling point of water"
+          ]
+        },
+        "query": "boiling point of water",
+        "raw_user_input": "What is the boiling point of water?",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [
+        {
+          "content": "Discuss concept alpha.",
+          "created_at": "2026-07-31T00:50:02.921942Z",
+          "role": "user",
+          "turn_id": 1
+        }
+      ],
+      "raw_model_output": "{\n  \"raw_user_input\": \"What is the boiling point of water?\",\n  \"intent\": \"factual_retrieval\",\n  \"query\": \"boiling point of water\",\n  \"entities\": [\"water\"],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"boiling point\", \"water\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"semantic_similarity\", \"lexical_relevance\"],\n    \"semantic_queries\": [\"boiling point of water\"],\n    \"lexical_queries\": [\"boiling point\", \"water\"],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [],
+      "subjects": [
+        "water",
+        "boiling point"
+      ],
+      "turn_id": "2",
+      "user_input": "What is the boiling point of water?"
+    }
+  ]
+}

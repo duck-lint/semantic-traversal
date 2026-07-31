@@ -1,0 +1,275 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:48:40.134095+00:00",
+    "latest_perturbation_hash": "d0c0113c4c7799b7ef3c0b2f834a3f0f6c8afcecd06b27f47930a2857f45702d",
+    "latest_thread_state_hash": "ae33dc3b8395107a6b8dc64a0153a613f1dad0ca1e9abfa13947d90136bf42bc",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Find evidence for concept alpha with an unavailable planner.",
+        "created_at": "2026-07-31T00:48:40.134724Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "planner-unavailable",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:48:40.134717+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "evidence",
+        "concept",
+        "alpha",
+        "unavailable",
+        "planner"
+      ],
+      "entities": [],
+      "graph_seeds": [
+        "evidence concept alpha unavailable planner"
+      ],
+      "lexical_queries": [
+        "evidence",
+        "concept",
+        "alpha",
+        "unavailable",
+        "planner"
+      ],
+      "literal_terms": [
+        "evidence",
+        "concept",
+        "alpha",
+        "unavailable",
+        "planner"
+      ],
+      "query": "evidence concept alpha unavailable planner",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 200,
+          "operator": "exact_chunk_search",
+          "required": true,
+          "return_total_count": true
+        },
+        {
+          "limit": 50,
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "evidence concept alpha unavailable planner"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "ae33dc3b8395107a6b8dc64a0153a613f1dad0ca1e9abfa13947d90136bf42bc",
+    "latest_turn_id": 1,
+    "latest_user_input": "Find evidence for concept alpha with an unavailable planner.",
+    "recent_messages": [
+      {
+        "content": "Find evidence for concept alpha with an unavailable planner.",
+        "created_at": "2026-07-31T00:48:40.134588Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "evidence",
+          "concept",
+          "alpha",
+          "unavailable",
+          "planner"
+        ],
+        "entities": [],
+        "graph_seeds": [
+          "evidence concept alpha unavailable planner"
+        ],
+        "lexical_queries": [
+          "evidence",
+          "concept",
+          "alpha",
+          "unavailable",
+          "planner"
+        ],
+        "literal_terms": [
+          "evidence",
+          "concept",
+          "alpha",
+          "unavailable",
+          "planner"
+        ],
+        "query": "evidence concept alpha unavailable planner",
+        "raw_user_input": "Find evidence for concept alpha with an unavailable planner.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 200,
+            "operator": "exact_chunk_search",
+            "required": true,
+            "return_total_count": true
+          },
+          {
+            "limit": 50,
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "evidence concept alpha unavailable planner"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "planner-unavailable",
+    "updated_at": "2026-07-31T00:48:40.134579+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "deterministic retrieval planning fallback",
+        "limitations": [
+          "semantic compiler backend unavailable; deterministic lexical fallback used"
+        ],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "evidence",
+            "concept",
+            "alpha",
+            "unavailable",
+            "planner"
+          ],
+          "evidence_requirements": [
+            "literal_exhaustive"
+          ],
+          "graph_seeds": [
+            "evidence concept alpha unavailable planner"
+          ],
+          "intent_type": "exact_search",
+          "lexical_queries": [
+            "evidence",
+            "concept",
+            "alpha",
+            "unavailable",
+            "planner"
+          ],
+          "literal_terms": [
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "evidence"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "concept"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "alpha"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "unavailable"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "planner"
+            }
+          ],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 200,
+              "operator": "exact_chunk_search",
+              "required": true,
+              "return_total_count": true
+            },
+            {
+              "limit": 50,
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            },
+            {
+              "depth": 1,
+              "operator": "graph_expand",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "evidence concept alpha unavailable planner"
+          ]
+        },
+        "query": "evidence concept alpha unavailable planner",
+        "raw_user_input": "Find evidence for concept alpha with an unavailable planner.",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "unavailable",
+      "compiler_status": "unavailable",
+      "prior_message_history": [],
+      "raw_model_output": null,
+      "resolved_referents": [],
+      "subjects": [
+        "evidence",
+        "concept",
+        "alpha",
+        "unavailable",
+        "planner"
+      ],
+      "turn_id": "1",
+      "user_input": "Find evidence for concept alpha with an unavailable planner."
+    }
+  ]
+}

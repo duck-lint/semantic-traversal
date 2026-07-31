@@ -1,0 +1,164 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:46:05.131837+00:00",
+    "latest_perturbation_hash": "80df8e56a318d7f0e77945f1e06b8719e874c4f2e0e95a5d0eb5e22c3276b666",
+    "latest_thread_state_hash": "8b8e00c1f480e8db6ad99e1489c16c5183dd6d7ee85ff3bedb8dcc8839b3bf60",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Rewrite this sentence more clearly: The process is hard to understand.",
+        "created_at": "2026-07-31T00:46:16.811720Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "direct-rewrite",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:46:16.811717+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "8b8e00c1f480e8db6ad99e1489c16c5183dd6d7ee85ff3bedb8dcc8839b3bf60",
+    "latest_turn_id": 1,
+    "latest_user_input": "Rewrite this sentence more clearly: The process is hard to understand.",
+    "recent_messages": [
+      {
+        "content": "Rewrite this sentence more clearly: The process is hard to understand.",
+        "created_at": "2026-07-31T00:46:16.811637Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "",
+        "raw_user_input": "Rewrite this sentence more clearly: The process is hard to understand.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "direct-rewrite",
+    "updated_at": "2026-07-31T00:46:16.811625+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "rewrite",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [],
+          "evidence_requirements": [],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [],
+          "literal_terms": [],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            },
+            {
+              "depth": 1,
+              "operator": "graph_expand",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": []
+        },
+        "query": "Rewrite this sentence more clearly: The process is hard to understand.",
+        "raw_user_input": "Rewrite this sentence more clearly: The process is hard to understand.",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Rewrite this sentence more clearly: The process is hard to understand.\",\n  \"intent\": \"rewrite\",\n  \"query\": \"Rewrite this sentence more clearly: The process is hard to understand.\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [],\n    \"semantic_queries\": [],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"graph_expand\", \"required\": false, \"depth\": 1}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [],
+      "subjects": [],
+      "turn_id": "1",
+      "user_input": "Rewrite this sentence more clearly: The process is hard to understand."
+    }
+  ]
+}

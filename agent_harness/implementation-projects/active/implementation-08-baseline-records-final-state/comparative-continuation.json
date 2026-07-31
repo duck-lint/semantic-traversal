@@ -1,0 +1,298 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:49:29.919718+00:00",
+    "latest_perturbation_hash": "a06a3e88a7459a7eb344f84c09d25a6e87404374fb87cc1c62df03ff38ab8ed4",
+    "latest_thread_state_hash": "b3154244043e563a94f1eea7cfc85b674a0d277796107d404a59bc083d613644",
+    "latest_turn_id": 2,
+    "messages": [
+      {
+        "content": "Set up a comparison of concept alpha and concept beta.",
+        "created_at": "2026-07-31T00:49:39.338058Z",
+        "role": "user",
+        "turn_id": 1
+      },
+      {
+        "content": "Which one is broader?",
+        "created_at": "2026-07-31T00:49:50.779719Z",
+        "role": "user",
+        "turn_id": 2
+      }
+    ],
+    "thread_id": "comparative-continuation",
+    "turn_count": 2,
+    "updated_at": "2026-07-31T00:49:50.779715+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "alpha",
+        "beta"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": "comparison of concept alpha",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "comparison of concept alpha",
+        "comparison of concept beta",
+        "scope of concept alpha",
+        "scope of concept beta"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "b3154244043e563a94f1eea7cfc85b674a0d277796107d404a59bc083d613644",
+    "latest_turn_id": 2,
+    "latest_user_input": "Which one is broader?",
+    "recent_messages": [
+      {
+        "content": "Set up a comparison of concept alpha and concept beta.",
+        "created_at": "2026-07-31T00:49:39.337979Z",
+        "role": "user",
+        "turn_id": 1
+      },
+      {
+        "content": "Which one is broader?",
+        "created_at": "2026-07-31T00:49:50.779623Z",
+        "role": "user",
+        "turn_id": 2
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "alpha",
+          "beta"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "comparison of concept alpha",
+        "raw_user_input": "Set up a comparison of concept alpha and concept beta.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "comparison of concept alpha",
+          "comparison of concept beta"
+        ],
+        "turn_id": 1
+      },
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "alpha",
+          "beta"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "comparison of concept alpha",
+        "raw_user_input": "Which one is broader?",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "comparison of concept alpha",
+          "comparison of concept beta",
+          "scope of concept alpha",
+          "scope of concept beta"
+        ],
+        "turn_id": 2
+      }
+    ],
+    "thread_id": "comparative-continuation",
+    "updated_at": "2026-07-31T00:49:50.779609+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "comparison",
+        "limitations": [
+          "no applicable scope aliases for semantic comparison retrieval"
+        ],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "alpha",
+            "beta"
+          ],
+          "evidence_requirements": [
+            "semantic_similarity"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [],
+          "literal_terms": [],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            },
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "comparison of concept alpha",
+            "comparison of concept beta"
+          ]
+        },
+        "query": "comparison of concept alpha and concept beta",
+        "raw_user_input": "Set up a comparison of concept alpha and concept beta.",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Set up a comparison of concept alpha and concept beta.\",\n  \"intent\": \"comparison\",\n  \"query\": \"comparison of concept alpha and concept beta\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"alpha\", \"beta\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"semantic_similarity\"],\n    \"semantic_queries\": [\"comparison of concept alpha\", \"comparison of concept beta\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"}\n    ]\n  },\n  \"limitations\": [\"no applicable scope aliases for semantic comparison retrieval\"]\n}",
+      "resolved_referents": [],
+      "subjects": [
+        "alpha",
+        "beta"
+      ],
+      "turn_id": "1",
+      "user_input": "Set up a comparison of concept alpha and concept beta."
+    },
+    {
+      "canonical_packet": {
+        "entities": [
+          "alpha",
+          "beta"
+        ],
+        "intent": "comparison_of_concepts",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "alpha",
+            "beta"
+          ],
+          "evidence_requirements": [
+            "semantic_similarity"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [],
+          "literal_terms": [],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "comparison of concept alpha",
+            "comparison of concept beta",
+            "scope of concept alpha",
+            "scope of concept beta"
+          ]
+        },
+        "query": "comparison of concept alpha and beta",
+        "raw_user_input": "Which one is broader?",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [
+        {
+          "content": "Set up a comparison of concept alpha and concept beta.",
+          "created_at": "2026-07-31T00:49:39.337979Z",
+          "role": "user",
+          "turn_id": 1
+        }
+      ],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Which one is broader?\",\n  \"intent\": \"comparison_of_concepts\",\n  \"query\": \"comparison of concept alpha and beta\",\n  \"entities\": [\"alpha\", \"beta\"],\n  \"relations\": [],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"alpha\", \"beta\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"semantic_similarity\"],\n    \"semantic_queries\": [\"comparison of concept alpha\", \"comparison of concept beta\", \"scope of concept alpha\", \"scope of concept beta\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [],
+      "subjects": [
+        "alpha",
+        "beta"
+      ],
+      "turn_id": "2",
+      "user_input": "Which one is broader?"
+    }
+  ]
+}

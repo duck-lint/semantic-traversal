@@ -1,0 +1,575 @@
+{
+  "ambiguity_preserved": true,
+  "answer_bearing_candidate_present": false,
+  "available_planner_cost": null,
+  "available_planner_input_tokens": null,
+  "available_planner_output_tokens": null,
+  "available_synthesis_cost": null,
+  "available_synthesis_tokens": null,
+  "backend_instance": "OllamaSemanticCompilerBackend:2694487672992",
+  "backend_metadata": {
+    "backend_mode": "ollama",
+    "base_url": "http://localhost:11434",
+    "model": "qwen3:8b",
+    "semantic_compiler_prompt_hash": "81e74672713f09f80b1a6e7863db77cd1c4b25a6bc1efecef5f711c89c9883f1"
+  },
+  "baseline_capability_gap": "production_response_mode_schema_missing",
+  "blocking_reason": "planner parsed; retrieval and synthesis were not executed because persisted inventory was unavailable",
+  "candidate_count_by_surface": {
+    "exact": 0,
+    "graph": 0,
+    "lexical": 0,
+    "temporal": 0,
+    "vector": 0
+  },
+  "canonical_packet": {
+    "entities": [],
+    "intent": "semantic_traversal",
+    "limitations": [
+      "no retrieval required for memory retention"
+    ],
+    "planner_diagnostics": {
+      "ignored_planner_fields": []
+    },
+    "planner_retrieval_plan": {
+      "concepts": [
+        "concept alpha"
+      ],
+      "evidence_requirements": [],
+      "graph_seeds": [],
+      "intent_type": "semantic_traversal",
+      "lexical_queries": [],
+      "literal_terms": [],
+      "resolved_referents": [
+        "concept alpha"
+      ],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "semantic_queries": [
+        "concept alpha"
+      ]
+    },
+    "query": "concept alpha",
+    "raw_user_input": "Remember concept alpha for the next turn.",
+    "relations": [],
+    "resolved_referents": [
+      "concept alpha"
+    ]
+  },
+  "canonical_plan": {
+    "concepts": [
+      "concept alpha"
+    ],
+    "evidence_requirements": [],
+    "graph_seeds": [],
+    "intent_type": "semantic_traversal",
+    "lexical_queries": [],
+    "literal_terms": [],
+    "resolved_referents": [
+      "concept alpha"
+    ],
+    "retrieval_layers": [
+      {
+        "limit": 50,
+        "mode": "any_tokens",
+        "operator": "lexical_chunk_search",
+        "required": false
+      },
+      {
+        "limit": 24,
+        "operator": "vector_search",
+        "required": false
+      },
+      {
+        "depth": 1,
+        "operator": "graph_expand",
+        "required": false
+      }
+    ],
+    "scope_requests": [],
+    "semantic_queries": [
+      "concept alpha"
+    ]
+  },
+  "carry_source": null,
+  "case_duration_ms": 11595.118,
+  "case_id": "restart-recovery:1",
+  "compiler_status": "parsed",
+  "component_scores": {
+    "current_turn_target_correctness": {
+      "expected": [
+        "concept alpha"
+      ],
+      "missing": [],
+      "observed": [
+        "concept alpha"
+      ],
+      "status": "match",
+      "unexpected": []
+    },
+    "evidence_requirement_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [],
+      "status": "match",
+      "unexpected": []
+    },
+    "operator_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [
+        "graph_expand",
+        "lexical_chunk_search",
+        "vector_search"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "graph_expand",
+        "lexical_chunk_search",
+        "vector_search"
+      ]
+    },
+    "plan_completeness": {
+      "observed": {
+        "declared_requirements": [],
+        "invalid_operator_configuration": [],
+        "missing_operators": [],
+        "repair_attempted": false,
+        "repair_result": null,
+        "satisfied_requirements": [],
+        "status": "complete",
+        "unavailable_operators": [],
+        "unsupported_requirements": []
+      },
+      "status": "complete"
+    },
+    "plan_executability": {
+      "observed": {
+        "blocking_reasons": [],
+        "executable_operators": [
+          "lexical_chunk_search",
+          "vector_search",
+          "graph_expand"
+        ],
+        "has_retrieval_intent": true,
+        "operator_results": [
+          {
+            "operator": "lexical_chunk_search",
+            "present_inputs": [
+              "semantic_queries"
+            ],
+            "reason": "lexical_queries absent; using current-plan semantic_queries as the explicit lexical fallback",
+            "required_inputs": [
+              "lexical_queries",
+              "semantic_queries"
+            ],
+            "status": "executable"
+          },
+          {
+            "operator": "vector_search",
+            "present_inputs": [
+              "semantic_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "semantic_queries"
+            ],
+            "status": "executable"
+          },
+          {
+            "operator": "graph_expand",
+            "present_inputs": [
+              "semantic_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "graph_seeds",
+              "semantic_queries"
+            ],
+            "status": "executable"
+          }
+        ],
+        "requested_operators": [
+          "lexical_chunk_search",
+          "vector_search",
+          "graph_expand"
+        ],
+        "status": "executable"
+      },
+      "status": "executable"
+    },
+    "referent_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [
+        "concept alpha"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "concept alpha"
+      ]
+    }
+  },
+  "current_routing_assumption": "always_traverse",
+  "emitted_current_turn_subjects": [
+    "concept alpha"
+  ],
+  "emitted_response_mode": null,
+  "evidence_requirements": [],
+  "executed_operators": [],
+  "execution_outcome": "blocked_retrieval",
+  "expected_current_turn_subjects": [
+    "concept alpha"
+  ],
+  "expected_evidence_requirements": [],
+  "expected_operators": [],
+  "expected_referents": [],
+  "expected_response_mode": "traverse",
+  "final_support_grade": null,
+  "input": "Remember concept alpha for the next turn.",
+  "irrelevant_selected_evidence_count": 0,
+  "malformed_status": null,
+  "metric_availability": {
+    "candidate_recall": {
+      "reason": "retrieval not executed; persisted inventory unavailable",
+      "status": "unavailable"
+    },
+    "final_answer_quality": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    },
+    "selection_precision": {
+      "reason": "retrieval and selection not executed",
+      "status": "unavailable"
+    },
+    "synthesis_support": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    }
+  },
+  "next_conversation_thread": {
+    "created_at": "2026-07-31T00:50:38.922221+00:00",
+    "latest_perturbation_hash": "e53dedb9092ad5e31d7a479f5ff6efd055a4aa28a0b47fb61fe76a90cd4d165a",
+    "latest_thread_state_hash": "a2eadbb35ab8f0fe664516a87ca3098d515cfeb314171f245fe1d429a75054ec",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Remember concept alpha for the next turn.",
+        "created_at": "2026-07-31T00:50:50.517349Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "restart-recovery",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:50:50.517346+00:00"
+  },
+  "next_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "concept alpha"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": "concept alpha",
+      "relations": [],
+      "resolved_referents": [
+        "concept alpha"
+      ],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "concept alpha"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "a2eadbb35ab8f0fe664516a87ca3098d515cfeb314171f245fe1d429a75054ec",
+    "latest_turn_id": 1,
+    "latest_user_input": "Remember concept alpha for the next turn.",
+    "recent_messages": [
+      {
+        "content": "Remember concept alpha for the next turn.",
+        "created_at": "2026-07-31T00:50:50.517268Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "concept alpha"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "concept alpha",
+        "raw_user_input": "Remember concept alpha for the next turn.",
+        "relations": [],
+        "resolved_referents": [
+          "concept alpha"
+        ],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "concept alpha"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "restart-recovery",
+    "updated_at": "2026-07-31T00:50:50.517256+00:00"
+  },
+  "persisted_state_path": "agent_harness\\implementation-projects\\active\\implementation-08-baseline-records-corrected2-state\\restart-recovery.json",
+  "plan_completeness": {
+    "declared_requirements": [],
+    "invalid_operator_configuration": [],
+    "missing_operators": [],
+    "repair_attempted": false,
+    "repair_result": null,
+    "satisfied_requirements": [],
+    "status": "complete",
+    "unavailable_operators": [],
+    "unsupported_requirements": []
+  },
+  "plan_executability": {
+    "blocking_reasons": [],
+    "executable_operators": [
+      "lexical_chunk_search",
+      "vector_search",
+      "graph_expand"
+    ],
+    "has_retrieval_intent": true,
+    "operator_results": [
+      {
+        "operator": "lexical_chunk_search",
+        "present_inputs": [
+          "semantic_queries"
+        ],
+        "reason": "lexical_queries absent; using current-plan semantic_queries as the explicit lexical fallback",
+        "required_inputs": [
+          "lexical_queries",
+          "semantic_queries"
+        ],
+        "status": "executable"
+      },
+      {
+        "operator": "vector_search",
+        "present_inputs": [
+          "semantic_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "semantic_queries"
+        ],
+        "status": "executable"
+      },
+      {
+        "operator": "graph_expand",
+        "present_inputs": [
+          "semantic_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "graph_seeds",
+          "semantic_queries"
+        ],
+        "status": "executable"
+      }
+    ],
+    "requested_operators": [
+      "lexical_chunk_search",
+      "vector_search",
+      "graph_expand"
+    ],
+    "status": "executable"
+  },
+  "planner_call_status": "parsed",
+  "planner_latency_ms": 11594.829,
+  "prior_message_history": [],
+  "prior_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": null,
+    "latest_turn_id": 0,
+    "latest_user_input": null,
+    "recent_messages": [],
+    "recent_semantic_turns": [],
+    "thread_id": "restart-recovery",
+    "updated_at": "2026-07-31T00:50:38.922221+00:00"
+  },
+  "raw_model_output": "{\n  \"raw_user_input\": \"Remember concept alpha for the next turn.\",\n  \"intent\": \"semantic_traversal\",\n  \"query\": \"concept alpha\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [\"concept alpha\"],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"concept alpha\"],\n    \"resolved_referents\": [\"concept alpha\"],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [],\n    \"semantic_queries\": [\"concept alpha\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"graph_expand\", \"required\": false, \"depth\": 1}\n    ]\n  },\n  \"limitations\": [\"no retrieval required for memory retention\"]\n}",
+  "requested_operators": [
+    "lexical_chunk_search",
+    "vector_search",
+    "graph_expand"
+  ],
+  "requiredness": {
+    "graph_expand": false,
+    "lexical_chunk_search": false,
+    "vector_search": false
+  },
+  "resolved_referents": [
+    "concept alpha"
+  ],
+  "restart_backend_instance": false,
+  "retrieval_latency_ms": null,
+  "retrieval_results": [],
+  "scenario_id": "restart-recovery",
+  "selected_evidence_present": false,
+  "setup_turn": true,
+  "state_turn_record": {
+    "canonical_packet": {
+      "entities": [],
+      "intent": "semantic_traversal",
+      "limitations": [
+        "no retrieval required for memory retention"
+      ],
+      "planner_diagnostics": {
+        "ignored_planner_fields": []
+      },
+      "planner_retrieval_plan": {
+        "concepts": [
+          "concept alpha"
+        ],
+        "evidence_requirements": [],
+        "graph_seeds": [],
+        "intent_type": "semantic_traversal",
+        "lexical_queries": [],
+        "literal_terms": [],
+        "resolved_referents": [
+          "concept alpha"
+        ],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "semantic_queries": [
+          "concept alpha"
+        ]
+      },
+      "query": "concept alpha",
+      "raw_user_input": "Remember concept alpha for the next turn.",
+      "relations": [],
+      "resolved_referents": [
+        "concept alpha"
+      ]
+    },
+    "compiler_response_status": "parsed",
+    "compiler_status": "parsed",
+    "prior_message_history": [],
+    "raw_model_output": "{\n  \"raw_user_input\": \"Remember concept alpha for the next turn.\",\n  \"intent\": \"semantic_traversal\",\n  \"query\": \"concept alpha\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [\"concept alpha\"],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"concept alpha\"],\n    \"resolved_referents\": [\"concept alpha\"],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [],\n    \"semantic_queries\": [\"concept alpha\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"graph_expand\", \"required\": false, \"depth\": 1}\n    ]\n  },\n  \"limitations\": [\"no retrieval required for memory retention\"]\n}",
+    "resolved_referents": [
+      "concept alpha"
+    ],
+    "subjects": [
+      "concept alpha"
+    ],
+    "turn_id": "1",
+    "user_input": "Remember concept alpha for the next turn."
+  },
+  "synthesis_called": false,
+  "synthesis_latency_ms": null,
+  "terminal_status": "completed",
+  "thread_id": "restart-recovery",
+  "topic_reset_stale_subjects_emitted": [],
+  "turn_id": "1"
+}

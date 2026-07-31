@@ -1,0 +1,389 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:50:15.277105+00:00",
+    "latest_perturbation_hash": "8f02a484e08cca3df0e875faa0593f87319cb75662c6731c9d3c7ad457dca127",
+    "latest_thread_state_hash": "a5e8cda5a5430d6dd54efe6bb4d6eac814b64d7532e4daebf1cafb2133eee748",
+    "latest_turn_id": 2,
+    "messages": [
+      {
+        "content": "Introduce concept alpha and concept beta.",
+        "created_at": "2026-07-31T00:50:27.145303Z",
+        "role": "user",
+        "turn_id": 1
+      },
+      {
+        "content": "Tell me more about it.",
+        "created_at": "2026-07-31T00:50:38.912069Z",
+        "role": "user",
+        "turn_id": 2
+      }
+    ],
+    "thread_id": "ambiguous-reference",
+    "turn_count": 2,
+    "updated_at": "2026-07-31T00:50:38.912065+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "literal_terms": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "query": "concept alpha",
+      "relations": [],
+      "resolved_referents": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "retrieval_layers": [
+        {
+          "limit": 50,
+          "mode": "any_tokens",
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "concept alpha",
+        "concept beta"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "a5e8cda5a5430d6dd54efe6bb4d6eac814b64d7532e4daebf1cafb2133eee748",
+    "latest_turn_id": 2,
+    "latest_user_input": "Tell me more about it.",
+    "recent_messages": [
+      {
+        "content": "Introduce concept alpha and concept beta.",
+        "created_at": "2026-07-31T00:50:27.145197Z",
+        "role": "user",
+        "turn_id": 1
+      },
+      {
+        "content": "Tell me more about it.",
+        "created_at": "2026-07-31T00:50:38.911969Z",
+        "role": "user",
+        "turn_id": 2
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "literal_terms": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "query": "concept alpha",
+        "raw_user_input": "Introduce concept alpha and concept beta.",
+        "relations": [],
+        "resolved_referents": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "turn_id": 1
+      },
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "entities": [],
+        "graph_seeds": [],
+        "lexical_queries": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "literal_terms": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "query": "concept alpha",
+        "raw_user_input": "Tell me more about it.",
+        "relations": [],
+        "resolved_referents": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "retrieval_layers": [
+          {
+            "limit": 50,
+            "mode": "any_tokens",
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "turn_id": 2
+      }
+    ],
+    "thread_id": "ambiguous-reference",
+    "updated_at": "2026-07-31T00:50:38.911957+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "intent": "introduce concepts",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "concept alpha",
+            "concept beta"
+          ],
+          "evidence_requirements": [
+            "semantic_similarity"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [
+            "concept alpha",
+            "concept beta"
+          ],
+          "literal_terms": [
+            {
+              "match": "case_insensitive_substring",
+              "required": false,
+              "term": "concept alpha"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": false,
+              "term": "concept beta"
+            }
+          ],
+          "resolved_referents": [
+            "concept alpha",
+            "concept beta"
+          ],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            },
+            {
+              "depth": 1,
+              "operator": "graph_expand",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "concept alpha",
+            "concept beta"
+          ]
+        },
+        "query": "Introduce concept alpha and concept beta.",
+        "raw_user_input": "Introduce concept alpha and concept beta.",
+        "relations": [],
+        "resolved_referents": [
+          "concept alpha",
+          "concept beta"
+        ]
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Introduce concept alpha and concept beta.\",\n  \"intent\": \"introduce concepts\",\n  \"query\": \"Introduce concept alpha and concept beta.\",\n  \"entities\": [\"concept alpha\", \"concept beta\"],\n  \"relations\": [],\n  \"resolved_referents\": [\"concept alpha\", \"concept beta\"],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\"concept alpha\", \"concept beta\"],\n    \"resolved_referents\": [\"concept alpha\", \"concept beta\"],\n    \"literal_terms\": [\"concept alpha\", \"concept beta\"],\n    \"evidence_requirements\": [\"semantic_similarity\"],\n    \"semantic_queries\": [\"concept alpha\", \"concept beta\"],\n    \"lexical_queries\": [\"concept alpha\", \"concept beta\"],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\"operator\": \"lexical_chunk_search\", \"required\": false, \"limit\": 50, \"mode\": \"any_tokens\"},\n      {\"operator\": \"vector_search\", \"required\": false, \"limit\": 24},\n      {\"operator\": \"graph_expand\", \"required\": false, \"depth\": 1}\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "subjects": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "turn_id": "1",
+      "user_input": "Introduce concept alpha and concept beta."
+    },
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "concept_details",
+        "limitations": [],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "concept alpha",
+            "concept beta"
+          ],
+          "evidence_requirements": [
+            "semantic_similarity",
+            "lexical_relevance"
+          ],
+          "graph_seeds": [],
+          "intent_type": "semantic_traversal",
+          "lexical_queries": [
+            "concept alpha",
+            "concept beta"
+          ],
+          "literal_terms": [
+            {
+              "match": "case_insensitive_substring",
+              "required": false,
+              "term": "concept alpha"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": false,
+              "term": "concept beta"
+            }
+          ],
+          "resolved_referents": [
+            "concept alpha",
+            "concept beta"
+          ],
+          "retrieval_layers": [
+            {
+              "limit": 50,
+              "mode": "any_tokens",
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            },
+            {
+              "depth": 1,
+              "operator": "graph_expand",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "concept alpha",
+            "concept beta"
+          ]
+        },
+        "query": "concept alpha and concept beta",
+        "raw_user_input": "Tell me more about it.",
+        "relations": [],
+        "resolved_referents": [
+          "concept alpha",
+          "concept beta"
+        ]
+      },
+      "compiler_response_status": "parsed",
+      "compiler_status": "parsed",
+      "prior_message_history": [
+        {
+          "content": "Introduce concept alpha and concept beta.",
+          "created_at": "2026-07-31T00:50:27.145197Z",
+          "role": "user",
+          "turn_id": 1
+        }
+      ],
+      "raw_model_output": "{\n  \"raw_user_input\": \"Tell me more about it.\",\n  \"intent\": \"concept_details\",\n  \"query\": \"concept alpha and concept beta\",\n  \"entities\": [],\n  \"relations\": [],\n  \"resolved_referents\": [\n    \"concept alpha\",\n    \"concept beta\"\n  ],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [],\n    \"concepts\": [\n      \"concept alpha\",\n      \"concept beta\"\n    ],\n    \"resolved_referents\": [\n      \"concept alpha\",\n      \"concept beta\"\n    ],\n    \"literal_terms\": [\n      \"concept alpha\",\n      \"concept beta\"\n    ],\n    \"evidence_requirements\": [\n      \"semantic_similarity\",\n      \"lexical_relevance\"\n    ],\n    \"semantic_queries\": [\n      \"concept alpha\",\n      \"concept beta\"\n    ],\n    \"lexical_queries\": [\n      \"concept alpha\",\n      \"concept beta\"\n    ],\n    \"graph_seeds\": [],\n    \"retrieval_layers\": [\n      {\n        \"operator\": \"lexical_chunk_search\",\n        \"required\": false,\n        \"limit\": 50,\n        \"mode\": \"any_tokens\"\n      },\n      {\n        \"operator\": \"vector_search\",\n        \"required\": false,\n        \"limit\": 24\n      },\n      {\n        \"operator\": \"graph_expand\",\n        \"required\": false,\n        \"depth\": 1\n      }\n    ]\n  },\n  \"limitations\": []\n}",
+      "resolved_referents": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "subjects": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "turn_id": "2",
+      "user_input": "Tell me more about it."
+    }
+  ]
+}

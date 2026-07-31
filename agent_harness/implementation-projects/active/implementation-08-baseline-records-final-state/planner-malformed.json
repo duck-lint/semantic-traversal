@@ -1,0 +1,289 @@
+{
+  "conversation_thread": {
+    "created_at": "2026-07-31T00:49:00.161751+00:00",
+    "latest_perturbation_hash": "91a36ec533bd75cd80ac017dd5abd5781bc7c1ec0db55d38599311c25a8c41d0",
+    "latest_thread_state_hash": "2637f794a9f79bde4cb7078b5e1a422940f7fb2ab666088b74806e1a5d84848e",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Find evidence for concept alpha with malformed planner output.",
+        "created_at": "2026-07-31T00:49:00.162236Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "planner-malformed",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:49:00.162234+00:00"
+  },
+  "thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "entities": [],
+      "graph_seeds": [
+        "evidence concept alpha malformed planner output"
+      ],
+      "lexical_queries": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "literal_terms": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "query": "evidence concept alpha malformed planner output",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "limit": 200,
+          "operator": "exact_chunk_search",
+          "required": true,
+          "return_total_count": true
+        },
+        {
+          "limit": 50,
+          "operator": "lexical_chunk_search",
+          "required": false
+        },
+        {
+          "limit": 24,
+          "operator": "vector_search",
+          "required": false
+        },
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": false
+        }
+      ],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "evidence concept alpha malformed planner output"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "2637f794a9f79bde4cb7078b5e1a422940f7fb2ab666088b74806e1a5d84848e",
+    "latest_turn_id": 1,
+    "latest_user_input": "Find evidence for concept alpha with malformed planner output.",
+    "recent_messages": [
+      {
+        "content": "Find evidence for concept alpha with malformed planner output.",
+        "created_at": "2026-07-31T00:49:00.162154Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "entities": [],
+        "graph_seeds": [
+          "evidence concept alpha malformed planner output"
+        ],
+        "lexical_queries": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "literal_terms": [
+          "evidence",
+          "concept",
+          "alpha",
+          "malformed",
+          "planner",
+          "output"
+        ],
+        "query": "evidence concept alpha malformed planner output",
+        "raw_user_input": "Find evidence for concept alpha with malformed planner output.",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "limit": 200,
+            "operator": "exact_chunk_search",
+            "required": true,
+            "return_total_count": true
+          },
+          {
+            "limit": 50,
+            "operator": "lexical_chunk_search",
+            "required": false
+          },
+          {
+            "limit": 24,
+            "operator": "vector_search",
+            "required": false
+          },
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": false
+          }
+        ],
+        "scope_requests": [],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "evidence concept alpha malformed planner output"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "planner-malformed",
+    "updated_at": "2026-07-31T00:49:00.162147+00:00"
+  },
+  "turn_history": [
+    {
+      "canonical_packet": {
+        "entities": [],
+        "intent": "deterministic retrieval planning fallback",
+        "limitations": [
+          "semantic compiler backend unavailable; deterministic lexical fallback used"
+        ],
+        "planner_diagnostics": {
+          "ignored_planner_fields": []
+        },
+        "planner_retrieval_plan": {
+          "concepts": [
+            "evidence",
+            "concept",
+            "alpha",
+            "malformed",
+            "planner",
+            "output"
+          ],
+          "evidence_requirements": [
+            "literal_exhaustive"
+          ],
+          "graph_seeds": [
+            "evidence concept alpha malformed planner output"
+          ],
+          "intent_type": "exact_search",
+          "lexical_queries": [
+            "evidence",
+            "concept",
+            "alpha",
+            "malformed",
+            "planner",
+            "output"
+          ],
+          "literal_terms": [
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "evidence"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "concept"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "alpha"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "malformed"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "planner"
+            },
+            {
+              "match": "case_insensitive_substring",
+              "required": true,
+              "term": "output"
+            }
+          ],
+          "resolved_referents": [],
+          "retrieval_layers": [
+            {
+              "limit": 200,
+              "operator": "exact_chunk_search",
+              "required": true,
+              "return_total_count": true
+            },
+            {
+              "limit": 50,
+              "operator": "lexical_chunk_search",
+              "required": false
+            },
+            {
+              "limit": 24,
+              "operator": "vector_search",
+              "required": false
+            },
+            {
+              "depth": 1,
+              "operator": "graph_expand",
+              "required": false
+            }
+          ],
+          "scope_requests": [],
+          "semantic_queries": [
+            "evidence concept alpha malformed planner output"
+          ]
+        },
+        "query": "evidence concept alpha malformed planner output",
+        "raw_user_input": "Find evidence for concept alpha with malformed planner output.",
+        "relations": [],
+        "resolved_referents": []
+      },
+      "compiler_response_status": "invalid_json",
+      "compiler_status": "invalid_json",
+      "prior_message_history": [],
+      "raw_model_output": "not-json",
+      "resolved_referents": [],
+      "subjects": [
+        "evidence",
+        "concept",
+        "alpha",
+        "malformed",
+        "planner",
+        "output"
+      ],
+      "turn_id": "1",
+      "user_input": "Find evidence for concept alpha with malformed planner output."
+    }
+  ]
+}

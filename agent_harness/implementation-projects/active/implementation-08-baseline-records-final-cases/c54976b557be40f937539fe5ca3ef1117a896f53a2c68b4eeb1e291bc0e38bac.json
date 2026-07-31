@@ -1,0 +1,519 @@
+{
+  "ambiguity_preserved": true,
+  "answer_bearing_candidate_present": false,
+  "available_planner_cost": null,
+  "available_planner_input_tokens": null,
+  "available_planner_output_tokens": null,
+  "available_synthesis_cost": null,
+  "available_synthesis_tokens": null,
+  "backend_instance": "OllamaSemanticCompilerBackend:2694473179312",
+  "backend_metadata": {
+    "backend_mode": "ollama",
+    "base_url": "http://localhost:11434",
+    "model": "qwen3:8b",
+    "semantic_compiler_prompt_hash": "5b05335d8c9638f10d4fd4c2fa2e9f6ad3d72a03e79bccb6fee6bbb96f743021"
+  },
+  "baseline_capability_gap": "production_response_mode_schema_missing",
+  "blocking_reason": "planner parsed; retrieval and synthesis were not executed because persisted inventory was unavailable",
+  "candidate_count_by_surface": {
+    "exact": 0,
+    "graph": 0,
+    "lexical": 0,
+    "temporal": 0,
+    "vector": 0
+  },
+  "canonical_packet": {
+    "entities": [
+      "alpha",
+      "beta"
+    ],
+    "intent": "semantic_traversal",
+    "limitations": [],
+    "planner_diagnostics": {
+      "ignored_planner_fields": []
+    },
+    "planner_retrieval_plan": {
+      "concepts": [
+        "alpha",
+        "beta"
+      ],
+      "evidence_requirements": [
+        "graph_relation"
+      ],
+      "graph_seeds": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "intent_type": "semantic_traversal",
+      "lexical_queries": [],
+      "literal_terms": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": true
+        }
+      ],
+      "scope_requests": [
+        "journal",
+        "personal_reflection"
+      ],
+      "semantic_queries": [
+        "concept alpha",
+        "concept beta"
+      ]
+    },
+    "query": "notes connecting concept alpha and concept beta",
+    "raw_user_input": "Which notes connect concept alpha and concept beta?",
+    "relations": [
+      "connect"
+    ],
+    "resolved_referents": []
+  },
+  "canonical_plan": {
+    "concepts": [
+      "alpha",
+      "beta"
+    ],
+    "evidence_requirements": [
+      "graph_relation"
+    ],
+    "graph_seeds": [
+      "concept alpha",
+      "concept beta"
+    ],
+    "intent_type": "semantic_traversal",
+    "lexical_queries": [],
+    "literal_terms": [],
+    "resolved_referents": [],
+    "retrieval_layers": [
+      {
+        "depth": 1,
+        "operator": "graph_expand",
+        "required": true
+      }
+    ],
+    "scope_requests": [
+      "journal",
+      "personal_reflection"
+    ],
+    "semantic_queries": [
+      "concept alpha",
+      "concept beta"
+    ]
+  },
+  "carry_source": null,
+  "case_duration_ms": 11353.833,
+  "case_id": "graph-relation:1",
+  "compiler_status": "parsed",
+  "component_scores": {
+    "current_turn_target_correctness": {
+      "expected": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "missing": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "observed": [
+        "alpha",
+        "beta"
+      ],
+      "status": "mismatch",
+      "unexpected": [
+        "alpha",
+        "beta"
+      ]
+    },
+    "evidence_requirement_correctness": {
+      "expected": [
+        "graph_relation"
+      ],
+      "missing": [],
+      "observed": [
+        "graph_relation"
+      ],
+      "status": "match",
+      "unexpected": []
+    },
+    "operator_correctness": {
+      "expected": [
+        "graph_expand"
+      ],
+      "missing": [],
+      "observed": [
+        "graph_expand"
+      ],
+      "status": "match",
+      "unexpected": []
+    },
+    "plan_completeness": {
+      "observed": {
+        "declared_requirements": [
+          "graph_relation"
+        ],
+        "invalid_operator_configuration": [],
+        "missing_operators": [],
+        "repair_attempted": false,
+        "repair_result": null,
+        "satisfied_requirements": [
+          "graph_relation"
+        ],
+        "status": "complete",
+        "unavailable_operators": [],
+        "unsupported_requirements": []
+      },
+      "status": "complete"
+    },
+    "plan_executability": {
+      "observed": {
+        "blocking_reasons": [],
+        "executable_operators": [
+          "graph_expand"
+        ],
+        "has_retrieval_intent": true,
+        "operator_results": [
+          {
+            "operator": "graph_expand",
+            "present_inputs": [
+              "graph_seeds",
+              "semantic_queries"
+            ],
+            "reason": "",
+            "required_inputs": [
+              "graph_seeds",
+              "semantic_queries"
+            ],
+            "status": "executable"
+          }
+        ],
+        "requested_operators": [
+          "graph_expand"
+        ],
+        "status": "executable"
+      },
+      "status": "executable"
+    },
+    "referent_correctness": {
+      "expected": [],
+      "missing": [],
+      "observed": [],
+      "status": "match",
+      "unexpected": []
+    }
+  },
+  "current_routing_assumption": "always_traverse",
+  "emitted_current_turn_subjects": [
+    "alpha",
+    "beta"
+  ],
+  "emitted_response_mode": null,
+  "evidence_requirements": [
+    "graph_relation"
+  ],
+  "executed_operators": [],
+  "execution_outcome": "blocked_retrieval",
+  "expected_current_turn_subjects": [
+    "concept alpha",
+    "concept beta"
+  ],
+  "expected_evidence_requirements": [
+    "graph_relation"
+  ],
+  "expected_operators": [
+    "graph_expand"
+  ],
+  "expected_referents": [],
+  "expected_response_mode": "traverse",
+  "final_support_grade": null,
+  "input": "Which notes connect concept alpha and concept beta?",
+  "irrelevant_selected_evidence_count": 0,
+  "malformed_status": null,
+  "metric_availability": {
+    "candidate_recall": {
+      "reason": "retrieval not executed; persisted inventory unavailable",
+      "status": "unavailable"
+    },
+    "final_answer_quality": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    },
+    "selection_precision": {
+      "reason": "retrieval and selection not executed",
+      "status": "unavailable"
+    },
+    "synthesis_support": {
+      "reason": "frontier synthesis not executed",
+      "status": "unavailable"
+    }
+  },
+  "next_conversation_thread": {
+    "created_at": "2026-07-31T00:48:06.745950+00:00",
+    "latest_perturbation_hash": "072f62f554755aa3033ef058102382fefeac98c0ed48634979a496351e373e06",
+    "latest_thread_state_hash": "45d994a9f991a200d2654a7720f9bb14df19a9a4a3655d2db4814ef224a0c5e4",
+    "latest_turn_id": 1,
+    "messages": [
+      {
+        "content": "Which notes connect concept alpha and concept beta?",
+        "created_at": "2026-07-31T00:48:18.099802Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "graph-relation",
+    "turn_count": 1,
+    "updated_at": "2026-07-31T00:48:18.099799+00:00"
+  },
+  "next_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [
+        "alpha",
+        "beta"
+      ],
+      "entities": [],
+      "graph_seeds": [
+        "concept alpha",
+        "concept beta"
+      ],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": "concept alpha",
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [
+        {
+          "depth": 1,
+          "operator": "graph_expand",
+          "required": true
+        }
+      ],
+      "scope_requests": [
+        "journal",
+        "personal_reflection"
+      ],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": [
+        "concept alpha",
+        "concept beta"
+      ]
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": "45d994a9f991a200d2654a7720f9bb14df19a9a4a3655d2db4814ef224a0c5e4",
+    "latest_turn_id": 1,
+    "latest_user_input": "Which notes connect concept alpha and concept beta?",
+    "recent_messages": [
+      {
+        "content": "Which notes connect concept alpha and concept beta?",
+        "created_at": "2026-07-31T00:48:18.099723Z",
+        "role": "user",
+        "turn_id": 1
+      }
+    ],
+    "recent_semantic_turns": [
+      {
+        "assistant_response_snippet": "",
+        "claim_policy": {},
+        "concepts": [
+          "alpha",
+          "beta"
+        ],
+        "entities": [],
+        "graph_seeds": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "lexical_queries": [],
+        "literal_terms": [],
+        "query": "concept alpha",
+        "raw_user_input": "Which notes connect concept alpha and concept beta?",
+        "relations": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": true
+          }
+        ],
+        "scope_requests": [
+          "journal",
+          "personal_reflection"
+        ],
+        "selected_chunk_ids": [],
+        "selected_note_titles": [],
+        "selected_section_labels": [],
+        "selection_policy": {},
+        "semantic_queries": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "turn_id": 1
+      }
+    ],
+    "thread_id": "graph-relation",
+    "updated_at": "2026-07-31T00:48:18.099711+00:00"
+  },
+  "persisted_state_path": "agent_harness\\implementation-projects\\active\\implementation-08-baseline-records-corrected2-state\\graph-relation.json",
+  "plan_completeness": {
+    "declared_requirements": [
+      "graph_relation"
+    ],
+    "invalid_operator_configuration": [],
+    "missing_operators": [],
+    "repair_attempted": false,
+    "repair_result": null,
+    "satisfied_requirements": [
+      "graph_relation"
+    ],
+    "status": "complete",
+    "unavailable_operators": [],
+    "unsupported_requirements": []
+  },
+  "plan_executability": {
+    "blocking_reasons": [],
+    "executable_operators": [
+      "graph_expand"
+    ],
+    "has_retrieval_intent": true,
+    "operator_results": [
+      {
+        "operator": "graph_expand",
+        "present_inputs": [
+          "graph_seeds",
+          "semantic_queries"
+        ],
+        "reason": "",
+        "required_inputs": [
+          "graph_seeds",
+          "semantic_queries"
+        ],
+        "status": "executable"
+      }
+    ],
+    "requested_operators": [
+      "graph_expand"
+    ],
+    "status": "executable"
+  },
+  "planner_call_status": "parsed",
+  "planner_latency_ms": 11353.531,
+  "prior_message_history": [],
+  "prior_thread_state": {
+    "active_focus": {
+      "claim_policy": {},
+      "concepts": [],
+      "entities": [],
+      "graph_seeds": [],
+      "lexical_queries": [],
+      "literal_terms": [],
+      "query": null,
+      "relations": [],
+      "resolved_referents": [],
+      "retrieval_layers": [],
+      "scope_requests": [],
+      "selected_chunk_ids": [],
+      "selected_note_titles": [],
+      "selected_section_labels": [],
+      "selection_policy": {},
+      "semantic_queries": []
+    },
+    "conversation_summary": "",
+    "latest_assistant_response": null,
+    "latest_thread_state_hash": null,
+    "latest_turn_id": 0,
+    "latest_user_input": null,
+    "recent_messages": [],
+    "recent_semantic_turns": [],
+    "thread_id": "graph-relation",
+    "updated_at": "2026-07-31T00:48:06.745950+00:00"
+  },
+  "raw_model_output": "{\n  \"raw_user_input\": \"Which notes connect concept alpha and concept beta?\",\n  \"intent\": \"semantic_traversal\",\n  \"query\": \"notes connecting concept alpha and concept beta\",\n  \"entities\": [\"alpha\", \"beta\"],\n  \"relations\": [\"connect\"],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [\"journal\", \"personal_reflection\"],\n    \"concepts\": [\"alpha\", \"beta\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"graph_relation\"],\n    \"semantic_queries\": [\"concept alpha\", \"concept beta\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [\"concept alpha\", \"concept beta\"],\n    \"retrieval_layers\": [\n      {\"operator\": \"graph_expand\", \"required\": true, \"depth\": 1}\n    ]\n  },\n  \"limitations\": []\n}",
+  "requested_operators": [
+    "graph_expand"
+  ],
+  "requiredness": {
+    "graph_expand": true
+  },
+  "resolved_referents": [],
+  "restart_backend_instance": false,
+  "retrieval_latency_ms": null,
+  "retrieval_results": [],
+  "scenario_id": "graph-relation",
+  "selected_evidence_present": false,
+  "setup_turn": false,
+  "state_turn_record": {
+    "canonical_packet": {
+      "entities": [
+        "alpha",
+        "beta"
+      ],
+      "intent": "semantic_traversal",
+      "limitations": [],
+      "planner_diagnostics": {
+        "ignored_planner_fields": []
+      },
+      "planner_retrieval_plan": {
+        "concepts": [
+          "alpha",
+          "beta"
+        ],
+        "evidence_requirements": [
+          "graph_relation"
+        ],
+        "graph_seeds": [
+          "concept alpha",
+          "concept beta"
+        ],
+        "intent_type": "semantic_traversal",
+        "lexical_queries": [],
+        "literal_terms": [],
+        "resolved_referents": [],
+        "retrieval_layers": [
+          {
+            "depth": 1,
+            "operator": "graph_expand",
+            "required": true
+          }
+        ],
+        "scope_requests": [
+          "journal",
+          "personal_reflection"
+        ],
+        "semantic_queries": [
+          "concept alpha",
+          "concept beta"
+        ]
+      },
+      "query": "notes connecting concept alpha and concept beta",
+      "raw_user_input": "Which notes connect concept alpha and concept beta?",
+      "relations": [
+        "connect"
+      ],
+      "resolved_referents": []
+    },
+    "compiler_response_status": "parsed",
+    "compiler_status": "parsed",
+    "prior_message_history": [],
+    "raw_model_output": "{\n  \"raw_user_input\": \"Which notes connect concept alpha and concept beta?\",\n  \"intent\": \"semantic_traversal\",\n  \"query\": \"notes connecting concept alpha and concept beta\",\n  \"entities\": [\"alpha\", \"beta\"],\n  \"relations\": [\"connect\"],\n  \"resolved_referents\": [],\n  \"planner_retrieval_plan\": {\n    \"intent_type\": \"semantic_traversal\",\n    \"scope_requests\": [\"journal\", \"personal_reflection\"],\n    \"concepts\": [\"alpha\", \"beta\"],\n    \"resolved_referents\": [],\n    \"literal_terms\": [],\n    \"evidence_requirements\": [\"graph_relation\"],\n    \"semantic_queries\": [\"concept alpha\", \"concept beta\"],\n    \"lexical_queries\": [],\n    \"graph_seeds\": [\"concept alpha\", \"concept beta\"],\n    \"retrieval_layers\": [\n      {\"operator\": \"graph_expand\", \"required\": true, \"depth\": 1}\n    ]\n  },\n  \"limitations\": []\n}",
+    "resolved_referents": [],
+    "subjects": [
+      "alpha",
+      "beta"
+    ],
+    "turn_id": "1",
+    "user_input": "Which notes connect concept alpha and concept beta?"
+  },
+  "synthesis_called": false,
+  "synthesis_latency_ms": null,
+  "terminal_status": "completed",
+  "thread_id": "graph-relation",
+  "topic_reset_stale_subjects_emitted": [],
+  "turn_id": "1"
+}
