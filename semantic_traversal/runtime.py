@@ -38,7 +38,6 @@ from .storage import append_ledger_record, create_thread_paths, load_json, write
 # identify literal search atoms; `_serialize_fts5_atom` performs the grammar
 # quoting before the complete expression is passed as a bound MATCH value.
 QUERY_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
-MAX_SERIALIZED_FTS_QUERY_CHARS = 4096
 LAYER_TO_SOURCE = {"exact_chunk_search": "exact", "lexical_chunk_search": "lexical", "vector_search": "vector", "graph_expand": "graph", "graph_lookup": "graph", "graph_paths": "graph", "graph_neighbors": "graph", "graph_from_results": "graph", "temporal_retrieve": "temporal"}
 EXACT_SEARCH_STATUSES = {
     "not_requested",
@@ -1222,11 +1221,6 @@ def _lexical_candidates(
         fts_query = _serialize_fts5_query_atoms(tokens, mode=selected_mode)
     if not fts_query:
         diagnostics["status"] = "skipped_no_input"
-        return finish()
-    if len(fts_query) > MAX_SERIALIZED_FTS_QUERY_CHARS:
-        diagnostics["status"] = "failed"
-        diagnostics["failure_reason"] = "serialized FTS5 expression exceeds diagnostic and execution bound"
-        notes.append("lexical search failed: serialized FTS5 expression is too large")
         return finish()
     diagnostics["effective_query"] = fts_query
     try:

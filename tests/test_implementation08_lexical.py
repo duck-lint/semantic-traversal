@@ -61,8 +61,8 @@ class Implementation08LexicalTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_starting_tree_reproduction_is_recorded_by_previous_expected_failure(self) -> None:
-        """The pre-repair run produced unquoted `i'm` and a structured FTS failure."""
+    def test_repaired_apostrophe_query_is_a_literal_candidate(self) -> None:
+        """The independent pre-repair failure is recorded in the Seam-0 report."""
         candidates, notes, diagnostics = self._run(["I'm"], "any_tokens")
         self.assertEqual([item["chunk_id"] for item in candidates], ["c1"])
         self.assertEqual(diagnostics["effective_query"], '"i\'m"')
