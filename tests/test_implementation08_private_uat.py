@@ -16,6 +16,9 @@ from tools.implementation08_private_uat import (
     RecordingSemanticCompilerBackend,
     _assert_private_path,
     _coverage_metrics,
+    _compare_required,
+    _authoritative_attempt,
+    _validate_attempt_topology,
     _turn_metrics,
     evaluate_compiler_contract,
     export_redacted,
@@ -184,6 +187,35 @@ class Implementation08PrivateUATTests(unittest.TestCase):
             second = export_redacted(run_dir=run_dir, output_path=Path(temp_dir) / "two.json")
             self.assertEqual(first, second)
 
+    def test_redacted_repair_attempts_expose_safe_statuses_without_private_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            (run_dir / "raw").mkdir(parents=True)
+            (run_dir / "run.json").write_text(json.dumps({"suite_id": "synthetic", "fixture_sha256": "fixture", "run_sha256": "run", "report_schema_version": 3, "evaluator_contract_version": 2}), encoding="utf-8")
+            raw = {"case_id": "private-case-id", "turns": [{"turn_id": 1, "metrics": {"runtime_status": "completed", "evaluation_status": "review_required", "compiler_contract": {"raw_json_status": "object", "contract_status": "valid"}, "compiler_attempt_count": 2, "repair_attempted": True, "repair_outcome": "complete", "initial_contract_status": "invalid", "repair_contract_status": "valid", "authoritative_attempt_role": "repair", "authoritative_contract_status": "valid", "expectations": {"current_turn_subjects": {"status": "mismatch"}, "resolved_referents": {"status": "match"}, "required_operators": {"status": "match", "additional": ["vector_search"]}}, "coverage": {"coverage_decision": "approved", "claim_authorized": False}}, "compiler_attempts": [{"request": {"repair_context": {"private": "repair secret"}}, "raw_response": "private response"}]}]}
+            (run_dir / "raw" / "private.json").write_text(json.dumps(raw), encoding="utf-8")
+            output = Path(temp_dir) / "report.json"
+            report = export_redacted(run_dir=run_dir, output_path=output)
+            exported = output.read_text(encoding="utf-8")
+            self.assertEqual(report["evaluator_contract_version"], 2)
+            self.assertEqual(report["cases"][0]["turns"][0]["compiler_attempt_count"], 2)
+            self.assertTrue(report["cases"][0]["turns"][0]["repair_attempted"])
+            for value in ("private-case-id", "repair secret", "private response"):
+                self.assertNotIn(value, exported)
+
+    def test_different_evaluator_versions_cannot_resume(self) -> None:
+        from tools.implementation08_private_uat import run_private_uat
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "agent_harness/private/fixture.yaml"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text(yaml.safe_dump(self.fixture), encoding="utf-8")
+            output = root / "agent_harness/private/run"
+            output.mkdir(parents=True)
+            (output / "run.json").write_text(json.dumps({"fixture_sha256": __import__("hashlib").sha256(fixture.read_bytes()).hexdigest(), "report_schema_version": 2, "evaluator_contract_version": 1}), encoding="utf-8")
+            with self.assertRaisesRegex(PrivateUATUnavailable, "different evaluator/report contract"):
+                run_private_uat(fixture_path=fixture, repo_root=root, output_dir=output)
+
     def test_recording_proxy_delegates_once_and_returns_same_object(self) -> None:
         response = SemanticCompilerResponse(canonical(), "{}", {}, {}, "parsed")
         class Backend:
@@ -205,6 +237,7 @@ class Implementation08PrivateUATTests(unittest.TestCase):
         result = SimpleNamespace(
             semantic_compiler_packet=canonical(), semantic_traversal_manifest={"execution": {}, "candidate_counts": {}},
             retrieval_packet={"selected_chunks": []}, runtime_outcome="completed", coverage_report={"decision": "approved"},
+            semantic_compiler_diagnostic=self._diagnostic(raw=response.raw_response),
         )
         metrics = _turn_metrics(result=result, expected=expected, observation={"packet": {"raw_user_input": "synthetic input"}, "response": response})
         self.assertEqual(metrics["evaluation_status"], "failed")
@@ -223,6 +256,7 @@ class Implementation08PrivateUATTests(unittest.TestCase):
             semantic_compiler_packet={**payload, "planner_diagnostics": {"plan_completeness": {"status": "complete"}, "plan_executability": {"status": "executable"}}},
             semantic_traversal_manifest={"execution": {"layers_executed": ["lexical_chunk_search"]}, "candidate_counts": {}, "coverage": {"negative_claims_allowed": False}},
             retrieval_packet={"selected_chunks": [{"synthetic": True}]}, runtime_outcome="completed", coverage_report={"decision": "approved"},
+            semantic_compiler_diagnostic=self._diagnostic(raw=response.raw_response),
         )
         metrics = _turn_metrics(result=result, expected=expected, observation={"packet": {"raw_user_input": "synthetic input"}, "response": response})
         self.assertEqual(metrics["evaluation_status"], "review_required")
@@ -239,6 +273,140 @@ class Implementation08PrivateUATTests(unittest.TestCase):
             (output / "run.json").write_text(json.dumps({"fixture_sha256": "different"}), encoding="utf-8")
             with self.assertRaises(PrivateUATUnavailable):
                 run_private_uat(fixture_path=fixture, repo_root=root, output_dir=output)
+
+    @staticmethod
+    def _observation(*, repair: bool = False, raw: str | None = None, status: str = "parsed") -> dict:
+        payload = canonical()
+        raw = raw if raw is not None else json.dumps(payload)
+        response = SemanticCompilerResponse(payload, raw, {"semantic_compiler_prompt_hash": "synthetic-prompt"}, {}, status)
+        packet = {"raw_user_input": "synthetic input", "instruction": "Repair the compiler retrieval plan exactly once." if repair else "Compile a retrieval request."}
+        if repair:
+            packet["repair_context"] = {"synthetic": True}
+        return {"packet": packet, "response": response}
+
+    @staticmethod
+    def _diagnostic(*, raw: str, attempted: bool = False, outcome: str = "not_needed") -> dict:
+        from semantic_traversal.hashing import sha256_text
+        return {"raw_response_hash": sha256_text(raw), "plan_repair": {"attempted": attempted, "outcome": outcome}}
+
+    def test_one_initial_attempt_is_accepted(self) -> None:
+        observation = self._observation()
+        attempts = _validate_attempt_topology(observations=[observation], diagnostic=self._diagnostic(raw=observation["response"].raw_response))
+        self.assertEqual([attempt["attempt_role"] for attempt in attempts], ["initial"])
+
+    def test_initial_plus_valid_repair_is_accepted(self) -> None:
+        initial = self._observation(raw=json.dumps({"initial": True}))
+        repair = self._observation(repair=True)
+        attempts = _validate_attempt_topology(observations=[initial, repair], diagnostic=self._diagnostic(raw=repair["response"].raw_response, attempted=True, outcome="complete"))
+        self.assertEqual([attempt["attempt_role"] for attempt in attempts], ["initial", "repair"])
+
+    def test_zero_attempts_rejected(self) -> None:
+        with self.assertRaises(PrivateUATUnavailable):
+            _validate_attempt_topology(observations=[], diagnostic={})
+
+    def test_more_than_two_attempts_rejected(self) -> None:
+        observations = [self._observation(), self._observation(repair=True), self._observation(repair=True)]
+        with self.assertRaises(PrivateUATUnavailable):
+            _validate_attempt_topology(observations=observations, diagnostic=self._diagnostic(raw=observations[-1]["response"].raw_response, attempted=True, outcome="complete"))
+
+    def test_duplicate_initial_roles_rejected(self) -> None:
+        observations = [self._observation(), self._observation()]
+        with self.assertRaises(PrivateUATUnavailable):
+            _validate_attempt_topology(observations=observations, diagnostic=self._diagnostic(raw=observations[-1]["response"].raw_response, attempted=True, outcome="complete"))
+
+    def test_repair_before_initial_rejected(self) -> None:
+        observations = [self._observation(repair=True), self._observation()]
+        with self.assertRaises(PrivateUATUnavailable):
+            _validate_attempt_topology(observations=observations, diagnostic=self._diagnostic(raw=observations[-1]["response"].raw_response, attempted=True, outcome="complete"))
+
+    def test_repair_without_runtime_diagnostic_rejected(self) -> None:
+        observations = [self._observation(), self._observation(repair=True)]
+        with self.assertRaises(PrivateUATUnavailable):
+            _validate_attempt_topology(observations=observations, diagnostic=self._diagnostic(raw=observations[-1]["response"].raw_response))
+
+    def test_runtime_repair_without_observation_rejected(self) -> None:
+        observation = self._observation()
+        with self.assertRaises(PrivateUATUnavailable):
+            _validate_attempt_topology(observations=[observation], diagnostic=self._diagnostic(raw=observation["response"].raw_response, attempted=True, outcome="complete"))
+
+    def test_authoritative_repaired_response_is_hash_matched(self) -> None:
+        initial = self._observation(raw=json.dumps({"initial": True}))
+        repair = self._observation(repair=True)
+        attempts = _validate_attempt_topology(observations=[initial, repair], diagnostic=self._diagnostic(raw=repair["response"].raw_response, attempted=True, outcome="complete"))
+        self.assertEqual(_authoritative_attempt(attempts=attempts, diagnostic=self._diagnostic(raw=repair["response"].raw_response, attempted=True, outcome="complete"))["attempt_role"], "repair")
+
+    def test_mismatched_authoritative_response_rejected(self) -> None:
+        observation = self._observation()
+        attempts = _validate_attempt_topology(observations=[observation], diagnostic=self._diagnostic(raw=observation["response"].raw_response))
+        with self.assertRaises(PrivateUATUnavailable):
+            _authoritative_attempt(attempts=attempts, diagnostic={"raw_response_hash": "wrong", "plan_repair": {"attempted": False}})
+
+    def test_required_operator_plus_additional_operator_matches(self) -> None:
+        result = _compare_required(["temporal_retrieve"], ["temporal_retrieve", "vector_search"])
+        self.assertEqual(result["status"], "match")
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["additional"], ["vector_search"])
+
+    def test_missing_required_operator_mismatches(self) -> None:
+        result = _compare_required(["temporal_retrieve"], ["vector_search"])
+        self.assertEqual(result["status"], "mismatch")
+        self.assertEqual(result["missing"], ["temporal_retrieve"])
+
+    def test_successful_repair_preserves_initial_contract_status(self) -> None:
+        initial = self._observation(raw=json.dumps({"planner_intent": "off contract"}))
+        repair = self._observation(repair=True)
+        result = SimpleNamespace(
+            semantic_compiler_packet=canonical(),
+            semantic_compiler_diagnostic=self._diagnostic(raw=repair["response"].raw_response, attempted=True, outcome="complete"),
+            semantic_traversal_manifest={"execution": {"layers_executed": []}},
+            retrieval_packet={"selected_chunks": []},
+            runtime_outcome="completed",
+            coverage_report={"decision": "approved"},
+        )
+        expected = copy.deepcopy(self.fixture["cases"][0]["turns"][0]["expected"])
+        metrics = _turn_metrics(result=result, expected=expected, observation=[initial, repair])
+        self.assertEqual(metrics["initial_contract_status"], "invalid")
+        self.assertEqual(metrics["repair_contract_status"], "valid")
+        self.assertTrue(metrics["repair_attempted"])
+        self.assertEqual(metrics["repair_outcome"], "complete")
+
+    def test_surface_subject_mismatch_is_review_not_failure(self) -> None:
+        payload = canonical()
+        payload["planner_retrieval_plan"]["concepts"] = ["different surface"]
+        response = SemanticCompilerResponse(payload, json.dumps(payload), {}, {}, "parsed")
+        payload["planner_diagnostics"] = {"plan_completeness": {"status": "complete"}, "plan_executability": {"status": "executable"}}
+        result = SimpleNamespace(semantic_compiler_packet=payload, semantic_compiler_diagnostic=self._diagnostic(raw=response.raw_response), semantic_traversal_manifest={"execution": {"layers_executed": []}}, retrieval_packet={"selected_chunks": [{"synthetic": True}]}, runtime_outcome="completed", coverage_report={"decision": "approved"})
+        expected = copy.deepcopy(self.fixture["cases"][0]["turns"][0]["expected"])
+        expected["current_turn_subjects"] = ["expected surface"]
+        expected["required_operators"] = []
+        expected["evidence_requirements"] = []
+        metrics = _turn_metrics(result=result, expected=expected, observation=[{"packet": {"raw_user_input": "synthetic input"}, "response": response}])
+        self.assertEqual(metrics["expectations"]["current_turn_subjects"]["status"], "mismatch")
+        self.assertEqual(metrics["evaluation_status"], "review_required")
+
+    def test_referent_surface_mismatch_is_review_not_failure(self) -> None:
+        payload = canonical()
+        payload["resolved_referents"] = ["different referent"]
+        response = SemanticCompilerResponse(payload, json.dumps(payload), {}, {}, "parsed")
+        payload["planner_diagnostics"] = {"plan_completeness": {"status": "complete"}, "plan_executability": {"status": "executable"}}
+        result = SimpleNamespace(semantic_compiler_packet=payload, semantic_compiler_diagnostic=self._diagnostic(raw=response.raw_response), semantic_traversal_manifest={"execution": {"layers_executed": []}}, retrieval_packet={"selected_chunks": [{"synthetic": True}]}, runtime_outcome="completed", coverage_report={"decision": "approved"})
+        expected = copy.deepcopy(self.fixture["cases"][0]["turns"][0]["expected"])
+        expected["resolved_referents"] = ["expected referent"]
+        expected["required_operators"] = []
+        expected["evidence_requirements"] = []
+        metrics = _turn_metrics(result=result, expected=expected, observation=[{"packet": {"raw_user_input": "synthetic input"}, "response": response}])
+        self.assertEqual(metrics["expectations"]["resolved_referents"]["status"], "mismatch")
+        self.assertEqual(metrics["evaluation_status"], "review_required")
+
+    def test_hard_contract_failure_remains_failed_even_with_surface_mismatch(self) -> None:
+        response = SemanticCompilerResponse({"planner_intent": "off contract"}, json.dumps({"planner_intent": "off contract"}), {}, {}, "parsed")
+        result = SimpleNamespace(semantic_compiler_packet=canonical(), semantic_compiler_diagnostic=self._diagnostic(raw=response.raw_response), semantic_traversal_manifest={"execution": {"layers_executed": []}}, retrieval_packet={"selected_chunks": [{"synthetic": True}]}, runtime_outcome="completed", coverage_report={"decision": "approved"})
+        expected = copy.deepcopy(self.fixture["cases"][0]["turns"][0]["expected"])
+        expected["current_turn_subjects"] = ["different surface"]
+        expected["required_operators"] = []
+        expected["evidence_requirements"] = []
+        metrics = _turn_metrics(result=result, expected=expected, observation=[{"packet": {"raw_user_input": "synthetic input"}, "response": response}])
+        self.assertEqual(metrics["evaluation_status"], "failed")
 
 
 if __name__ == "__main__":

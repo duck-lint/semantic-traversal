@@ -20,6 +20,7 @@
 | 2026-07-30 | Re-ran corrected qwen3:8b baseline | 29 unique terminal records; parsed 26, timed_out 1, unavailable 1, invalid_json 1 | Complete machine gates |
 | 2026-07-30 | Completed correction verification | 206 local Python tests; 14 focused tests; compileall, diff check, plugin build, strict TypeScript passed | Final status transition |
 | 2026-08-01 | Corrected private-UAT measurement instrument | Replaced schema v1 with incompatible per-turn schema v2; added raw compiler-contract observation, runtime-owned negative authorization metrics, all-turn aggregation, and allowlisted report v2 | Preserve the original v1 run locally; rerun the unchanged private baseline and inspect results before Seam 1 |
+| 2026-08-01 | Corrected private-UAT repair observation semantics | Schema-v2 private rerun reached the unchanged production one-shot repair path; evaluator had assumed one compiler call per turn. Attempts are now explicit, required operators use subset semantics, and surface comparisons are non-authoritative diagnostics | Preserve failed private contents locally; rerun with a fresh post-observation-fix suite ID |
 
 ## Work status
 
@@ -42,7 +43,13 @@ All records agree: `Seam 0: operator-accepted`. The baseline is accepted as a pl
 
 This preparation pass does not begin Seam 1. The private local baseline tooling is prepared, but real private-corpus execution remains operator-pending. Seam 1 must wait until the operator has pulled the branch, populated the ignored fixture, run the local baseline, inspected the raw private results, and explicitly accepted or recorded the result.
 
-The initial schema-v1 private run remains historical evidence outside the
-repository. The corrected v2 fixture uses a distinct suite ID and does not
-automatically migrate or overwrite it. Inventory inspection/redesign and model
-replacement/bakeoff remain separate future work.
+The initial schema-v1 private run and the partial schema-v2 private contents
+remain historical evidence outside the repository and operator-preserved.
+Neither is migrated, overwritten, quoted, or committed here. The corrected
+evaluator records the production initial-plus-one-repair topology, preserves
+initial versus final compiler quality, treats required operators as subset
+requirements, and treats subject/referent strings as non-authoritative surface
+signals. The corrected private baseline remains operator-rerun-pending under a
+fresh suite ID. Production behaviour remains unchanged. Inventory
+inspection/redesign and model replacement/bakeoff remain separate future work;
+Seam 1 has not begun.
