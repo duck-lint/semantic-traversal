@@ -6,110 +6,6 @@ from .config import RuntimeConfig
 from .retrieval_plan import SUPPORTED_EVIDENCE_REQUIREMENTS, coerce_string_list, is_search_intent
 
 
-def _merge_unique(existing: list[str], new_values: list[str]) -> list[str]:
-    merged = list(existing)
-    for value in new_values:
-        if value and value not in merged:
-            merged.append(value)
-    return merged
-
-
-def _observed_strings(inventory_summary: dict[str, Any], key: str, label_key: str = "value") -> set[str]:
-    observed: set[str] = set()
-    values: list[Any]
-    if key == "path_topology" and isinstance(inventory_summary, dict):
-        values = []
-        topology = inventory_summary.get("path_topology")
-        if isinstance(topology, dict):
-            values.extend(topology.get("top_level", []))
-            values.extend(topology.get("second_level", []))
-    else:
-        values = inventory_summary.get(key, []) if isinstance(inventory_summary, dict) else []
-    for entry in values:
-        if isinstance(entry, dict):
-            candidate = entry.get(label_key) or entry.get("label")
-        else:
-            candidate = entry
-        text = str(candidate or "").strip()
-        if text:
-            observed.add(text)
-    return observed
-
-
-def _observed_facet_values(inventory_summary: dict[str, Any], facet_name: str) -> set[str]:
-    facets = inventory_summary.get("frontmatter_facets") if isinstance(inventory_summary, dict) else {}
-    if not isinstance(facets, dict):
-        return set()
-    observed: set[str] = set()
-    for entry in facets.get(facet_name, []):
-        if isinstance(entry, dict):
-            candidate = entry.get("value") or entry.get("label")
-        else:
-            candidate = entry
-        text = str(candidate or "").strip()
-        if text:
-            observed.add(text)
-    return observed
-
-
-def _alias_filters_for_request(request: str, scope_aliases: dict[str, dict[str, Any]]) -> dict[str, list[str] | str | None] | None:
-    alias = scope_aliases.get(request)
-    if alias is None:
-        return None
-    return {
-        "source_label": alias.get("source_label"),
-        "note_type": list(alias.get("note_type") or []),
-        "path_contains": list(alias.get("path_contains") or []),
-    }
-
-
-def _record_unobserved_alias_bindings(
-    *,
-    request: str,
-    alias_filters: dict[str, list[str] | str | None],
-    observed_note_types: set[str],
-    observed_source_labels: set[str],
-    observed_paths: set[str],
-) -> list[dict[str, Any]]:
-    adjustments: list[dict[str, Any]] = []
-    note_types = [str(value).strip() for value in alias_filters.get("note_type") or [] if str(value).strip()]
-    source_label = str(alias_filters.get("source_label") or "").strip()
-    path_contains = [str(value).strip() for value in alias_filters.get("path_contains") or [] if str(value).strip()]
-
-    for value in note_types:
-        if value not in observed_note_types:
-            adjustments.append(
-                {
-                    "field": f"scope_aliases.{request}.note_type",
-                    "value": value,
-                    "action": "bound_to_alias_unobserved_in_inventory",
-                    "reason": "configured alias value was not observed in resource_inventory_summary.frontmatter_facets.note_type",
-                }
-            )
-
-    if source_label and source_label not in observed_source_labels:
-        adjustments.append(
-            {
-                "field": f"scope_aliases.{request}.source_label",
-                "value": source_label,
-                "action": "bound_to_alias_unobserved_in_inventory",
-                "reason": "configured alias value was not observed in resource_inventory_summary.observed_source_labels",
-            }
-        )
-
-    for value in path_contains:
-        if value not in observed_paths:
-            adjustments.append(
-                {
-                    "field": f"scope_aliases.{request}.path_contains",
-                    "value": value,
-                    "action": "bound_to_alias_unobserved_in_inventory",
-                    "reason": "configured alias value was not observed in resource_inventory_summary.path_topology",
-                }
-            )
-    return adjustments
-
-
 def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config: RuntimeConfig) -> dict[str, Any]:
     """Validate compiler-declared evidence against the YAML-owned operator map."""
     mapping = config.retrieval_evidence_requirement_operators
@@ -261,81 +157,11 @@ def bind_retrieval_plan(
     config: RuntimeConfig,
     raw_user_input: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    scope_aliases = config.retrieval_scope_aliases
-    observed_note_types = _observed_facet_values(inventory_summary, "note_type")
-    observed_source_labels = _observed_strings(inventory_summary, "observed_source_labels", "label")
-    observed_paths = _observed_strings(inventory_summary, "path_topology")
     scope_filters: dict[str, Any] = {"source_label": None, "note_type": [], "path_contains": []}
-    preferred_scope_filters: dict[str, Any] = {"source_label": None, "note_type": [], "path_contains": []}
-    scope_resolution: dict[str, Any] = {"hard": [], "preferred": [], "unsupported": []}
     adjustments: list[dict[str, Any]] = []
 
     concepts = coerce_string_list(planner_retrieval_plan.get("concepts"))
     semantic_queries = coerce_string_list(planner_retrieval_plan.get("semantic_queries"))
-
-    for scope_request in coerce_string_list(planner_retrieval_plan.get("scope_requests")):
-        alias_filters = _alias_filters_for_request(scope_request, scope_aliases)
-        if alias_filters is not None:
-            intent_type = str(planner_retrieval_plan.get("intent_type") or "semantic_traversal")
-            exact_request = "exact" in intent_type or is_search_intent(str(raw_user_input or ""))
-            mode_key = "exact_request_mode" if exact_request else "semantic_request_mode"
-            mode = str(config.retrieval_scope_policy.get(mode_key) or "").strip().lower()
-            target = scope_filters if mode == "hard" else preferred_scope_filters if mode == "preferred" else None
-            if target is None:
-                scope_resolution["unsupported"].append(scope_request)
-                adjustments.append(
-                    {
-                        "field": "scope_requests",
-                        "value": scope_request,
-                        "action": "unsupported_scope_mode",
-                        "reason": f"runtime scope policy {mode_key} must resolve to hard or preferred",
-                    }
-                )
-                continue
-            if alias_filters["source_label"]:
-                target["source_label"] = str(alias_filters["source_label"])
-            target["note_type"] = _merge_unique(target["note_type"], list(alias_filters["note_type"]))
-            target["path_contains"] = _merge_unique(target["path_contains"], list(alias_filters["path_contains"]))
-            scope_resolution[mode].append(scope_request)
-            adjustments.append(
-                {
-                    "field": "scope_requests",
-                    "value": scope_request,
-                    "action": "bound_to_alias" if mode == "hard" else "bound_to_preferred_scope",
-                    "reason": "configured scope alias with runtime-owned scope mode",
-                }
-            )
-            adjustments.extend(
-                _record_unobserved_alias_bindings(
-                    request=scope_request,
-                    alias_filters=alias_filters,
-                    observed_note_types=observed_note_types,
-                    observed_source_labels=observed_source_labels,
-                    observed_paths=observed_paths,
-                )
-            )
-            continue
-
-        observed_kind = None
-        if scope_request in observed_note_types:
-            observed_kind = "note_type"
-        elif scope_request in observed_source_labels:
-            observed_kind = "source_label"
-        elif scope_request in observed_paths:
-            observed_kind = "path"
-        adjustments.append(
-            {
-                "field": "scope_requests",
-                "value": scope_request,
-                "action": "unauthorized_inventory_scope" if observed_kind else "unavailable_scope_alias",
-                "reason": (
-                    f"observed inventory {observed_kind} values are descriptive only and cannot bind executable scope"
-                    if observed_kind
-                    else "scope request is not a configured YAML scope alias"
-                ),
-                "observed_inventory_match": observed_kind,
-            }
-        )
 
     literal_terms = [entry for entry in planner_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
     retrieval_layers = [entry for entry in planner_retrieval_plan.get("retrieval_layers", []) if isinstance(entry, dict)]
@@ -490,8 +316,6 @@ def bind_retrieval_plan(
     bound_plan = {
         "intent_type": str(planner_retrieval_plan.get("intent_type") or "semantic_traversal"),
         "scope_filters": scope_filters,
-        "preferred_scope_filters": preferred_scope_filters,
-        "scope_resolution": scope_resolution,
         "literal_terms": literal_terms,
         "evidence_requirements": coerce_string_list(planner_retrieval_plan.get("evidence_requirements")),
         "semantic_queries": semantic_queries,

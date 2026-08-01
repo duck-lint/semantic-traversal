@@ -8,7 +8,7 @@ from urllib import error, request
 
 from .config import RuntimeConfig
 from .hashing import sha256_text
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, scope_requests_from_text
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan
 
 
 INTERNAL_COMPILER_ECHO_FIELDS = {"planner_diagnostics"}
@@ -223,7 +223,6 @@ def _subject_bearing_fallback_plan(
     raw_user_input: str,
     query: str,
     subjects: list[str],
-    scope_requests: list[str],
     resolved_referents: list[str],
     planner_defaults: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -235,7 +234,6 @@ def _subject_bearing_fallback_plan(
         raw_user_input=raw_user_input,
         query=natural_query,
         concepts=fallback_concepts,
-        scope_requests=scope_requests,
         graph_seeds=fallback_graph_seeds,
         resolved_referents=resolved_referents,
         planner_defaults=planner_defaults,
@@ -312,7 +310,6 @@ def _repair_graph_seeds(plan: dict[str, Any], subjects: list[str]) -> list[dict[
 def _deterministic_compiler_packet(raw_user_input: str, *, planner_defaults: dict[str, Any]) -> dict[str, Any]:
     query = raw_user_input.strip()
     concepts = collect_compiler_terms(raw_user_input)
-    scope_requests = scope_requests_from_text(raw_user_input)
     graph_seeds = [query] if query else []
     packet = {
         "raw_user_input": raw_user_input,
@@ -327,7 +324,6 @@ def _deterministic_compiler_packet(raw_user_input: str, *, planner_defaults: dic
         raw_user_input=raw_user_input,
         query=query,
         concepts=concepts,
-        scope_requests=scope_requests,
         graph_seeds=graph_seeds,
         resolved_referents=[],
         planner_defaults=planner_defaults,
@@ -381,15 +377,10 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
     )
     natural_query, query_source = _canonical_query_text(model_query, subjects, raw_user_input)
     result["query"] = natural_query
-    if isinstance(planner_payload, dict) and isinstance(planner_payload.get("scope_requests"), list):
-        fallback_scope_requests = [str(item).strip() for item in planner_payload["scope_requests"] if str(item).strip()]
-    else:
-        fallback_scope_requests = scope_requests_from_text(natural_query)
     fallback_plan, fallback_sources = _subject_bearing_fallback_plan(
         raw_user_input=raw_user_input,
         query=natural_query,
         subjects=subjects,
-        scope_requests=fallback_scope_requests,
         resolved_referents=list(result["resolved_referents"]),
         planner_defaults=planner_defaults,
     )

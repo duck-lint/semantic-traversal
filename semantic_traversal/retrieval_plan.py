@@ -104,7 +104,6 @@ _CARRY_NOISE_TERMS = {
 }
 KNOWN_PLANNER_FIELDS = {
     "intent_type",
-    "scope_requests",
     "concepts",
     "resolved_referents",
     "literal_terms",
@@ -280,16 +279,6 @@ def is_search_intent(text: str) -> bool:
     return bool(tokens.intersection(SEARCH_INTENT_WORDS)) or " where do i mention " in lowered or " where have i mentioned " in lowered
 
 
-def scope_requests_from_text(text: str) -> list[str]:
-    tokens = set(collect_plan_terms(text))
-    if tokens.intersection(SCOPE_JOURNAL_WORDS):
-        return ["journal"]
-    lowered = text.lower()
-    if any(word in lowered for word in (" journal ", " journals ", " daily ", " dailies ", " entries ", " entry ")):
-        return ["journal"]
-    return []
-
-
 def concepts_from_text(text: str) -> list[str]:
     tokens = collect_plan_terms(text)
     return [term for term in tokens if term not in SEARCH_NOISE_WORDS]
@@ -343,11 +332,11 @@ def build_default_retrieval_plan(
     raw_user_input: str,
     query: str,
     concepts: list[str],
-    scope_requests: list[str],
     graph_seeds: list[str],
     resolved_referents: list[str] | None = None,
     evidence_requirements: list[str] | None = None,
     planner_defaults: dict[str, Any],
+    **_legacy_planner_fields: Any,
 ) -> dict[str, Any]:
     search_intent = is_search_intent(raw_user_input)
     literal_terms = literal_terms_from_text(raw_user_input) if search_intent else []
@@ -355,8 +344,6 @@ def build_default_retrieval_plan(
     lexical_queries = literal_terms if literal_terms else concepts
     lexical_queries, _ = _clean_discourse_operator_terms(raw_user_input, lexical_queries)
     intent_type = "exact_search" if search_intent else "semantic_traversal"
-    if scope_requests:
-        intent_type = "scoped_exact_search" if search_intent else "scoped_semantic_traversal"
 
     layers: list[dict[str, Any]] = []
     if search_intent:
@@ -374,7 +361,6 @@ def build_default_retrieval_plan(
 
     return {
         "intent_type": intent_type,
-        "scope_requests": list(dict.fromkeys(scope_requests)),
         "concepts": list(dict.fromkeys(concepts)),
         "resolved_referents": list(dict.fromkeys(resolved_referents or [])),
         "evidence_requirements": list(dict.fromkeys(str(value).strip() for value in evidence_requirements if str(value).strip())),
@@ -447,7 +433,6 @@ def _coerce_retrieval_layers(value: Any, fallback: list[dict[str, Any]]) -> list
 
 
 _PLANNER_LIST_FIELDS = (
-    "scope_requests",
     "concepts",
     "resolved_referents",
     "literal_terms",
@@ -522,7 +507,6 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
 
     result = {
         "intent_type": str(value.get("intent_type") or fallback.get("intent_type") or "semantic_traversal"),
-        "scope_requests": _canonicalize_planner_list_field(value=value, field="scope_requests", fallback=coerce_string_list(fallback.get("scope_requests")), diagnostics=diagnostics),
         "concepts": _canonicalize_planner_list_field(value=value, field="concepts", fallback=coerce_string_list(fallback.get("concepts")), diagnostics=diagnostics),
         "resolved_referents": _canonicalize_planner_list_field(value=value, field="resolved_referents", fallback=coerce_string_list(fallback.get("resolved_referents")), diagnostics=diagnostics),
         "literal_terms": _canonicalize_planner_list_field(value=value, field="literal_terms", fallback=fallback.get("literal_terms", []), diagnostics=diagnostics),

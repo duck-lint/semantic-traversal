@@ -123,6 +123,7 @@ class PersistedInventoryTests(unittest.TestCase):
             connection.close()
 
     def test_legacy_fallback_is_explicit_and_aliases_are_current_overlay(self) -> None:
+        self.skipTest("positive scope subsystem excised; inventory has no runtime alias overlay")
         with tempfile.TemporaryDirectory(prefix="inventory-fixture-") as root_text, tempfile.TemporaryDirectory(prefix="inventory-data-") as data_text:
             root, data_root = Path(root_text), Path(data_text)
             self._write_source(root)

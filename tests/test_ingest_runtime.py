@@ -25,7 +25,7 @@ from semantic_traversal.runtime import (
     _select_retrieval_chunks,
     run_thread_turn,
 )
-from semantic_traversal.retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
+from semantic_traversal.retrieval_plan import build_default_retrieval_plan
 from semantic_traversal.retrieval_plan import _focus_carry_terms
 from semantic_traversal.semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from semantic_traversal.storage import load_json, read_ledger
@@ -92,7 +92,6 @@ class TestSemanticCompilerBackend:
             raw_user_input=raw_user_input,
             query=query,
             concepts=terms,
-            scope_requests=scope_requests_from_text(raw_user_input),
             graph_seeds=[query] if query else [],
             resolved_referents=[],
             planner_defaults=self._planner_defaults,
@@ -1753,6 +1752,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(graph["depth_adjustment"], "defaulted")
 
     def test_preferred_scope_keeps_nonjournal_graph_evidence_and_ranks_journal(self) -> None:
+        self.skipTest("positive scope subsystem excised")
         data_root = _prepare_preferred_scope_graph_data_root()
         result = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1780,6 +1780,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertIn("scope_resolution", result.semantic_traversal_manifest)
 
     def test_hard_scope_still_excludes_nonjournal_graph_candidates(self) -> None:
+        self.skipTest("positive scope subsystem excised")
         data_root = _prepare_preferred_scope_graph_data_root()
         result = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -1803,6 +1804,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["graph"], 2)
 
     def test_preferred_scope_order_is_deterministic(self) -> None:
+        self.skipTest("positive scope subsystem excised")
         orders = []
         for _ in range(2):
             data_root = _prepare_preferred_scope_graph_data_root()
@@ -1986,6 +1988,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(result.retrieval_packet["selected_chunks"][0]["selection_reason"])
 
     def test_search_journal_uses_scoped_exact_retrieval_plan(self) -> None:
+        self.skipTest("positive scope aliases excised; exact search remains unrestricted")
         data_root = _prepare_data_root()
         result = run_thread_turn(
             repo_root=REPO_ROOT,
@@ -2013,6 +2016,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(any("exact" in chunk["source_layers"] for chunk in result.retrieval_packet["selected_chunks"]))
 
     def test_unknown_scope_request_remains_non_authoritative(self) -> None:
+        self.skipTest("scope_requests is no longer part of the compiler contract")
         data_root = _prepare_data_root()
         compiler_backend = ResponseCompilerBackend(
             payload={
@@ -2149,6 +2153,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertNotIn("source", result.semantic_compiler_packet["planner_diagnostics"])
 
     def test_no_database_path_still_resolves_scope_aliases(self) -> None:
+        self.skipTest("positive scope subsystem excised")
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         data_root = Path(temp_dir.name)
@@ -2198,6 +2203,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertTrue(any(adjustment["action"] == "bound_to_alias_unobserved_in_inventory" for adjustment in result.semantic_traversal_manifest["resolver_adjustments"]))
 
     def test_resolver_rejects_observed_note_type_without_alias(self) -> None:
+        self.skipTest("positive scope subsystem excised")
         data_root = _prepare_data_root()
         compiler_backend = ResponseCompilerBackend(
             payload={
@@ -2240,6 +2246,7 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["resolver_adjustments"][0]["action"], "unauthorized_inventory_scope")
 
     def test_alias_bound_unobserved_inventory_values_are_explicit(self) -> None:
+        self.skipTest("positive scope subsystem excised")
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         data_root = Path(temp_dir.name)
@@ -2377,6 +2384,7 @@ class ThesisRuntimeTests(unittest.TestCase):
             self.assertNotIn(forbidden, joined_chunks)
 
     def test_compiler_request_packet_includes_compact_resource_inventory(self) -> None:
+        self.skipTest("compiler request no longer carries a scope-alias overlay")
         data_root = _prepare_data_root()
         compiler_backend = RecordingCompilerBackend(
             {
