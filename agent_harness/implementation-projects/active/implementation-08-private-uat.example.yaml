@@ -1,0 +1,81 @@
+schema_version: 1
+suite_id: implementation-08-private-before
+
+# Replace every synthetic value locally. Keep the populated copy under
+# agent_harness/private/; never commit it.
+cases:
+  - id: narrow-fact-example
+    description: Synthetic narrow temporal fact
+    turns:
+      - input: When did the operator record the synthetic transition?
+    expected:
+      response_mode: traverse
+      current_turn_subjects: [synthetic transition]
+      resolved_referents: []
+      required_operators: [temporal_retrieve]
+      evidence_requirements: [chronology]
+      answer:
+        exact_value: null
+        acceptable_values: []
+        resolution: bounded_or_exact
+      evidence_boundary:
+        required_note_uuids: []
+        acceptable_note_uuids: []
+        answer_bearing_chunk_ids: []
+        forbidden_note_uuids: []
+        forbidden_inferences: [do_not_infer_a_date_from_context]
+      negative_claim:
+        permitted: false
+        required_coverage: null
+
+  - id: referential-example
+    description: Synthetic two-turn referential continuation
+    turns:
+      - input: What happened to the synthetic subject?
+      - input: How did that experience relate to the later choice?
+    expected:
+      response_mode: traverse
+      current_turn_subjects: [synthetic subject, later choice]
+      resolved_referents: [synthetic subject]
+      required_operators: [exact_chunk_search]
+      evidence_requirements: [explicit_connection]
+      answer:
+        exact_value: null
+        acceptable_values: []
+        resolution: bounded_or_exact
+      evidence_boundary:
+        required_note_uuids: []
+        acceptable_note_uuids: []
+        answer_bearing_chunk_ids: []
+        forbidden_note_uuids: []
+        forbidden_inferences: [do_not_infer_unstated_causation]
+      negative_claim:
+        permitted: false
+        required_coverage: null
+
+  - id: exact-absence-example
+    description: Synthetic exact-literal absence canary
+    turns:
+      - input: Does the exact phrase <operator-selected-synthetic-literal> occur anywhere in the corpus?
+    expected:
+      response_mode: traverse
+      current_turn_subjects: [operator-selected-synthetic-literal]
+      resolved_referents: []
+      required_operators: [exact_chunk_search]
+      evidence_requirements: [literal_exhaustive]
+      answer:
+        exact_value: null
+        acceptable_values: [present, absent]
+        resolution: exact_literal_only
+      evidence_boundary:
+        required_note_uuids: []
+        acceptable_note_uuids: []
+        answer_bearing_chunk_ids: []
+        forbidden_note_uuids: []
+        forbidden_inferences: [do_not_generalize_literal_absence]
+      negative_claim:
+        permitted: true
+        required_coverage:
+          layer: exact_chunk_search
+          exhaustive: true
+          scope: complete_eligible_corpus
