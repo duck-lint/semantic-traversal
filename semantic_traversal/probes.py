@@ -8,7 +8,7 @@ from typing import Any
 from .ingest import IngestSourceRoot, run_ingest
 from .config import load_runtime_config
 from .llm import LLMResponse
-from .retrieval_plan import build_default_retrieval_plan, scope_requests_from_text
+from .retrieval_plan import build_default_retrieval_plan
 from .runtime import run_thread_turn
 from .semantic_compiler import SemanticCompilerResponse, collect_compiler_terms
 from .storage import load_json, read_ledger
@@ -47,7 +47,6 @@ class ProbeSemanticCompilerBackend:
             raw_user_input=raw_user_input,
             query=query,
             concepts=terms,
-            scope_requests=scope_requests_from_text(raw_user_input),
             graph_seeds=[query] if terms else [],
             resolved_referents=[],
             planner_defaults=self._planner_defaults,

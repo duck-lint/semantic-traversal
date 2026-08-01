@@ -191,7 +191,6 @@ def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeCon
 
 def _with_runtime_overlay(payload: dict[str, Any], config: RuntimeConfig, diagnostics: dict[str, Any]) -> dict[str, Any]:
     summary = json.loads(json.dumps(payload))
-    summary["scope_aliases"] = config.retrieval_scope_aliases
     summary["inventory_diagnostics"] = diagnostics
     return summary
 

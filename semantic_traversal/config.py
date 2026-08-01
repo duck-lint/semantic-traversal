@@ -72,12 +72,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
                 "negative_claims_require_exact_layer": bool,
             },
         },
-        "scope_aliases": dict,
         "evidence_requirement_operators": dict,
-        "scope_policy": {
-            "exact_request_mode": str,
-            "semantic_request_mode": str,
-        },
         "resource_inventory": {
             "schema_version": int,
             "path_depth": int,
@@ -313,33 +308,6 @@ class RuntimeConfig:
             for field, value in mappings.items()
             if isinstance(value, dict)
         }
-
-    @property
-    def retrieval_scope_aliases(self) -> dict[str, dict[str, tuple[str, ...] | str | None]]:
-        aliases: dict[str, dict[str, tuple[str, ...] | str | None]] = {}
-        raw_aliases = self.raw["retrieval"].get("scope_aliases", {})
-        if not isinstance(raw_aliases, dict):
-            return aliases
-        for alias, payload in raw_aliases.items():
-            if not isinstance(payload, dict):
-                continue
-            aliases[str(alias)] = {
-                "source_label": str(payload.get("source_label") or "").strip() or None,
-                "note_type": tuple(str(value) for value in payload.get("note_type", []) if str(value).strip())
-                if isinstance(payload.get("note_type"), list)
-                else (),
-                "path_contains": tuple(str(value) for value in payload.get("path_contains", []) if str(value).strip())
-                if isinstance(payload.get("path_contains"), list)
-                else (),
-            }
-        return aliases
-
-    @property
-    def retrieval_scope_policy(self) -> dict[str, str]:
-        policy = self.raw["retrieval"].get("scope_policy", {})
-        if not isinstance(policy, dict):
-            return {}
-        return {str(key): str(value) for key, value in policy.items()}
 
     @property
     def retrieval_evidence_requirement_operators(self) -> dict[str, str]:
@@ -723,17 +691,6 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
                 f"Runtime config field semantic_compiler.inventory_projection.{field} "
                 f"must be between {minimum} and {maximum}"
             )
-    raw_scope_aliases = parsed["retrieval"].get("scope_aliases", {})
-    if not isinstance(raw_scope_aliases, dict):
-        raise ConfigError("Runtime config field retrieval.scope_aliases must be a mapping")
-    for alias, alias_payload in raw_scope_aliases.items():
-        if not isinstance(alias_payload, dict):
-            raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias} must be a mapping")
-        for field in ("note_type", "path_contains"):
-            if field in alias_payload and not isinstance(alias_payload[field], list):
-                raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.{field} must be a list")
-        if "source_label" in alias_payload and not isinstance(alias_payload["source_label"], (str, type(None))):
-            raise ConfigError(f"Runtime config field retrieval.scope_aliases.{alias}.source_label must be a string or null")
     requirement_mapping = parsed["retrieval"].get("evidence_requirement_operators", {})
     supported_requirements = {"literal_exhaustive", "lexical_relevance", "semantic_similarity", "graph_relation", "chronology"}
     supported_operators = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
@@ -770,9 +727,6 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
     configured_dimensions = parsed["embeddings"]["dimensions"]
     if configured_dimensions is not None and int(configured_dimensions) <= 0:
         raise ConfigError("Runtime config field embeddings.dimensions must be positive when provided")
-    for field in ("exact_request_mode", "semantic_request_mode"):
-        if str(parsed["retrieval"]["scope_policy"][field]).strip().lower() not in {"hard", "preferred"}:
-            raise ConfigError(f"Runtime config field retrieval.scope_policy.{field} must be hard or preferred")
     if str(parsed["retrieval"]["lexical"]["default_mode"]) not in {"exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"}:
         raise ConfigError("Runtime config field retrieval.lexical.default_mode must be a supported FTS5 mode")
     if str(parsed["retrieval"]["temporal"]["default_mode"]) not in set(str(value) for value in parsed["retrieval"]["temporal"]["allowed_modes"]):

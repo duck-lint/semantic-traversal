@@ -21,7 +21,7 @@ from .embeddings import (
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
 from .resource_inventory import build_compiler_inventory_projection, build_resource_inventory, load_persisted_inventory
-from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
+from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness, validate_plan_executability
 from .text_filters import is_low_signal_apparatus_text
 from .temporal import parse_temporal_value, relation_for_anchor
@@ -55,7 +55,6 @@ def _default_active_focus() -> dict[str, Any]:
         "entities": [],
         "relations": [],
         "concepts": [],
-        "scope_requests": [],
         "resolved_referents": [],
         "literal_terms": [],
         "semantic_queries": [],
@@ -192,7 +191,6 @@ def _ensure_recent_semantic_turns(value: Any, *, config: RuntimeConfig) -> list[
                 "entities": _coerce_string_list(entry.get("entities")),
                 "relations": _coerce_string_list(entry.get("relations")),
                 "concepts": _coerce_string_list(entry.get("concepts")),
-                "scope_requests": _coerce_string_list(entry.get("scope_requests")),
                 "resolved_referents": _coerce_string_list(entry.get("resolved_referents")),
                 "literal_terms": _coerce_string_list(entry.get("literal_terms")),
                 "semantic_queries": _coerce_string_list(entry.get("semantic_queries")),
@@ -217,7 +215,6 @@ def _normalize_active_focus(value: Any) -> dict[str, Any]:
     focus["entities"] = _coerce_string_list(value.get("entities"))
     focus["relations"] = _coerce_string_list(value.get("relations"))
     focus["concepts"] = _coerce_string_list(value.get("concepts"))
-    focus["scope_requests"] = _coerce_string_list(value.get("scope_requests"))
     focus["resolved_referents"] = _coerce_string_list(value.get("resolved_referents"))
     focus["graph_seeds"] = _coerce_string_list(value.get("graph_seeds"))
     focus["literal_terms"] = _coerce_string_list(value.get("literal_terms"))
@@ -272,7 +269,6 @@ def _compact_active_focus(
         "entities": [],
         "relations": [],
         "concepts": _coerce_string_list(planner_retrieval_plan.get("concepts")),
-        "scope_requests": _coerce_string_list(planner_retrieval_plan.get("scope_requests")),
         "resolved_referents": _coerce_string_list(planner_retrieval_plan.get("resolved_referents")),
         "literal_terms": _coerce_string_list(planner_retrieval_plan.get("literal_terms")),
         "semantic_queries": semantic_queries,
@@ -326,7 +322,6 @@ def _build_recent_semantic_turn(
         "entities": [],
         "relations": [],
         "concepts": _coerce_string_list(planner_retrieval_plan.get("concepts")),
-        "scope_requests": _coerce_string_list(planner_retrieval_plan.get("scope_requests")),
         "resolved_referents": _coerce_string_list(planner_retrieval_plan.get("resolved_referents")),
         "literal_terms": _coerce_string_list(planner_retrieval_plan.get("literal_terms")),
         "semantic_queries": semantic_queries,
@@ -391,8 +386,7 @@ def _compiler_request_packet(
         "recent_semantic_turns": recent_semantic_turns,
         "active_focus": active_focus,
         "resource_inventory_summary": resource_inventory_summary,
-        "scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
-        "instruction": "Compile a retrieval request, not an answer. Emit supported planner intent and retrieval-layer fields only. Use inventory scope aliases rather than raw note_type, path_contains, source_label, planner_diagnostics, or runtime selection/claim policy.",
+        "instruction": "Compile a retrieval request, not an answer. Emit supported planner intent and retrieval-layer fields only. Do not emit database or metadata filters, planner_diagnostics, or runtime selection/claim policy.",
     }
 
 
@@ -407,7 +401,6 @@ def _deterministic_semantic_packet(
 ) -> dict[str, Any]:
     concepts = _extract_terms(raw_user_input, config=config)
     query = " ".join(concepts[:8]).strip() or raw_user_input.strip()
-    scope_requests = ["journal"] if any(term in concepts for term in ("journal", "journaled", "daily", "dailies", "entries", "entry")) else []
     resolved_referents: list[str] = []
     carry_focus_terms = _is_referential_user_input(raw_user_input, config=config) or is_comparison_intent(raw_user_input)
     if carry_focus_terms:
@@ -431,7 +424,6 @@ def _deterministic_semantic_packet(
         raw_user_input=raw_user_input,
         query=query,
         concepts=concepts,
-        scope_requests=scope_requests,
         graph_seeds=graph_seeds,
         resolved_referents=resolved_referents,
         planner_defaults=config.retrieval_planner_defaults,
@@ -472,7 +464,6 @@ def _canonicalize_compiler_packet(
         raw_user_input=raw_user_input,
         query=packet["query"],
         concepts=_extract_terms(packet["query"], config=config),
-        scope_requests=scope_requests_from_text(packet["query"]),
         graph_seeds=[packet["query"]] if packet["query"].strip() else [],
         resolved_referents=list(packet["resolved_referents"]),
         planner_defaults=config.retrieval_planner_defaults,
@@ -561,14 +552,13 @@ def _repair_incomplete_compiler_plan(
     repair_request["instruction"] = (
         "Repair the compiler retrieval plan exactly once. Preserve raw_user_input, valid semantic fields, and valid layers. "
         "For each declared evidence requirement, add its mapped supported operator or explicitly remove/revise the requirement "
-        "if the interpretation was wrong. Remove unauthorized raw note-type, path, or source scope values. Return JSON only; "
+        "if the interpretation was wrong. Return JSON only; "
         "do not answer the user, emit runtime policy, or make topic-specific inferences."
     )
     repair_request["repair_context"] = {
         "original_compiler_payload": compiler_response.parsed_payload,
         "canonical_plan": planner,
         "completeness_diagnostics": initial_completeness,
-        "available_scope_aliases": resource_inventory_summary.get("scope_aliases", {}),
         "supported_evidence_requirements": list(config.retrieval_evidence_requirement_operators),
         "requirement_operator_mapping": config.retrieval_evidence_requirement_operators,
     }
@@ -653,7 +643,6 @@ def _incomplete_plan_artifacts(
         "coverage": {"exact_search_performed": False, "exact_status": "not_requested", "scope": bound.get("scope_filters", {}), "literal_terms": [], "coverage_claims_allowed": False, "negative_claims_allowed": False, "required_layer_results": [], "plan_completeness": completeness, "plan_executability": plan_executability},
         "limits": ["Retrieval was not executed because the compiler plan was incomplete."],
         "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
-        "scope_resolution": {"hard": bound.get("scope_filters", {}), "preferred": bound.get("preferred_scope_filters", {}), "bound_requests": bound.get("scope_resolution", {})},
         "selection_notes": [note],
     }
     packet = {"bound_retrieval_plan": bound, "coverage": manifest["coverage"], "limits": manifest["limits"], "selected_chunks": [], "matched_chunk_count": 0, "retrieval_observation": "blocked_incomplete_plan", "assembled_from_traversal_manifest": True}
@@ -708,7 +697,6 @@ def _non_executable_plan_artifacts(
         "coverage": coverage,
         "limits": ["Retrieval was not executed because the compiler plan was not executable."],
         "graph_traversal": {"status": "not_executed", "direction": config.graph_traversal_direction, "candidate_note_ids": []},
-        "scope_resolution": {"hard": {}, "preferred": {}, "bound_requests": {}},
         "selection_notes": [note],
     }
     packet = {
@@ -884,23 +872,13 @@ def _annotate_scope_matches(
     candidates: list[dict[str, Any]],
     *,
     hard_scope_filters: dict[str, Any],
-    preferred_scope_filters: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Expose scope evidence without turning preferred scope into admission."""
+    """Expose the concrete execution scope used by the existing APIs."""
     annotated: list[dict[str, Any]] = []
-    preferred_scope_active = bool(
-        str(preferred_scope_filters.get("source_label") or "").strip()
-        or _scope_values(preferred_scope_filters, "note_type")
-        or _scope_values(preferred_scope_filters, "path_contains")
-    )
     for candidate in candidates:
         next_candidate = dict(candidate)
         if "scope_match" not in next_candidate:
             next_candidate["scope_match"] = hard_scope_filters
-        next_candidate["preferred_scope_match"] = (
-            preferred_scope_active
-            and _chunk_matches_scope(next_candidate, preferred_scope_filters)
-        )
         annotated.append(next_candidate)
     return annotated
 
@@ -1825,7 +1803,7 @@ def _is_template_or_schema_query(semantic_compiler_packet: dict[str, Any]) -> bo
         value = semantic_compiler_packet.get(key)
         if isinstance(value, str):
             values.append(value)
-    for key in ("entities", "relations", "resolved_referents", "graph_seeds", "concepts", "scope_requests", "literal_terms", "semantic_queries", "lexical_queries"):
+    for key in ("entities", "relations", "resolved_referents", "graph_seeds", "concepts", "literal_terms", "semantic_queries", "lexical_queries"):
         values.extend(_coerce_string_list(semantic_compiler_packet.get(key)))
     haystack = _normalize_text(" ".join(values))
     template_terms = {
@@ -1992,7 +1970,7 @@ def _order_temporal_candidates(
     return ordered
 
 
-def _temporal_candidates(
+def _temporal_candidates_global_legacy(
     *,
     connection: sqlite3.Connection,
     config: RuntimeConfig,
@@ -2122,6 +2100,96 @@ def _temporal_candidates(
     temporal = temporal[: min(config.retrieval_temporal_max_candidates, max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit)))))]
     diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "matched_note_count": len({str(item["note_id"]) for item in temporal}), "relation_certainty_counts": dict(sorted(Counter(str(item.get("relation_status")) for item in temporal).items()))})
     return temporal, [*lexical_notes, *vector_notes], diagnostics
+
+
+def _temporal_candidates(
+    *, connection: sqlite3.Connection, config: RuntimeConfig, chunk_rows: list[dict[str, Any]],
+    layer: dict[str, Any], lexical_queries: list[str], semantic_queries: list[str],
+    literal_terms: list[dict[str, Any]], scope_filters: dict[str, Any],
+    embedding_backend: EmbeddingBackend, resolved_referents: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    """Admit relevance separately for each existing subject, then apply chronology."""
+    subjects = list(dict.fromkeys(str(value).strip() for value in (resolved_referents or []) if str(value).strip())) or [""]
+    # The legacy implementation performs the unchanged anchor parsing and
+    # relation checks.  Its candidate construction is reused per subject so
+    # chronology can never select a global early note before relevance.
+    anchor_rows = connection.execute(
+        "SELECT anchor_id, note_id, chunk_id, anchor_type, canonical_start, canonical_end, precision, source_field, original_source_value, authority, parsing_status, conflict_group, unresolved, diagnostic_reason FROM temporal_anchors ORDER BY canonical_start, anchor_id"
+    ).fetchall()
+    mode = str(layer.get("mode") or config.retrieval_temporal_default_mode)
+    diagnostics: dict[str, Any] = {"operator": "temporal_retrieve", "status": "not_requested", "mode": mode, "searches_full_temporal_projection": True, "subject_count": len(subjects), "per_subject": []}
+    if not config.retrieval_temporal_enabled or mode not in config.retrieval_temporal_allowed_modes:
+        diagnostics.update({"status": "unsupported", "candidate_count": 0})
+        return [], ["temporal retrieval unavailable"], diagnostics
+    try:
+        boundary_start = parse_temporal_value(layer["before"])[0] if layer.get("before") is not None else parse_temporal_value(layer["start"])[0] if layer.get("start") is not None else None
+        boundary_end = parse_temporal_value(layer["after"])[1] if layer.get("after") is not None else parse_temporal_value(layer["end"])[1] if layer.get("end") is not None else None
+        if mode == "between" and (boundary_start is None or boundary_end is None):
+            raise ValueError("between requires start and end")
+        if boundary_start and boundary_end and boundary_start > boundary_end:
+            raise ValueError("temporal boundaries are contradictory")
+    except (TypeError, ValueError) as exc:
+        diagnostics.update({"status": "failed", "failure_reason": str(exc), "candidate_count": 0})
+        return [], [f"temporal boundary failure: {exc}"], diagnostics
+    allowed_types = set(layer.get("anchor_types") or config.retrieval_temporal_default_anchor_types)
+    allowed_authorities = set(layer.get("authorities") or config.retrieval_temporal_allowed_authorities)
+    anchors_by_note: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in anchor_rows:
+        anchor = dict(row)
+        if anchor["anchor_type"] not in allowed_types or anchor["authority"] not in allowed_authorities:
+            continue
+        relation = relation_for_anchor(anchor, mode=mode, boundary_start=boundary_start, boundary_end=boundary_end, include_unresolved=bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default)))
+        if relation is not None:
+            anchor["relation_certainty"] = relation
+            anchors_by_note[str(anchor["note_id"])].append(anchor)
+    eligible_chunk_ids = {str(row["chunk_id"]) for row in chunk_rows if str(row.get("note_id")) in anchors_by_note and _chunk_matches_scope(row, scope_filters)}
+    rows_by_id = {str(row["chunk_id"]): row for row in chunk_rows}
+    by_subject: list[list[dict[str, Any]]] = []
+    notes: list[str] = []
+    lexical_total = 0
+    vector_total = 0
+    for subject in subjects:
+        lexical = [query for query in lexical_queries if not subject or subject.lower() in query.lower()] or ([subject] if subject else lexical_queries)
+        semantic = [query for query in semantic_queries if not subject or subject.lower() in query.lower()] or ([subject] if subject else semantic_queries)
+        literal = [entry for entry in literal_terms if not subject or subject.lower() in str(entry.get("term") or "").lower()]
+        combined_queries = list(dict.fromkeys(list(lexical) + [str(item.get("term")) for item in literal if item.get("term")]))
+        lexical_candidates, lexical_notes, lexical_diag = _lexical_candidates(chunk_rows, combined_queries, connection=connection, scope_filters=scope_filters, limit=None, config=config, mode=config.retrieval_lexical_default_mode, return_diagnostics=True)
+        lexical_candidates = [item for item in lexical_candidates if str(item.get("chunk_id")) in eligible_chunk_ids]
+        vector_candidates, vector_notes, vector_diag = _vector_candidates(connection=connection, config=config, embedding_backend=embedding_backend, vector_query=semantic[0] if semantic else subject, vector_queries=semantic or ([subject] if subject else []), scope_filters=scope_filters, limit=config.retrieval_temporal_max_candidates, eligible_chunk_ids=eligible_chunk_ids, return_diagnostics=True)
+        lexical_total += len(lexical_candidates)
+        vector_total += len(vector_candidates)
+        notes.extend([*lexical_notes, *vector_notes])
+        lexical_by_id = {str(item["chunk_id"]): index for index, item in enumerate(lexical_candidates, 1)}
+        vector_by_id = {str(item["chunk_id"]): index for index, item in enumerate(vector_candidates, 1)}
+        candidates: list[dict[str, Any]] = []
+        for chunk_id in sorted(set(lexical_by_id) | set(vector_by_id)):
+            row = rows_by_id.get(chunk_id); anchors = anchors_by_note.get(str(row.get("note_id"))) if row else []
+            if not row or not anchors: continue
+            governing = _choose_temporal_governing_anchor(anchors, mode=mode, direction=str(layer.get("direction") or "ascending"))
+            ranks = [rank for rank in (lexical_by_id.get(chunk_id), vector_by_id.get(chunk_id)) if rank]
+            relevance = sum(1.0 / rank for rank in ranks)
+            candidates.append({**row, "selection_source": "temporal", "source_layers": ["temporal"], "score": relevance, "internal_ordinal_relevance": relevance, "temporal_subject": subject, "temporal_mode": mode, "temporal_governing_anchor_id": governing["anchor_id"], "temporal_governing_anchor_type": governing["anchor_type"], "temporal_governing_canonical_start": governing["canonical_start"], "temporal_governing_canonical_end": governing["canonical_end"], "temporal_anchor_ids": [item["anchor_id"] for item in sorted(anchors, key=_temporal_anchor_order_key)], "temporal_provenance": [{"anchor_id": item["anchor_id"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "authority": item["authority"], "subject": subject, "relation": mode, "relation_certainty": item["relation_certainty"]} for item in sorted(anchors, key=_temporal_anchor_order_key)], "relation_status": governing["relation_certainty"], "semantic_query_provenance": semantic, "selection_reason": f"temporal {mode} relevance admission", "match_reason": f"temporal {mode} relation with ordinal relevance"})
+        for candidate in candidates:
+            candidate["internal_lexical_rank"] = lexical_by_id.get(str(candidate.get("chunk_id") or ""))
+            candidate["internal_vector_rank"] = vector_by_id.get(str(candidate.get("chunk_id") or ""))
+        by_subject.append(_order_temporal_candidates(candidates, mode=mode, direction=str(layer.get("direction") or "ascending")))
+        diagnostics["per_subject"].append({"subject": subject, "lexical_candidate_count": len(lexical_candidates), "vector_candidate_count": len(vector_candidates), "temporal_candidate_count": len(candidates), "governing_anchor_count": len(candidates)})
+    requested_limit = max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit))))
+    limit = min(config.retrieval_temporal_max_candidates, max(requested_limit, len(subjects)))
+    temporal: list[dict[str, Any]] = []
+    for index in range(max((len(items) for items in by_subject), default=0)):
+        for items in by_subject:
+            if index < len(items) and len(temporal) < limit:
+                temporal.append(items[index])
+    diagnostics["internal_surface_counts"] = {"lexical": lexical_total, "vector": vector_total}
+    diagnostics["requested_limit"] = requested_limit
+    diagnostics["effective_limit"] = limit
+    diagnostics["limit_adjustment"] = "raised_to_subject_count" if limit != requested_limit else "none"
+    diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "satisfied_subject_count": len({str(item.get("temporal_subject") or "") for item in temporal}), "missing_subject_count": max(0, len(subjects) - len({str(item.get("temporal_subject") or "") for item in temporal})), "one_per_subject_reservation_satisfied": all(any(str(item.get("temporal_subject") or "") == subject for item in temporal) for subject in subjects)})
+    if config.retrieval_temporal_max_candidates < len(subjects):
+        diagnostics["status"] = "incomplete_subject_capacity"
+        diagnostics["limit_adjustment"] = "runtime_max_below_subject_count"
+    return temporal, notes, diagnostics
 
 
 _FUSION_SURFACE_ORDER = ("exact", "lexical", "vector", "graph", "temporal")
@@ -2329,7 +2397,6 @@ def _merge_candidates(
         key=lambda candidate: (
             bool(candidate.get("_retrieval_demoted")),
             -float(candidate.get("ordinal_fusion_score") or 0.0),
-            not bool(candidate.get("preferred_scope_match")),
             int(candidate.get("best_surface_rank") or 10**9),
             int(candidate.get("surface_rank_sum") or 10**9),
             tuple(
@@ -2504,7 +2571,6 @@ def _fusion_diagnostics(
     selected_by_id = {str(candidate.get("chunk_id") or ""): candidate for candidate in selected_candidates}
     selected_hashes = {str(candidate.get("chunk_hash") or "") for candidate in selected_candidates if str(candidate.get("chunk_hash") or "")}
     selected_note_counts = Counter(str(candidate.get("note_id") or "") for candidate in selected_candidates)
-    selected_preferred = [candidate for candidate in selected_candidates if bool(candidate.get("preferred_scope_match"))]
     candidate_records: list[dict[str, Any]] = []
     for candidate in merged_candidates:
         chunk_id = str(candidate.get("chunk_id") or "")
@@ -2520,7 +2586,6 @@ def _fusion_diagnostics(
         candidate_records.append({
             "chunk_id": chunk_id,
             "note_id": str(candidate.get("note_id") or ""),
-            "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
             "retrieval_demoted": bool(candidate.get("_retrieval_demoted")),
             "source_layers": _candidate_source_layers(candidate),
             "surface_ranks": dict(candidate.get("surface_ranks") or {}),
@@ -2550,8 +2615,6 @@ def _fusion_diagnostics(
         "selected_unique_note_count": len(selected_note_counts),
         "selected_chunks_per_note": dict(sorted(selected_note_counts.items())),
         "max_selected_chunks_per_note": max(selected_note_counts.values(), default=0),
-        "preferred_selected_count": len(selected_preferred),
-        "preferred_selected_unique_note_count": len({str(candidate.get("note_id") or "") for candidate in selected_preferred}),
         "selected_counts_by_supporting_surface": _count_selected_by_layer(selected_candidates),
         "selected_counts_by_selection_source": dict(sorted(Counter(str(candidate.get("selection_source") or "") for candidate in selected_candidates).items())),
         "required_reservation": dict(selection_diagnostics),
@@ -2576,7 +2639,6 @@ def _semantic_traversal(
             raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
             query=str(semantic_compiler_packet.get("query") or ""),
             concepts=_coerce_string_list(semantic_compiler_packet.get("concepts")),
-            scope_requests=_coerce_string_list(semantic_compiler_packet.get("scope_requests")),
             graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
             planner_defaults=config.retrieval_planner_defaults,
@@ -2735,6 +2797,7 @@ def _semantic_traversal(
                 layer=temporal_layer, lexical_queries=lexical_queries,
                 semantic_queries=semantic_queries, literal_terms=literal_terms,
                 scope_filters=scope_filters, embedding_backend=embedding_backend,
+                resolved_referents=coerce_string_list(bound_retrieval_plan.get("resolved_referents")),
             )
         except sqlite3.OperationalError as exc:
             temporal_info = {"operator": "temporal_retrieve", "status": "unavailable", "candidate_count": 0, "failure_reason": str(exc)}
@@ -2768,11 +2831,9 @@ def _semantic_traversal(
         config=config,
     )
 
-    preferred_scope_filters = bound_retrieval_plan.get("preferred_scope_filters") if isinstance(bound_retrieval_plan.get("preferred_scope_filters"), dict) else {}
     exact_candidates = _annotate_scope_matches(
         exact_candidates,
         hard_scope_filters=scope_filters,
-        preferred_scope_filters=preferred_scope_filters,
     )
 
     layer_manifests["lexical"] = _non_exact_layer_manifest(
@@ -2807,22 +2868,18 @@ def _semantic_traversal(
     lexical_candidates = _annotate_scope_matches(
         lexical_candidates,
         hard_scope_filters=scope_filters,
-        preferred_scope_filters=preferred_scope_filters,
     )
     vector_candidates = _annotate_scope_matches(
         vector_candidates,
         hard_scope_filters=scope_filters,
-        preferred_scope_filters=preferred_scope_filters,
     )
     graph_candidates = _annotate_scope_matches(
         graph_candidates,
         hard_scope_filters=scope_filters,
-        preferred_scope_filters=preferred_scope_filters,
     )
     temporal_candidates = _annotate_scope_matches(
         temporal_candidates,
         hard_scope_filters=scope_filters,
-        preferred_scope_filters=preferred_scope_filters,
     )
 
     merged_candidates = _merge_candidates(lexical_candidates, vector_candidates, graph_candidates, config=config, exact_candidates=exact_candidates, temporal_candidates=temporal_candidates)
@@ -2862,6 +2919,9 @@ def _semantic_traversal(
                 if manifest.get("status") != "completed_with_candidates"
                 else "required layer produced candidates but no selected chunk retained its provenance"
             )
+        if source == "temporal" and bool(manifest.get("required")) and int((temporal_info or {}).get("missing_subject_count") or 0) > 0:
+            manifest["adequate_contribution"] = False
+            manifest["inadequacy_reason"] = "required temporal subject context is incomplete"
     exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
     exact_search_performed = exact_layer is not None
     total_exact_matches = exact_info.get("total_match_count")
@@ -2993,11 +3053,6 @@ def _semantic_traversal(
         "coverage": coverage,
         "limits": limits,
         "graph_traversal": graph_traversal_info,
-        "scope_resolution": {
-            "hard": scope_filters,
-            "preferred": preferred_scope_filters,
-            "bound_requests": bound_retrieval_plan.get("scope_resolution", {}),
-        },
         "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes, *temporal_notes],
     }
 
@@ -3033,7 +3088,6 @@ def _semantic_traversal(
                 "relation_status": candidate.get("relation_status"),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
-                "preferred_scope_match": bool(candidate.get("preferred_scope_match")),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
             }
             for candidate in selected_candidates
@@ -3181,8 +3235,6 @@ def _build_synthesis_traversal_summary(traversal_manifest: dict[str, Any]) -> di
                 "status": str(layer.get("status") or "not_requested"),
                 "candidate_count": int(layer.get("candidate_count") or 0),
             }
-    scope = traversal_manifest.get("scope_resolution") if isinstance(traversal_manifest.get("scope_resolution"), dict) else {}
-    bound_requests = scope.get("bound_requests") if isinstance(scope.get("bound_requests"), dict) else {}
     fusion = traversal_manifest.get("fusion") if isinstance(traversal_manifest.get("fusion"), dict) else {}
     reservation = fusion.get("required_reservation") if isinstance(fusion.get("required_reservation"), dict) else {}
     full_coverage = traversal_manifest.get("coverage") if isinstance(traversal_manifest.get("coverage"), dict) else {}
@@ -3215,11 +3267,6 @@ def _build_synthesis_traversal_summary(traversal_manifest: dict[str, Any]) -> di
             for item in traversal_manifest.get("unsupported_layer_requests") or []
             if isinstance(item, dict)
         ],
-        "scope_resolution": {
-            "requested_aliases": list(bound_requests.get("requested_aliases") or bound_requests.get("bound_requests") or []),
-            "hard_applied": dict(scope.get("hard") or {}),
-            "preferred_applied": dict(scope.get("preferred") or {}),
-        },
         "layer_statuses": layer_statuses,
         "fusion_summary": {
             "selector": str(fusion.get("selector") or ""),
@@ -3503,7 +3550,7 @@ def run_thread_turn(
     turn_root.mkdir(parents=True, exist_ok=True)
 
     database_path = _load_ingestion_database_path(data_root=resolved_data_root, config=resolved_config)
-    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "scope_aliases": resolved_config.retrieval_scope_aliases, "inventory_diagnostics": {"source": "config_only_fallback", "status": "unavailable", "snapshot_load_count": 0, "full_inventory_rebuilds": 0}}
+    resource_inventory_summary: dict[str, Any] = {"configured_source_labels": [resolved_config.vault_source_label], "observed_source_labels": [], "frontmatter_facets": {"note_type": []}, "path_topology": {"top_level": [], "second_level": []}, "graph_capabilities": {"nodes_table_present": False, "edges_table_present": False, "node_count": 0, "edge_count": 0}, "inventory_diagnostics": {"source": "config_only_fallback", "status": "unavailable", "snapshot_load_count": 0, "full_inventory_rebuilds": 0}}
     if database_path.exists():
         try:
             with sqlite3.connect(database_path) as inventory_connection:
@@ -3575,7 +3622,6 @@ def run_thread_turn(
             raw_user_input=user_input,
             query=str(semantic_compiler_packet.get("query") or ""),
             concepts=_coerce_string_list(semantic_compiler_packet.get("concepts")),
-            scope_requests=_coerce_string_list(semantic_compiler_packet.get("scope_requests")),
             graph_seeds=_coerce_string_list(semantic_compiler_packet.get("graph_seeds")),
             resolved_referents=_coerce_string_list(semantic_compiler_packet.get("resolved_referents")),
             planner_defaults=resolved_config.retrieval_planner_defaults,
