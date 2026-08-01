@@ -92,6 +92,23 @@ The full inventory remains authoritative for persistence, validation, resolver
 binding, traversal, manifests, and diagnostics. No reingest is required; the
 post-alignment run remains operator-preserved and the corrected private rerun
 remains pending. Seam 1 has not begun.
+
+## Resolved-referent propagation correction
+
+PR #15 successfully excised scope aliases and established the context-first
+temporal kernel. The post-PR-15 private rerun showed compiler referents
+present upstream, but resolver binding omitted them. Temporal execution then
+used an anonymous query-level fallback; the improved answer was supported by
+other evidence and did not validate per-subject temporal execution.
+
+This correction preserves ordered, canonically deduplicated referents from
+compiler plan through binding and temporal execution. It distinguishes genuine
+no-referent query context from propagation failure, counts named-subject
+coverage only from real referents, and preserves same-chunk multi-subject
+provenance during temporal deduplication. Lexical multi-query flattening
+remains deferred. Repair and fallback remain unchanged. No reingest is
+required; the fresh private rerun remains operator-pending; Seam 1 has not
+begun.
 # Implementation 08 — pre-Seam-1 kernel correction
 
 The post-PR-14 private rerun completed five cases and six turns: all six compiler contracts were valid, with no repair or fallback. Exact-absence coverage and canonical metadata propagation remained healthy. A valid multi-subject temporal plan nevertheless admitted globally earliest unrelated evidence; compiler-emitted substrate terms were rejected by the positive alias gate.

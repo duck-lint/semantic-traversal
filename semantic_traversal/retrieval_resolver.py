@@ -161,6 +161,10 @@ def bind_retrieval_plan(
     adjustments: list[dict[str, Any]] = []
 
     concepts = coerce_string_list(planner_retrieval_plan.get("concepts"))
+    # Resolved referents are semantic subjects, not executable scope. Preserve
+    # the compiler's canonical order and deduplication without interpreting
+    # or authorizing the values against the inventory.
+    resolved_referents = coerce_string_list(planner_retrieval_plan.get("resolved_referents"))
     semantic_queries = coerce_string_list(planner_retrieval_plan.get("semantic_queries"))
 
     literal_terms = [entry for entry in planner_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
@@ -315,6 +319,7 @@ def bind_retrieval_plan(
 
     bound_plan = {
         "intent_type": str(planner_retrieval_plan.get("intent_type") or "semantic_traversal"),
+        "resolved_referents": resolved_referents,
         "scope_filters": scope_filters,
         "literal_terms": literal_terms,
         "evidence_requirements": coerce_string_list(planner_retrieval_plan.get("evidence_requirements")),

@@ -88,7 +88,7 @@ Required operators and evidence requirements use subset semantics: missing
 required values fail, while additional requested operators remain visible for
 efficiency review. Subject and referent results remain exact normalized
 surface comparisons; mismatches are review signals, not independent semantic
-failures. The redacted report contract is version 5 / evaluator contract 4,
+failures. The redacted report contract is version 6 / evaluator contract 5,
 and a run cannot resume under a different contract version. Use a fresh suite
 ID after this correction rather than mixing records.
 
@@ -122,7 +122,7 @@ request/execution, exact status, required-term adequacy, scope, and
 The corrected private baseline is still a pre-production-change measurement.
 Inventory inspection or redesign, model replacement/bakeoff, corpus changes,
 and Seam 1 remain separate future work. The report/evaluator contract for this
-alignment correction is version 5 / evaluator contract 4; fixture schema
+alignment correction is version 6 / evaluator contract 5; fixture schema
 version 2 remains unchanged.
 
 The completed pre-fix private baseline exposed a canonical semantic chunk
@@ -163,3 +163,33 @@ suite_id: implementation-08-private-before-v2-post-context-first-temporal
 ```
 
 Expected directory: `agent_harness/private/runs/implementation-08-private-before-v2-post-context-first-temporal/`.
+
+# Post-PR-15 resolved-referent propagation correction
+
+PR #15 successfully excised scope aliases. The post-PR-15 private rerun showed
+compiler referents present upstream, but resolver binding omitted them, so
+temporal execution used an anonymous query-level fallback. The improved answer
+was supported by other evidence and did not validate per-subject temporal
+execution.
+
+The runtime correction preserves ordered resolved referents through the
+compiler-to-binder-to-executor seam and records an explicit propagation
+diagnostic. A genuine empty referent list retains query-level temporal
+behavior; nonempty referents that disappear are a propagation failure, not a
+satisfied anonymous subject. Temporal diagnostics count only real named
+subjects, and same-chunk multi-subject provenance survives deduplication
+without duplicating the selected chunk.
+
+Lexical multi-query flattening remains a known deferred weakness. Repair,
+fallback, compiler contract, prompt, model, YAML, inventory, chunk/index,
+retrieval-surface, synthesis, and negative-claim behavior are unchanged. No
+reingest is required. Use this fresh operator rerun after merge:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-resolved-referent-propagation
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-resolved-referent-propagation/`.
+The corrected private rerun remains operator-pending. Do not edit or replace
+the ignored fixture automatically. Seam 1 has not begun.

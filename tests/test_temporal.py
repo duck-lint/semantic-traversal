@@ -9,7 +9,7 @@ from pathlib import Path
 from semantic_traversal.config import load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, canonical_embedding_identity, embedding_identity_hash
 from semantic_traversal.ingest import IngestSourceRoot, run_ingest
-from semantic_traversal.runtime import _merge_candidates, _order_temporal_candidates, _temporal_candidates
+from semantic_traversal.runtime import _merge_candidates, _order_temporal_candidates, _semantic_traversal, _temporal_candidates
 from semantic_traversal.temporal import build_temporal_anchors, parse_temporal_value
 
 
@@ -252,3 +252,99 @@ class TemporalTests(unittest.TestCase):
         self.assertEqual(merged[0]["source_layers"], ["lexical", "temporal"])
         self.assertEqual(merged[0]["temporal_governing_anchor_id"], "a-late")
         self.assertEqual(merged[0]["temporal_anchor_ids"], ["a-early", "a-late"])
+
+    def test_same_chunk_temporal_deduplication_retains_both_subject_provenances(self) -> None:
+        base = {
+            "chunk_id": "shared", "note_id": "n-shared", "chunk_hash": "h-shared", "selection_source": "temporal",
+            "source_layers": ["temporal"], "score": 1.0, "temporal_mode": "earliest",
+            "temporal_anchor_ids": ["anchor-shared"], "temporal_governing_anchor_id": "anchor-shared",
+            "temporal_governing_canonical_start": "2020-01-01T00:00:00Z", "temporal_governing_canonical_end": "2020-12-31T23:59:59.999999Z",
+        }
+        subject_a = {**base, "temporal_subject": "amber", "temporal_subjects": ["amber"], "temporal_provenance": [{"anchor_id": "anchor-shared", "subject": "amber"}]}
+        subject_b = {**base, "temporal_subject": "beryl", "temporal_subjects": ["beryl"], "temporal_provenance": [{"anchor_id": "anchor-shared", "subject": "beryl"}]}
+        merged = _merge_candidates([], [], [], self.config, temporal_candidates=[subject_a, subject_b])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["temporal_subjects"], ["amber", "beryl"])
+        self.assertEqual({item["subject"] for item in merged[0]["temporal_provenance"]}, {"amber", "beryl"})
+
+    def test_compiler_to_selected_packet_preserves_subject_contexts(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata);
+            CREATE TABLE temporal_anchors (anchor_id TEXT, note_id TEXT, chunk_id TEXT, anchor_type TEXT, canonical_start TEXT, canonical_end TEXT, precision TEXT, source_field TEXT, original_source_value TEXT, authority TEXT, parsing_status TEXT, conflict_group TEXT, unresolved INTEGER, diagnostic_reason TEXT);
+            """
+        )
+        rows = [
+            {"chunk_id": "c-unrelated", "note_id": "n-unrelated", "source_root_label": "fixture", "source_root_path": "", "relative_path": "unrelated.md", "note_title": "Unrelated", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "unrelated global chronology", "chunk_hash": "h-unrelated"},
+            {"chunk_id": "c-a", "note_id": "n-a", "source_root_label": "fixture", "source_root_path": "", "relative_path": "amber.md", "note_title": "Amber", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber evidence", "chunk_hash": "h-a"},
+            {"chunk_id": "c-b", "note_id": "n-b", "source_root_label": "fixture", "source_root_path": "", "relative_path": "beryl.md", "note_title": "Beryl", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "beryl evidence", "chunk_hash": "h-b"},
+        ]
+        connection.executemany("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", rows)
+        connection.executemany("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows)
+        connection.executemany(
+            "INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("a-unrelated", "n-unrelated", None, "journal_entry", "2000-01-01T00:00:00Z", "2000-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2000", "explicit_primary", "valid", None, 0, None),
+                ("a-a", "n-a", None, "journal_entry", "2010-01-01T00:00:00Z", "2010-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2010", "explicit_primary", "valid", None, 0, None),
+                ("a-b", "n-b", None, "journal_entry", "2020-01-01T00:00:00Z", "2020-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2020", "explicit_primary", "valid", None, 0, None),
+            ],
+        )
+        packet = {
+            "raw_user_input": "compare amber and beryl development",
+            "query": "compare amber and beryl development",
+            "concepts": ["amber", "beryl"], "entities": [], "relations": [], "resolved_referents": ["amber", "beryl"], "limitations": [],
+            "planner_diagnostics": {"plan_executability": {"status": "executable"}},
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "concepts": ["amber", "beryl"], "resolved_referents": ["amber", "beryl"],
+                "literal_terms": [], "evidence_requirements": ["chronology"], "semantic_queries": ["amber development", "beryl development"],
+                "lexical_queries": ["amber development", "beryl development"], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "earliest", "limit": 1}],
+            },
+        }
+        try:
+            manifest, retrieval_packet = _semantic_traversal(
+                connection=connection, config=self.config, semantic_compiler_packet=packet,
+                prior_thread_state={}, embedding_backend=_UnavailableEmbedding(), resource_inventory_summary={},
+            )
+        finally:
+            connection.close()
+        bound = manifest["bound_retrieval_plan"]
+        temporal = manifest["layer_manifests"]["temporal"]
+        self.assertEqual(bound["resolved_referents"], ["amber", "beryl"])
+        self.assertEqual(manifest["resolved_referent_propagation"]["status"], "preserved")
+        temporal_diagnostics = temporal["diagnostics"]
+        self.assertEqual(temporal_diagnostics["subject_count"], 2)
+        self.assertEqual(temporal_diagnostics["satisfied_subject_count"], 2)
+        self.assertEqual(temporal_diagnostics["missing_subject_count"], 0)
+        self.assertTrue(temporal_diagnostics["one_per_subject_reservation_satisfied"])
+        selected_ids = {item["chunk_id"] for item in retrieval_packet["selected_chunks"]}
+        self.assertIn("c-a", selected_ids)
+        self.assertIn("c-b", selected_ids)
+        self.assertNotIn("c-unrelated", selected_ids)
+
+    def test_query_level_temporal_context_does_not_claim_named_subject_coverage(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata);
+            CREATE TABLE temporal_anchors (anchor_id TEXT, note_id TEXT, chunk_id TEXT, anchor_type TEXT, canonical_start TEXT, canonical_end TEXT, precision TEXT, source_field TEXT, original_source_value TEXT, authority TEXT, parsing_status TEXT, conflict_group TEXT, unresolved INTEGER, diagnostic_reason TEXT);
+            """
+        )
+        row = {"chunk_id": "c-query", "note_id": "n-query", "source_root_label": "fixture", "source_root_path": "", "relative_path": "query.md", "note_title": "Query", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "query context evidence", "chunk_hash": "h-query"}
+        connection.execute("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", row)
+        connection.execute("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", row)
+        connection.execute("INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("a-query", "n-query", None, "journal_entry", "2020-01-01T00:00:00Z", "2020-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2020", "explicit_primary", "valid", None, 0, None))
+        candidates, _, diagnostics = _temporal_candidates(connection=connection, config=self.config, chunk_rows=[row], layer={"mode": "earliest", "anchor_types": ["journal_entry"], "authorities": ["explicit_primary"], "limit": 1}, lexical_queries=["query context"], semantic_queries=[], literal_terms=[], scope_filters={}, embedding_backend=_UnavailableEmbedding(), resolved_referents=[])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(diagnostics["subject_count"], 0)
+        self.assertEqual(diagnostics["query_context_count"], 1)
+        self.assertEqual(diagnostics["satisfied_subject_count"], 0)
+        self.assertEqual(diagnostics["missing_subject_count"], 0)
+        self.assertFalse(diagnostics["one_per_subject_reservation_satisfied"])
+        self.assertEqual(diagnostics["per_subject"][0]["subject"], None)
+        connection.close()
