@@ -21,6 +21,7 @@
 | 2026-07-30 | Completed correction verification | 206 local Python tests; 14 focused tests; compileall, diff check, plugin build, strict TypeScript passed | Final status transition |
 | 2026-08-01 | Corrected private-UAT measurement instrument | Replaced schema v1 with incompatible per-turn schema v2; added raw compiler-contract observation, runtime-owned negative authorization metrics, all-turn aggregation, and allowlisted report v2 | Preserve the original v1 run locally; rerun the unchanged private baseline and inspect results before Seam 1 |
 | 2026-08-01 | Corrected private-UAT repair observation semantics | Schema-v2 private rerun reached the unchanged production one-shot repair path; evaluator had assumed one compiler call per turn. Attempts are now explicit, required operators use subset semantics, and surface comparisons are non-authoritative diagnostics | Preserve failed private contents locally; rerun with a fresh post-observation-fix suite ID |
+| 2026-08-01 | Corrected private-UAT repair timeout semantics | A repair request reached the configured 120-second timeout and production returned no raw repair response. The evaluator now records unavailable contract status, separates final response attempt from retained plan source, atomically records blocked turns, and continues to independent cases | Preserve original ignored runs; rerun with a fresh post-repair-timeout suite ID |
 
 ## Work status
 
@@ -53,3 +54,13 @@ signals. The corrected private baseline remains operator-rerun-pending under a
 fresh suite ID. Production behaviour remains unchanged. Inventory
 inspection/redesign and model replacement/bakeoff remain separate future work;
 Seam 1 has not begun.
+
+The private schema-v2 baseline reached the one-shot repair path. The repair
+request reached the configured timeout, production returned no raw repair
+response, and the evaluator's prior requirement for a hash on every final
+attempt was invalid. This correction changes only measurement semantics:
+failed repairs are recorded as deterministic failed or incomplete turns,
+without changing the timeout, repair behaviour, prompts, models, retrieval,
+inventory, synthesis, corpus, or fixture schema. The original private runs
+remain ignored and operator-preserved. The corrected baseline remains
+operator-rerun-pending; Seam 1 has not begun.
