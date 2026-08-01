@@ -30,8 +30,8 @@ from semantic_traversal.semantic_compiler import SemanticCompilerResponse, resol
 
 PRIVATE_RELATIVE_ROOT = Path("agent_harness/private")
 FIXTURE_SCHEMA_VERSION = 2
-REPORT_SCHEMA_VERSION = 3
-EVALUATOR_CONTRACT_VERSION = 2
+REPORT_SCHEMA_VERSION = 4
+EVALUATOR_CONTRACT_VERSION = 3
 SUPPORTED_RESPONSE_MODES = {"direct", "traverse"}
 ROOT_FIELDS = {"schema_version", "suite_id", "cases"}
 CASE_FIELDS = {"id", "description", "turns"}
@@ -278,7 +278,10 @@ def evaluate_compiler_contract(*, packet: dict[str, Any], response: SemanticComp
             for index, layer in enumerate(planner.get("retrieval_layers", []) if isinstance(planner.get("retrieval_layers"), list) else []):
                 if not isinstance(layer, dict) or not isinstance(layer.get("operator"), str) or not layer.get("operator"):
                     invalid_planner.append(f"retrieval_layers[{index}]")
-    contract_status = "valid" if raw_status == "object" and not missing_top and not unexpected_top and not invalid_types and not missing_planner and not invalid_planner else "invalid"
+    if raw_status == "unavailable":
+        contract_status = "unavailable"
+    else:
+        contract_status = "valid" if raw_status == "object" and not missing_top and not unexpected_top and not invalid_types and not missing_planner and not invalid_planner else "invalid"
     canonical_plan_present = isinstance(canonical_packet.get("planner_retrieval_plan"), dict)
     fallback_used = bool(canonical_plan_present and not raw_planner_present)
     return {
@@ -347,17 +350,60 @@ def _validate_attempt_topology(*, observations: list[dict[str, Any]], diagnostic
         raise PrivateUATUnavailable("semantic compiler repair observation exists but runtime diagnostics say repair was not attempted")
     if len(roles) == 1 and repair_attempted:
         raise PrivateUATUnavailable("runtime diagnostics claim repair occurred but no repair observation exists")
+    if repair_attempted:
+        if repair.get("response_status") != attempts[-1]["backend_status"]:
+            raise PrivateUATUnavailable("runtime repair diagnostics disagree with the observed repair response status")
+        if repair.get("outcome") not in {"complete", "incomplete", "failed"}:
+            raise PrivateUATUnavailable("runtime repair diagnostics reported an unknown repair outcome")
+    diagnostic_status = diagnostic.get("semantic_compiler_response_status")
+    if diagnostic_status != attempts[-1]["backend_status"]:
+        raise PrivateUATUnavailable("runtime semantic compiler status disagrees with the final observed response")
     return attempts
 
 
-def _authoritative_attempt(*, attempts: list[dict[str, Any]], diagnostic: dict[str, Any]) -> dict[str, Any]:
+def _final_response_attempt(*, attempts: list[dict[str, Any]], diagnostic: dict[str, Any]) -> dict[str, Any]:
+    """Return production's final compiler call, even when it returned nothing."""
     authoritative_hash = diagnostic.get("raw_response_hash")
+    final = attempts[-1]
+    if not isinstance(final.get("raw_response"), str):
+        if authoritative_hash is not None:
+            raise PrivateUATUnavailable("runtime diagnostic supplied a response hash for a final attempt with no raw response")
+        if final.get("backend_status") not in {"unavailable", "timed_out"}:
+            raise PrivateUATUnavailable("final compiler response was absent without an unavailable or timed_out backend status")
+        return final
     if not isinstance(authoritative_hash, str) or not authoritative_hash:
         raise PrivateUATUnavailable("runtime semantic compiler diagnostic did not identify an authoritative response hash")
     matches = [attempt for attempt in attempts if attempt.get("raw_response_sha256") == authoritative_hash]
     if len(matches) != 1:
         raise PrivateUATUnavailable("final compiler response could not be matched to exactly one authoritative observation")
     return matches[0]
+
+
+def _packet_projection(packet: Any) -> dict[str, Any] | None:
+    if not isinstance(packet, dict) or not isinstance(packet.get("planner_retrieval_plan"), dict):
+        return None
+    fields = ("raw_user_input", "intent", "query", "entities", "relations", "resolved_referents", "limitations", "planner_retrieval_plan")
+    return {field: packet.get(field) for field in fields}
+
+
+def _plan_source_attempt(*, attempts: list[dict[str, Any]], packet: dict[str, Any], final_attempt: dict[str, Any]) -> dict[str, Any] | None:
+    """Find the observed response whose parsed packet equals the retained packet."""
+    retained = _packet_projection(packet)
+    if retained is None:
+        return None
+    matches = []
+    for attempt in attempts:
+        parsed = _packet_projection(attempt["response"].parsed_payload)
+        if parsed is not None and parsed == retained:
+            matches.append(attempt)
+    if isinstance(final_attempt.get("raw_response"), str):
+        return final_attempt if final_attempt in matches else None
+    if len(matches) == 1:
+        return matches[0]
+    # A successful final response is still required to prove packet identity;
+    # call order alone is not authority. A failed repair may legitimately
+    # preserve the initial packet, which is covered by the same comparison.
+    return None
 
 
 class RecordingSemanticCompilerBackend:
@@ -438,13 +484,18 @@ def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[st
     observations = observation if isinstance(observation, list) else [observation]
     diagnostic = result.semantic_compiler_diagnostic if isinstance(result.semantic_compiler_diagnostic, dict) else {}
     attempts = _validate_attempt_topology(observations=observations, diagnostic=diagnostic)
-    authoritative = _authoritative_attempt(attempts=attempts, diagnostic=diagnostic)
+    final_response_attempt = _final_response_attempt(attempts=attempts, diagnostic=diagnostic)
+    plan_source_attempt = _plan_source_attempt(
+        attempts=attempts,
+        packet=packet,
+        final_attempt=final_response_attempt,
+    )
     compiler_contracts = []
     for attempt in attempts:
         contract = evaluate_compiler_contract(packet=attempt["request"], response=attempt["response"], canonical_packet=packet)
         attempt["contract_status"] = contract["contract_status"]
         compiler_contracts.append(contract)
-    compiler_contract = compiler_contracts[authoritative["attempt_index"] - 1]
+    compiler_contract = compiler_contracts[final_response_attempt["attempt_index"] - 1]
     repair = diagnostic.get("plan_repair") if isinstance(diagnostic.get("plan_repair"), dict) else {}
     coverage = _coverage_metrics(result=result, expected=expected)
     plan_complete = packet.get("planner_diagnostics", {}).get("plan_completeness", {"status": "unavailable"})
@@ -462,6 +513,8 @@ def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[st
     deterministic = list(components.values())
     failed = any(components[name].get("status") in {"mismatch", "invalid", "blocked"} for name in hard_components)
     unavailable = any(item.get("status") == "unavailable" for item in deterministic)
+    if plan_source_attempt is None:
+        unavailable = True
     if failed:
         evaluation_status = "failed"
     elif unavailable:
@@ -489,8 +542,10 @@ def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[st
         "initial_contract_status": compiler_contracts[0]["contract_status"],
         "repair_backend_status": attempts[1]["backend_status"] if len(attempts) == 2 else None,
         "repair_contract_status": compiler_contracts[1]["contract_status"] if len(attempts) == 2 else None,
-        "authoritative_attempt_role": authoritative["attempt_role"],
-        "authoritative_contract_status": compiler_contract["contract_status"],
+        "final_response_attempt_role": final_response_attempt["attempt_role"],
+        "final_response_status": compiler_contracts[final_response_attempt["attempt_index"] - 1]["contract_status"],
+        "plan_source_attempt_role": plan_source_attempt["attempt_role"] if plan_source_attempt else None,
+        "plan_source_contract_status": compiler_contracts[plan_source_attempt["attempt_index"] - 1]["contract_status"] if plan_source_attempt else "unavailable",
         "plan_completeness": plan_complete,
         "plan_executability": plan_executable,
         "coverage": coverage,
@@ -534,8 +589,10 @@ def _redacted_turn(turn: dict[str, Any]) -> dict[str, Any]:
         "initial_contract_status": metrics.get("initial_contract_status", "unavailable"),
         "repair_backend_status": metrics.get("repair_backend_status"),
         "repair_contract_status": metrics.get("repair_contract_status"),
-        "authoritative_attempt_role": metrics.get("authoritative_attempt_role", "unavailable"),
-        "authoritative_contract_status": metrics.get("authoritative_contract_status", "unavailable"),
+        "final_response_attempt_role": metrics.get("final_response_attempt_role", "unavailable"),
+        "final_response_status": metrics.get("final_response_status", "unavailable"),
+        "plan_source_attempt_role": metrics.get("plan_source_attempt_role", "unavailable"),
+        "plan_source_contract_status": metrics.get("plan_source_contract_status", "unavailable"),
         "response_mode_expectation": component("response_mode"),
         "subject_expectation": component("current_turn_subjects"),
         "referent_expectation": component("resolved_referents"),
@@ -622,23 +679,29 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
     run_dir.mkdir(parents=True, exist_ok=True)
     _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": None})
     completed = {record.get("case_id") for record in _load_raw_records(run_dir)}
+    executed_turn_count = 0
     for case in fixture["cases"]:
         if case["id"] in completed:
             continue
         thread_id = "private-uat-" + hashlib.sha256(f"{fixture['suite_id']}:{case['id']}".encode()).hexdigest()[:24]
         turn_records = []
         for turn_index, turn in enumerate(case["turns"], start=1):
+            executed_turn_count += 1
             before = len(compiler.observations)
             result = run_thread_turn(repo_root=repo_root, data_root=config.data_root, user_input=turn["input"], thread_id=thread_id, config=config, llm_backend=llm_backend, semantic_compiler_backend=compiler)
             observed = compiler.observations[before:]
             diagnostic = result.semantic_compiler_diagnostic if isinstance(result.semantic_compiler_diagnostic, dict) else {}
             attempts = _validate_attempt_topology(observations=observed, diagnostic=diagnostic)
-            authoritative = _authoritative_attempt(attempts=attempts, diagnostic=diagnostic)
             metrics = _turn_metrics(result=result, expected=turn["expected"], observation=observed)
-            turn_records.append({"turn_id": turn_index, "input": turn["input"], "expected": turn["expected"], "metrics": metrics, "result": {"assistant_response": result.assistant_response, "runtime_outcome": result.runtime_outcome, "semantic_compiler_packet": result.semantic_compiler_packet, "semantic_compiler_diagnostic": result.semantic_compiler_diagnostic, "semantic_traversal_manifest": result.semantic_traversal_manifest, "retrieval_packet": result.retrieval_packet, "coverage_report": result.coverage_report, "llm_metadata": result.llm_metadata}, "compiler_attempts": [{"attempt_index": attempt["attempt_index"], "attempt_role": attempt["attempt_role"], "request_sha256": attempt["request_sha256"], "raw_response_sha256": attempt["raw_response_sha256"], "backend_status": attempt["backend_status"], "contract_status": metrics["compiler_attempts"][attempt["attempt_index"] - 1]["contract_status"], "request": attempt["request"], "raw_response": attempt["raw_response"], "metadata": attempt["response_metadata"]} for attempt in attempts], "authoritative_attempt_index": authoritative["attempt_index"]})
+            final_attempt_index = next(attempt["attempt_index"] for attempt in attempts if attempt["attempt_role"] == metrics["final_response_attempt_role"] and attempt["attempt_index"] == len(attempts))
+            plan_source_index = next((attempt["attempt_index"] for attempt in attempts if attempt["attempt_role"] == metrics["plan_source_attempt_role"]), None)
+            turn_records.append({"turn_id": turn_index, "input": turn["input"], "expected": turn["expected"], "metrics": metrics, "result": {"assistant_response": result.assistant_response, "runtime_outcome": result.runtime_outcome, "semantic_compiler_packet": result.semantic_compiler_packet, "semantic_compiler_diagnostic": result.semantic_compiler_diagnostic, "semantic_traversal_manifest": result.semantic_traversal_manifest, "retrieval_packet": result.retrieval_packet, "coverage_report": result.coverage_report, "llm_metadata": result.llm_metadata}, "compiler_attempts": [{"attempt_index": attempt["attempt_index"], "attempt_role": attempt["attempt_role"], "request_sha256": attempt["request_sha256"], "raw_response_sha256": attempt["raw_response_sha256"], "backend_status": attempt["backend_status"], "contract_status": metrics["compiler_attempts"][attempt["attempt_index"] - 1]["contract_status"], "request": attempt["request"], "raw_response": attempt["raw_response"], "metadata": attempt["response_metadata"]} for attempt in attempts], "final_response_attempt_index": final_attempt_index, "plan_source_attempt_index": plan_source_index})
+            # A structured blocked result is a valid failed observation, but
+            # later turns in the same thread would not have valid setup state.
+            if result.runtime_outcome != "completed":
+                break
         _atomic_json(run_dir / "raw" / f"{case['id']}.json", {"case_id": case["id"], "description": case["description"], "turns": turn_records})
-    expected_minimum = sum(len(case["turns"]) for case in fixture["cases"] if case["id"] not in completed)
-    if not expected_minimum <= len(compiler.observations) <= expected_minimum * 2:
+    if not executed_turn_count <= len(compiler.observations) <= executed_turn_count * 2:
         raise PrivateUATUnavailable("observed semantic compiler call count was outside the permitted initial-plus-repair range")
     records = _load_raw_records(run_dir)
     run_sha = sha256_text(json.dumps(records, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
