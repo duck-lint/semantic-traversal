@@ -19,12 +19,13 @@
 | 2026-07-30 | Corrected harness and authority records | Production-shaped state reload, observed/expected separation, atomic per-case checkpoints, focus sequencing | Replace baseline and verify |
 | 2026-07-30 | Re-ran corrected qwen3:8b baseline | 29 unique terminal records; parsed 26, timed_out 1, unavailable 1, invalid_json 1 | Complete machine gates |
 | 2026-07-30 | Completed correction verification | 206 local Python tests; 14 focused tests; compileall, diff check, plugin build, strict TypeScript passed | Final status transition |
+| 2026-08-01 | Prepared pre-Seam-1 private UAT channel | Corrected Seam-0 status drift; added ignored fixture boundary, production-runtime wrapper, redacted export, and repository-safe CI parity | Operator must populate and run the private fixture; inspect results before Seam 1 |
 
 ## Work status
 
 | Work | Status | Verification |
 | --- | --- | --- |
-| Seam-0 records | machine-complete / operator-accepted | Corrected Seam-0 bundle |
+| Seam-0 records | operator-accepted | Corrected Seam-0 bundle |
 | FTS reproduction | passed | Independent starting-tree fixture |
 | Serializer repair | passed | 8 focused lexical/runtime tests |
 | Evaluation matrix | passed | 29 persisted scenario-turn records |
@@ -38,3 +39,5 @@
 | Persisted inventory unavailable locally | Read-only environment state | Record unavailable; do not reingest |
 
 All records agree: `Seam 0: operator-accepted`. The baseline is accepted as a planner-evaluation baseline, not as evidence of acceptable qwen3:8b quality or successful retrieval/synthesis. Seam 1 has not begun.
+
+This preparation pass does not begin Seam 1. The private local baseline tooling is prepared, but real private-corpus execution remains operator-pending. Seam 1 must wait until the operator has pulled the branch, populated the ignored fixture, run the local baseline, inspected the raw private results, and explicitly accepted or recorded the result.

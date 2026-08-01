@@ -2,7 +2,7 @@
 
 ## Status
 
-Seam 0: machine-complete / operator-acceptance-pending
+Seam 0: operator-accepted
 
 ## Intent
 
@@ -40,4 +40,4 @@ The focus objects do not own routing. `conversation_focus` supplies bounded conv
 
 ## Completion rule
 
-The correction pass, replacement baseline, and complete verification pass are complete. Use `Seam 0: machine-complete / operator-acceptance-pending` and stop; do not begin Seam 1.
+The correction pass, replacement baseline, and complete verification pass are complete. Seam 0 is operator-accepted; stop here and do not begin Seam 1.

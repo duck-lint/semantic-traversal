@@ -18,3 +18,26 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Compile Python sources and tests
+        run: python -m compileall semantic_traversal tests tools
+      - name: Check whitespace errors
+        run: git diff --check
+
+  obsidian-plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: obsidian-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: obsidian-plugin/package-lock.json
+      - name: Install plugin dependencies
+        run: npm ci
+      - name: Build plugin
+        run: npm run build
+      - name: Strict TypeScript check
+        run: npm run typecheck

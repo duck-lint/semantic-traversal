@@ -2,7 +2,9 @@
 
 ## Status
 
-Seam 0: machine-complete / operator-acceptance-pending
+Seam 0: operator-accepted
+
+This PR prepares the private local baseline channel. Repository-safe tooling may be machine-complete, but execution against the operator's real corpus remains operator-pending. Seam 1 has not begun.
 
 ## Record schema
 
