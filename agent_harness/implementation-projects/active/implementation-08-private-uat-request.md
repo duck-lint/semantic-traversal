@@ -134,3 +134,19 @@ unrestricted exact-search scope to the fixture's `complete_eligible_corpus`
 requirement. The original private run remains operator-preserved; complete
 post-fix reingest and a fresh private baseline remain operator-pending. Fixture
 schema version 2 is unchanged and Seam 1 has not begun.
+
+The post-alignment private baseline established that canonical semantic chunk
+propagation worked, while all six executed compiler turns emitted invalid
+contracts and used deterministic fallback. The compiler-facing inventory had
+grown oversized and schema-competitive because the full inventory was rendered
+twice, facet projections duplicated observations, high-cardinality values were
+enumerated, and capability mapping resembled an output schema. The bounded
+correction preserves the single full persisted inventory and supplies the
+compiler with one deterministic in-memory projection. Every admitted semantic
+frontmatter field name remains visible; only generic low-cardinality values are
+enumerated; optional paths and values are trimmed under the configured global
+budget; and the projection is rendered exactly once. Resolver binding,
+retrieval, manifests, and diagnostics retain the full inventory. The prompt
+template, canonical response schema, models, timeout, repair, fallback, and
+fixture schema remain unchanged. No reingest is required. Use a fresh suite ID
+for the post-projection rerun. Seam 1 has not begun.

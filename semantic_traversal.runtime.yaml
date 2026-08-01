@@ -117,6 +117,11 @@ semantic_compiler:
   model: qwen3:8b
   base_url: "http://localhost:11434"
   request_timeout_seconds: 120
+  inventory_projection:
+    max_chars: 12000
+    low_cardinality_max_unique: 24
+    max_values_per_field: 12
+    max_path_values: 48
 
 embeddings:
   provider: "sentence_transformers"

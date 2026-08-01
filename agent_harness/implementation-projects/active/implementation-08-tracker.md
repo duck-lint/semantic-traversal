@@ -78,3 +78,17 @@ fixture's `complete_eligible_corpus` requirement without conflating coverage
 with negative-claim authorization. The completed pre-fix run remains
 operator-preserved; post-fix reingest and a fresh private baseline are
 pending. Seam 1 has not begun.
+
+The post-alignment private baseline completed structurally and showed canonical
+metadata propagation working, but all six compiler turns emitted invalid
+contracts and used deterministic fallback. Repository-safe inspection found
+that the compiler-facing inventory payload duplicated full facet surfaces,
+enumerated high-cardinality values, and exposed output-schema-like capability
+mapping. The correction preserves the one full persisted inventory and adds
+one deterministic in-memory compiler projection: every admitted field name is
+retained, only generic low-cardinality values are enumerated, path and source
+observations are bounded, and the serialized projection is capped by YAML.
+The full inventory remains authoritative for persistence, validation, resolver
+binding, traversal, manifests, and diagnostics. No reingest is required; the
+post-alignment run remains operator-preserved and the corrected private rerun
+remains pending. Seam 1 has not begun.

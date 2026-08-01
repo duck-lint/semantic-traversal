@@ -97,9 +97,12 @@ class SemanticChunkAlignmentTests(unittest.TestCase):
             row = _load_chunk_rows(connection)[0]
             inventory = json.loads(connection.execute("SELECT payload_json FROM resource_inventory_snapshots").fetchone()[0])
             connection.close()
-            self.assertEqual(json.loads(row["frontmatter_semantics_json"]), {"note_type": "journal_entry"})
-            self.assertIn("semantic_chunk_surface", inventory)
-            self.assertNotIn("private_field", json.dumps(inventory))
+        self.assertEqual(
+            json.loads(row["frontmatter_semantics_json"]),
+            {"note_type": "journal_entry", "uuid": "019bc983-8065-7611-b57c-b9ef76d7b848"},
+        )
+        self.assertIn("semantic_chunk_surface", inventory)
+        self.assertNotIn("private_field", json.dumps(inventory))
 
 
 if __name__ == "__main__":

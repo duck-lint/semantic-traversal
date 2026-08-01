@@ -2417,7 +2417,9 @@ class ThesisRuntimeTests(unittest.TestCase):
         request_packet = compiler_backend.calls[0]
         self.assertIn("resource_inventory_summary", request_packet)
         self.assertIn("scope_aliases", request_packet)
-        self.assertIn("frontmatter_facets", request_packet["resource_inventory_summary"])
+        self.assertIn("semantic_chunk", request_packet["resource_inventory_summary"])
+        self.assertIn("admitted_frontmatter_fields", request_packet["resource_inventory_summary"]["semantic_chunk"])
+        self.assertNotIn("frontmatter_facets", request_packet["resource_inventory_summary"])
         self.assertNotIn("paragraph_text", request_packet["resource_inventory_summary"])
 
     def test_graph_representative_chunks_skip_apparatus_before_meaningful_body(self) -> None:
@@ -2821,10 +2823,20 @@ class ThesisRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(len(compiler.calls), 2)
         self.assertIn("repair_context", compiler.calls[1])
+        self.assertEqual(
+            compiler.calls[0]["inventory_projection_diagnostics"]["projection_sha256"],
+            compiler.calls[1]["inventory_projection_diagnostics"]["projection_sha256"],
+        )
+        self.assertEqual(
+            compiler.calls[0]["resource_inventory_summary"],
+            compiler.calls[1]["resource_inventory_summary"],
+        )
         self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_completeness"]["status"], "complete")
         self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_repair"]["outcome"], "complete")
         self.assertEqual(result.semantic_traversal_manifest["plan_completeness"]["status"], "complete")
         self.assertTrue(any(layer["operator"] == "temporal_retrieve" for layer in result.semantic_traversal_manifest["bound_retrieval_plan"]["retrieval_layers"]))
+        self.assertIn("frontmatter_facet_details", result.semantic_traversal_manifest["resource_inventory_summary"])
+        self.assertIn("inventory_projection", result.semantic_compiler_diagnostic)
 
     def test_failed_plan_repair_blocks_without_executing_retrieval(self) -> None:
         data_root = _prepare_data_root()
