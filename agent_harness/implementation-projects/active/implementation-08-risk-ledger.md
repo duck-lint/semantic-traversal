@@ -11,6 +11,12 @@ Seam 0: operator-accepted
 | False baseline confidence | Final prose is scored without route/plan/evidence evidence | Persist component scores and unsupported-baseline capability explicitly |
 | Harness data loss | Timeout/interruption erases earlier cases | Atomic per-case checkpoint; resume without overwrite |
 | Private-data leakage | Generic evaluation contains vault-specific material | Synthetic IDs/text only; private UAT uses one ignored versioned fixture and private raw checkpoints |
+| Parsed JSON mistaken for contract validity | Off-contract objects become canonical fallback plans and appear healthy | Record raw JSON status, exact compiler contract status, missing/unexpected allowlisted fields, canonicalization, and fallback use separately |
+| Fallback masks compiler failure | Executable default plan hides malformed semantic compilation | Treat raw planner absence plus populated canonical plan as fallback use; contract failure independently fails evaluation |
+| Generic coverage mistaken for negative authorization | `coverage_report.decision: approved` is treated as permission for corpus-wide absence | Read runtime `negative_claims_allowed` and exact manifest execution/status/scope/term adequacy separately |
+| Runtime completion mistaken for evaluation success | Terminal answer is displayed as an overall pass | Preserve runtime status and compute independent `evaluation_status`; unavailable adjudication yields `review_required` |
+| Case-global expectations corrupt multi-turn evaluation | Setup turn is scored against continuation expectations | Schema v2 requires one complete expectation object inside every turn |
+| Redacted report conceals deterministic mismatches | Aggregate exposes only first-turn plan status | Redacted v2 includes safe per-turn component statuses and case aggregation over every turn |
 | Frozen-surface drift | Seam 0 changes routing, prompts, providers, or retrieval policy | Diff review against authority map; stop if any forbidden surface changes |
 | Inventory overclaim | Missing local inventory is reported as healthy | Read-only inspection and explicit unavailable status |
 
