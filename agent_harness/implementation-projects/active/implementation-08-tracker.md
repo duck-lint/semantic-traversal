@@ -111,6 +111,27 @@ required; the fresh private rerun remains operator-pending; Seam 1 has not
 begun.
 # Implementation 08 — pre-Seam-1 kernel correction
 
+## Canonical retrieval-surface completeness
+
+PR #16 preserved resolved referents through temporal execution. The completed
+post-PR-16 private rerun confirmed context-first subjects reached the executor,
+then exposed a mismatch between inventory claims and actual operator reach.
+Admitted frontmatter was already present in canonical chunks, FTS, embeddings,
+and selected evidence, but exact retrieval omitted it. Graph ingest extracted
+body wikilinks only, and traversal was outbound-only.
+
+This correction adds one generated closed-world retrieval-surface manifest. It
+describes capability rather than meaning, aligns exact and lexical retrieval
+with the canonical substrate, extracts admitted-frontmatter wikilinks, and
+supports outbound, inbound, and both-direction traversal with canonical
+hydration and merged authored-link provenance. Vector coverage was verified
+without changing its model or policy. Temporal execution remains independent
+before fusion; no graph-to-temporal chaining or field-specific ontology was
+added. Inventory schema is 3, projection version is 2, and manifest version is
+1. Complete post-merge reingest is required before a fresh private rerun.
+Model bakeoff remains pending; the fresh private suite is operator-pending and
+Seam 1 has not begun.
+
 The post-PR-14 private rerun completed five cases and six turns: all six compiler contracts were valid, with no repair or fallback. Exact-absence coverage and canonical metadata propagation remained healthy. A valid multi-subject temporal plan nevertheless admitted globally earliest unrelated evidence; compiler-emitted substrate terms were rejected by the positive alias gate.
 
 This correction excises the scope-alias subsystem and establishes temporal relevance independently per existing subject before temporal ordering. Missing required subject evidence blocks a complete comparison. No replacement positive ontology, filter language, attachment protocol, or speculative database-safety layer was added. Future UI attachments and the model bakeoff remain separate work. Seam 1 has not begun.

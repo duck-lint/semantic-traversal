@@ -43,7 +43,7 @@ class RuntimeConfigTests(unittest.TestCase):
         source = (REPO_ROOT / "semantic_traversal.runtime.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "invalid-direction.yaml"
-            path.write_text(source.replace("direction: outbound", "direction: sideways", 1), encoding="utf-8")
+            path.write_text(source.replace("direction: both", "direction: sideways", 1), encoding="utf-8")
             with self.assertRaisesRegex(ConfigError, "graph_traversal.direction"):
                 load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
 
@@ -62,7 +62,7 @@ class RuntimeConfigTests(unittest.TestCase):
 
     def test_inventory_controls_are_yaml_owned(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
-        self.assertEqual(config.retrieval_resource_inventory["schema_version"], 1)
+        self.assertEqual(config.retrieval_resource_inventory["schema_version"], 3)
         self.assertEqual(config.retrieval_resource_inventory["path_depth"], 2)
         self.assertGreater(config.retrieval_resource_inventory["max_values_per_facet"], 0)
 

@@ -1,5 +1,18 @@
 # Implementation 08 — Seam 0 Risk Ledger
 
+## Retrieval-surface completeness risks
+
+| Risk | Failure mode | Mitigation |
+| --- | --- | --- |
+| Inventory advertises unreachable surfaces | Compiler requests a component or operator the runtime cannot execute | Generate one closed-world manifest from live index/configuration facts and validate it before activation |
+| Frontmatter links disappear | Authored metadata links never become graph relations | Recursively scan admitted metadata with the existing wikilink parser |
+| Backlinks become fake stored edges | Reverse traversal is mistaken for reverse authorship | Keep one directed authored edge and record navigational direction only in hop provenance |
+| Duplicate authored links inflate ranking | Multiple occurrences create equivalent edges | Canonicalize by source/target/type and merge deterministic provenance |
+| Non-admitted metadata leaks | Raw frontmatter enters retrieval surfaces | Derive metadata surfaces from the admitted semantic projection only |
+| Manifest budget hides capabilities | Budget reduction omits operational truth | Preserve mandatory manifest structure and fail explicitly when it cannot fit |
+| Stale index after surface change | Reingest leaves old FTS or graph projections active | Require complete staged reingest and atomic validation/activation |
+| Manifest becomes hidden ontology | Capability facts turn into field-specific routing | Keep the manifest generic: components, operators, modes, relations, and execution boundaries only |
+
 ## Status
 
 Seam 0: operator-accepted
