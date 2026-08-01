@@ -42,6 +42,12 @@ Seam 0: operator-accepted
 | Initial/repair projection disagreement | Repair receives a different inventory view and is measured against a different compiler context | Reuse the same request projection and projection hash for both production calls |
 | Projection controls invalidate inventory | Compiler-input tuning changes persisted inventory policy or forces reingest | Keep projection controls under semantic_compiler and exclude them from inventory policy hashing |
 | Projection diagnostic leakage | Omitted values or full inventory content escapes through redacted UAT output | Record only safe projection sizes, counts, status enums, and hashes; retain no raw projection values in reports |
+| Resolved subjects disappear in binding | Compiler referents are omitted from the bound plan before temporal execution | Compare canonically coerced planner and bound lists at the runtime seam; preserve order and block required temporal execution on mismatch |
+| Anonymous fallback masquerades as subject coverage | An empty-string query context is counted as a named subject | Keep query-context count separate; count satisfied and missing subjects only from nonempty referents |
+| Synthetic temporal test bypasses production seam | Direct executor tests pass while compiler-to-binder propagation remains broken | Require an end-to-end synthetic path through canonical plan, binder, `_semantic_traversal`, executor, manifest, and packet |
+| Same-chunk provenance is lost during temporal deduplication | First subject wins when one chunk supports multiple subjects | Merge temporal subject and provenance records before final chunk selection without duplicating the chunk |
+| Unrelated global evidence appears corrective | Other retrieved evidence makes final prose look valid while intended temporal context is broken | Assert independent relevance admission, per-subject anchors, and exclusion of globally earlier unrelated chunks |
+| Lexical multi-query flattening | Multiple lexical queries lose some subject separation | Record as deferred known weakness; do not redesign lexical retrieval in this correction |
 
 ## Stop conditions
 

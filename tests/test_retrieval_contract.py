@@ -5,10 +5,11 @@ import json
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, embedding_identity_hash
-from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _select_retrieval_chunks, _vector_candidates
+from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _semantic_traversal, _select_retrieval_chunks, _vector_candidates
 from semantic_traversal.retrieval_resolver import bind_retrieval_plan, validate_plan_completeness
 
 
@@ -558,6 +559,75 @@ class RetrievalContractTests(unittest.TestCase):
         self.assertEqual(bound["retrieval_layers"][0]["limit_adjustment"], "clamped_to_max")
         self.assertTrue(any(item["action"] == "runtime_policy_override" for item in adjustments))
         self.assertTrue(any(item["action"] == "retired" and item["field"] == "selection_policy.budgets" for item in adjustments))
+
+    def test_resolved_referents_are_losslessly_preserved_by_binding(self) -> None:
+        plan = {
+            "intent_type": "semantic_traversal",
+            "concepts": ["subject-a"],
+            "resolved_referents": [" subject-a ", "subject-b", "subject-a"],
+            "semantic_queries": ["subject-a subject-b"],
+            "lexical_queries": ["subject-a subject-b"],
+            "graph_seeds": [], "literal_terms": [], "evidence_requirements": [],
+            "retrieval_layers": [],
+        }
+        original = deepcopy(plan)
+        bound, _, _ = bind_retrieval_plan(
+            planner_retrieval_plan=plan,
+            inventory_summary={"frontmatter_facets": {}, "observed_source_labels": [], "path_topology": {}},
+            config=self.config,
+        )
+        self.assertEqual(bound["resolved_referents"], ["subject-a", "subject-b"])
+        self.assertEqual(plan, original)
+        self.assertEqual(bound["scope_filters"], {"source_label": None, "note_type": [], "path_contains": []})
+
+    def test_binding_does_not_validate_referents_against_inventory(self) -> None:
+        plan = {"resolved_referents": ["not-in-inventory"], "retrieval_layers": []}
+        bound, adjustments, _ = bind_retrieval_plan(
+            planner_retrieval_plan=plan,
+            inventory_summary={"frontmatter_facets": {"note_type": [{"value": "other"}]}, "observed_source_labels": ["fixture"], "path_topology": {}},
+            config=self.config,
+        )
+        self.assertEqual(bound["resolved_referents"], ["not-in-inventory"])
+        self.assertFalse(any("referent" in str(item).lower() for item in adjustments))
+
+    def test_empty_referent_list_remains_empty(self) -> None:
+        bound, _, _ = bind_retrieval_plan(
+            planner_retrieval_plan={"resolved_referents": [], "retrieval_layers": []},
+            inventory_summary={}, config=self.config,
+        )
+        self.assertEqual(bound["resolved_referents"], [])
+
+    def test_nonempty_referent_propagation_mismatch_blocks_temporal_execution(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT)")
+        packet = {
+            "raw_user_input": "compare subject-a and subject-b",
+            "query": "compare subject-a and subject-b", "concepts": ["subject-a", "subject-b"], "resolved_referents": ["subject-a", "subject-b"],
+            "entities": [], "relations": [], "limitations": [], "planner_diagnostics": {},
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "concepts": ["subject-a", "subject-b"], "resolved_referents": ["subject-a", "subject-b"],
+                "literal_terms": [], "evidence_requirements": ["chronology"], "semantic_queries": ["subject-a", "subject-b"], "lexical_queries": ["subject-a", "subject-b"], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "earliest"}],
+            },
+        }
+        real_bind = bind_retrieval_plan
+        try:
+            def dropping_bind(**kwargs):
+                bound, adjustments, inventory = real_bind(**kwargs)
+                bound.pop("resolved_referents", None)
+                return bound, adjustments, inventory
+
+            with patch("semantic_traversal.runtime.bind_retrieval_plan", side_effect=dropping_bind):
+                manifest, _ = _semantic_traversal(
+                    connection=connection, config=self.config, semantic_compiler_packet=packet,
+                    prior_thread_state={}, embedding_backend=object(), resource_inventory_summary={},
+                )
+        finally:
+            connection.close()
+        self.assertEqual(manifest["resolved_referent_propagation"]["status"], "failed")
+        self.assertEqual(manifest["layer_manifests"]["temporal"]["diagnostics"]["status"], "non_executable")
+        self.assertEqual(manifest["layer_manifests"]["temporal"]["diagnostics"]["missing_subject_count"], 2)
 
     def test_observed_inventory_values_never_bind_scope_without_alias(self) -> None:
         self.skipTest("positive scope aliases excised")

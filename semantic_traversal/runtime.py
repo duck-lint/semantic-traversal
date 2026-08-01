@@ -2109,7 +2109,11 @@ def _temporal_candidates(
     embedding_backend: EmbeddingBackend, resolved_referents: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     """Admit relevance separately for each existing subject, then apply chronology."""
-    subjects = list(dict.fromkeys(str(value).strip() for value in (resolved_referents or []) if str(value).strip())) or [""]
+    named_subjects = list(dict.fromkeys(str(value).strip() for value in (resolved_referents or []) if str(value).strip()))
+    # An empty referent list is a genuine query-level context. Keep it
+    # distinct from named-subject coverage so an anonymous execution cannot
+    # satisfy a semantic subject reservation.
+    subjects = named_subjects or [""]
     # The legacy implementation performs the unchanged anchor parsing and
     # relation checks.  Its candidate construction is reused per subject so
     # chronology can never select a global early note before relevance.
@@ -2117,7 +2121,7 @@ def _temporal_candidates(
         "SELECT anchor_id, note_id, chunk_id, anchor_type, canonical_start, canonical_end, precision, source_field, original_source_value, authority, parsing_status, conflict_group, unresolved, diagnostic_reason FROM temporal_anchors ORDER BY canonical_start, anchor_id"
     ).fetchall()
     mode = str(layer.get("mode") or config.retrieval_temporal_default_mode)
-    diagnostics: dict[str, Any] = {"operator": "temporal_retrieve", "status": "not_requested", "mode": mode, "searches_full_temporal_projection": True, "subject_count": len(subjects), "per_subject": []}
+    diagnostics: dict[str, Any] = {"operator": "temporal_retrieve", "status": "not_requested", "mode": mode, "searches_full_temporal_projection": True, "subject_count": len(named_subjects), "query_context_count": 1 if not named_subjects else 0, "context_mode": "named_subjects" if named_subjects else "query", "per_subject": []}
     if not config.retrieval_temporal_enabled or mode not in config.retrieval_temporal_allowed_modes:
         diagnostics.update({"status": "unsupported", "candidate_count": 0})
         return [], ["temporal retrieval unavailable"], diagnostics
@@ -2168,12 +2172,12 @@ def _temporal_candidates(
             governing = _choose_temporal_governing_anchor(anchors, mode=mode, direction=str(layer.get("direction") or "ascending"))
             ranks = [rank for rank in (lexical_by_id.get(chunk_id), vector_by_id.get(chunk_id)) if rank]
             relevance = sum(1.0 / rank for rank in ranks)
-            candidates.append({**row, "selection_source": "temporal", "source_layers": ["temporal"], "score": relevance, "internal_ordinal_relevance": relevance, "temporal_subject": subject, "temporal_mode": mode, "temporal_governing_anchor_id": governing["anchor_id"], "temporal_governing_anchor_type": governing["anchor_type"], "temporal_governing_canonical_start": governing["canonical_start"], "temporal_governing_canonical_end": governing["canonical_end"], "temporal_anchor_ids": [item["anchor_id"] for item in sorted(anchors, key=_temporal_anchor_order_key)], "temporal_provenance": [{"anchor_id": item["anchor_id"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "authority": item["authority"], "subject": subject, "relation": mode, "relation_certainty": item["relation_certainty"]} for item in sorted(anchors, key=_temporal_anchor_order_key)], "relation_status": governing["relation_certainty"], "semantic_query_provenance": semantic, "selection_reason": f"temporal {mode} relevance admission", "match_reason": f"temporal {mode} relation with ordinal relevance"})
+            candidates.append({**row, "selection_source": "temporal", "source_layers": ["temporal"], "score": relevance, "internal_ordinal_relevance": relevance, "temporal_subject": subject, "temporal_subjects": [subject] if subject else [], "temporal_mode": mode, "temporal_governing_anchor_id": governing["anchor_id"], "temporal_governing_anchor_type": governing["anchor_type"], "temporal_governing_canonical_start": governing["canonical_start"], "temporal_governing_canonical_end": governing["canonical_end"], "temporal_anchor_ids": [item["anchor_id"] for item in sorted(anchors, key=_temporal_anchor_order_key)], "temporal_provenance": [{"anchor_id": item["anchor_id"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "authority": item["authority"], "subject": subject or None, "relation": mode, "relation_certainty": item["relation_certainty"]} for item in sorted(anchors, key=_temporal_anchor_order_key)], "relation_status": governing["relation_certainty"], "semantic_query_provenance": semantic, "selection_reason": f"temporal {mode} relevance admission", "match_reason": f"temporal {mode} relation with ordinal relevance"})
         for candidate in candidates:
             candidate["internal_lexical_rank"] = lexical_by_id.get(str(candidate.get("chunk_id") or ""))
             candidate["internal_vector_rank"] = vector_by_id.get(str(candidate.get("chunk_id") or ""))
         by_subject.append(_order_temporal_candidates(candidates, mode=mode, direction=str(layer.get("direction") or "ascending")))
-        diagnostics["per_subject"].append({"subject": subject, "lexical_candidate_count": len(lexical_candidates), "vector_candidate_count": len(vector_candidates), "temporal_candidate_count": len(candidates), "governing_anchor_count": len(candidates)})
+        diagnostics["per_subject"].append({"subject": subject or None, "context_type": "subject" if subject else "query", "lexical_candidate_count": len(lexical_candidates), "vector_candidate_count": len(vector_candidates), "temporal_candidate_count": len(candidates), "governing_anchor_count": len(candidates)})
     requested_limit = max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit))))
     limit = min(config.retrieval_temporal_max_candidates, max(requested_limit, len(subjects)))
     temporal: list[dict[str, Any]] = []
@@ -2185,7 +2189,8 @@ def _temporal_candidates(
     diagnostics["requested_limit"] = requested_limit
     diagnostics["effective_limit"] = limit
     diagnostics["limit_adjustment"] = "raised_to_subject_count" if limit != requested_limit else "none"
-    diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "satisfied_subject_count": len({str(item.get("temporal_subject") or "") for item in temporal}), "missing_subject_count": max(0, len(subjects) - len({str(item.get("temporal_subject") or "") for item in temporal})), "one_per_subject_reservation_satisfied": all(any(str(item.get("temporal_subject") or "") == subject for item in temporal) for subject in subjects)})
+    satisfied_subjects = {str(item.get("temporal_subject") or "") for item in temporal if str(item.get("temporal_subject") or "") in named_subjects}
+    diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "satisfied_subject_count": len(satisfied_subjects), "missing_subject_count": len(set(named_subjects) - satisfied_subjects), "one_per_subject_reservation_satisfied": bool(named_subjects) and all(subject in satisfied_subjects for subject in named_subjects)})
     if config.retrieval_temporal_max_candidates < len(subjects):
         diagnostics["status"] = "incomplete_subject_capacity"
         diagnostics["limit_adjustment"] = "runtime_max_below_subject_count"
@@ -2206,6 +2211,16 @@ def _deduplicate_surface_candidates(
     for candidate in candidates:
         chunk_id = str(candidate.get("chunk_id") or "")
         if not chunk_id or chunk_id in seen:
+            if surface == "temporal" and chunk_id:
+                existing = next((item for item in unique if str(item.get("chunk_id") or "") == chunk_id), None)
+                if existing is not None:
+                    for field in ("temporal_subjects", "temporal_anchor_ids", "temporal_provenance"):
+                        values = [*existing.get(field, []), *candidate.get(field, [])]
+                        merged_values: list[Any] = []
+                        for value in values:
+                            if value not in merged_values:
+                                merged_values.append(value)
+                        existing[field] = merged_values
             continue
         seen.add(chunk_id)
         unique.append(candidate)
@@ -2375,6 +2390,7 @@ def _merge_candidates(
             "vector_best_query",
             "vector_similarity",
             "temporal_provenance",
+            "temporal_subjects",
             "temporal_anchor_ids",
             "temporal_governing_anchor_id",
             "temporal_governing_anchor_type",
@@ -2652,8 +2668,26 @@ def _semantic_traversal(
         config=config,
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
+    planner_resolved_referents = coerce_string_list(planner_retrieval_plan.get("resolved_referents"))
+    bound_resolved_referents = coerce_string_list(bound_retrieval_plan.get("resolved_referents"))
+    referent_propagation = {
+        "status": "preserved" if planner_resolved_referents == bound_resolved_referents else "failed",
+        "planner_count": len(planner_resolved_referents),
+        "bound_count": len(bound_resolved_referents),
+        "order_preserved": planner_resolved_referents == bound_resolved_referents,
+    }
     plan_completeness = validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
     plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
+    plan_executability = dict(plan_executability) if isinstance(plan_executability, dict) else {}
+    if referent_propagation["status"] == "failed":
+        plan_executability = {
+            **plan_executability,
+            "status": "non_executable",
+            "blocking_reasons": [
+                *coerce_string_list(plan_executability.get("blocking_reasons")),
+                "resolved_referents propagation mismatch between planner and bound plan",
+            ],
+        }
 
     scope_filters = bound_retrieval_plan.get("scope_filters") if isinstance(bound_retrieval_plan.get("scope_filters"), dict) else {}
     literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
@@ -2792,13 +2826,25 @@ def _semantic_traversal(
     if temporal_layer is not None:
         execution["layers_executed"].append("temporal_retrieve")
         try:
-            temporal_candidates, temporal_notes, temporal_info = _temporal_candidates(
-                connection=connection, config=config, chunk_rows=chunk_rows,
-                layer=temporal_layer, lexical_queries=lexical_queries,
-                semantic_queries=semantic_queries, literal_terms=literal_terms,
-                scope_filters=scope_filters, embedding_backend=embedding_backend,
-                resolved_referents=coerce_string_list(bound_retrieval_plan.get("resolved_referents")),
-            )
+            if referent_propagation["status"] == "failed":
+                temporal_candidates, temporal_notes, temporal_info = [], ["temporal retrieval blocked: resolved_referents propagation failed"], {
+                    "operator": "temporal_retrieve",
+                    "status": "non_executable",
+                    "candidate_count": 0,
+                    "subject_count": len(planner_resolved_referents),
+                    "satisfied_subject_count": 0,
+                    "missing_subject_count": len(planner_resolved_referents),
+                    "one_per_subject_reservation_satisfied": False,
+                    "failure_reason": "resolved_referents propagation mismatch between planner and bound plan",
+                }
+            else:
+                temporal_candidates, temporal_notes, temporal_info = _temporal_candidates(
+                    connection=connection, config=config, chunk_rows=chunk_rows,
+                    layer=temporal_layer, lexical_queries=lexical_queries,
+                    semantic_queries=semantic_queries, literal_terms=literal_terms,
+                    scope_filters=scope_filters, embedding_backend=embedding_backend,
+                    resolved_referents=bound_resolved_referents,
+                )
         except sqlite3.OperationalError as exc:
             temporal_info = {"operator": "temporal_retrieve", "status": "unavailable", "candidate_count": 0, "failure_reason": str(exc)}
             temporal_notes = [f"temporal retrieval unavailable: {exc}"]
@@ -3034,6 +3080,7 @@ def _semantic_traversal(
         "planner_retrieval_plan": planner_retrieval_plan,
         "bound_retrieval_plan": bound_retrieval_plan,
         "resolver_adjustments": resolver_adjustments,
+        "resolved_referent_propagation": referent_propagation,
         "resource_inventory_summary": resource_inventory_summary,
         "inventory_diagnostics": resource_inventory_summary.get("inventory_diagnostics", {}),
         "execution": execution,
@@ -3084,6 +3131,7 @@ def _semantic_traversal(
                 "temporal_mode": candidate.get("temporal_mode"),
                 "temporal_anchor_ids": candidate.get("temporal_anchor_ids", []),
                 "temporal_provenance": candidate.get("temporal_provenance", []),
+                "temporal_subjects": candidate.get("temporal_subjects", []),
                 "temporal_governing_anchor_id": candidate.get("temporal_governing_anchor_id"),
                 "relation_status": candidate.get("relation_status"),
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
