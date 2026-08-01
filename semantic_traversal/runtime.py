@@ -3113,7 +3113,10 @@ def _coverage_report(
     if isinstance(selection_notes, list) and any("ingestion database unavailable" in str(note).lower() for note in selection_notes):
         blocking_reasons.append("ingestion database unavailable; run ingest before asking corpus questions")
     return {
-        "decision": "approved" if not blocking_reasons and (selected_count > 0 or not (semantic_queries or graph_seeds)) else "blocked",
+        # All coverage and stop-gate policy has already been reduced to this
+        # list above.  Do not re-derive intent from retired local names here:
+        # doing so both duplicates authority and can crash on zero evidence.
+        "decision": "approved" if not blocking_reasons else "blocked",
         "blocking_reasons": blocking_reasons,
         "semantic_compiler_status": semantic_compiler_status,
         "semantic_compiler_response_status": semantic_compiler_diagnostic.get("semantic_compiler_response_status"),
