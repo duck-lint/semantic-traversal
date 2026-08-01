@@ -34,6 +34,14 @@ Seam 0: operator-accepted
 | Serialization instability | Equivalent metadata ordering changes chunk identity | Stable recursive JSON serialization with explicit field boundaries |
 | Overbroad exact-scope normalization | Restricted or incomplete exact search is treated as corpus-wide coverage | Normalize only unrestricted filters; retain execution, exhaustiveness, term adequacy, and negative authorization separately |
 | One-time vector regeneration | Canonical embedding input changes existing vector-source hashes | Document required post-merge complete reingest; unchanged semantic chunks remain reusable |
+| Compiler imitates inventory schema | Malformed compiler output mirrors inventory vocabulary or capability mapping instead of the canonical plan | Give the compiler one compact descriptive projection and preserve the canonical response schema unchanged |
+| Prompt inventory duplication | Full inventory appears both at its template marker and inside the serialized packet | Use a prompt-only packet copy without the already-rendered inventory field; assert single-copy rendering |
+| High-cardinality value flooding | UUID-like or otherwise large observations consume compiler context | Apply generic observed-cardinality and configured per-field/global bounds; retain field names while omitting values |
+| Projection truncates semantic surface | Budget reduction removes an admitted field name or required capability | Preserve mandatory structural keys and every admitted field name before trimming optional values/paths; fail clearly if mandatory content cannot fit |
+| Projection becomes resolver authority | Compact compiler view silently limits executable scope or inventory validation | Keep full persisted inventory in resolver, traversal, manifests, and deep validation paths |
+| Initial/repair projection disagreement | Repair receives a different inventory view and is measured against a different compiler context | Reuse the same request projection and projection hash for both production calls |
+| Projection controls invalidate inventory | Compiler-input tuning changes persisted inventory policy or forces reingest | Keep projection controls under semantic_compiler and exclude them from inventory policy hashing |
+| Projection diagnostic leakage | Omitted values or full inventory content escapes through redacted UAT output | Record only safe projection sizes, counts, status enums, and hashes; retain no raw projection values in reports |
 
 ## Stop conditions
 

@@ -456,7 +456,11 @@ def _render_ollama_prompt(*, packet: dict[str, Any], template: str, planner_defa
     }
     for marker, value in replacements.items():
         rendered_template = rendered_template.replace(marker, str(value))
-    packet_json = json.dumps(packet, ensure_ascii=True, indent=2)
+    # Render inventory at its dedicated marker only. The original request
+    # remains untouched for recording and hashing.
+    packet_for_prompt = dict(packet)
+    packet_for_prompt.pop("resource_inventory_summary", None)
+    packet_json = json.dumps(packet_for_prompt, ensure_ascii=True, indent=2)
     return rendered_template.replace("{packet}", packet_json).strip()
 
 

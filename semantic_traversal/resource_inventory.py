@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .config import RuntimeConfig
-from .hashing import sha256_json
+from .hashing import sha256_json, sha256_text
 
 
 INVENTORY_SCHEMA_VERSION = 2
+COMPILER_INVENTORY_PROJECTION_VERSION = 1
 _CURRENT_SNAPSHOT_KEY = "current"
 
 
@@ -193,6 +194,147 @@ def _with_runtime_overlay(payload: dict[str, Any], config: RuntimeConfig, diagno
     summary["scope_aliases"] = config.retrieval_scope_aliases
     summary["inventory_diagnostics"] = diagnostics
     return summary
+
+
+def _deterministic_json(value: Any, *, indent: int | None = None) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, indent=indent, separators=None if indent else (",", ":"))
+
+
+def _projection_capabilities(inventory_summary: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    capabilities = inventory_summary.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return [], {"status": "unavailable"}
+    available: list[str] = []
+    if capabilities.get("exact_fts", {}).get("projection_status") == "valid":
+        available.extend(("exact_chunk_search", "lexical_chunk_search"))
+    vector = capabilities.get("vector", {})
+    if vector.get("table_present") and vector.get("validation_status") == "valid":
+        available.append("vector_search")
+    graph = capabilities.get("graph", {})
+    if all(isinstance(graph.get(key), dict) and graph[key].get("table_present") for key in ("nodes", "edges")):
+        available.append("graph_expand")
+    temporal = capabilities.get("temporal", {})
+    if temporal.get("table_present"):
+        available.append("temporal_retrieve")
+    statuses = {
+        "exact_fts": capabilities.get("exact_fts", {}).get("projection_status", "unavailable"),
+        "vector": vector.get("validation_status", "unavailable"),
+        "graph": "valid" if "graph_expand" in available else "unavailable",
+        "temporal": "valid" if "temporal_retrieve" in available else "unavailable",
+    }
+    return available, statuses
+
+
+def build_compiler_inventory_projection(
+    *,
+    inventory_summary: dict[str, Any],
+    config: RuntimeConfig,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build the bounded, compiler-only view of the authoritative inventory.
+
+    This is deliberately an in-memory view. The persisted inventory remains the
+    authority for validation, resolver binding, execution, and manifests.
+    """
+    controls = config.semantic_compiler_inventory_projection
+    admitted_fields = sorted(config.chunking_semantic_frontmatter_fields)
+    details = inventory_summary.get("frontmatter_facet_details")
+    details = details if isinstance(details, dict) else {}
+    low_values: dict[str, list[str]] = {}
+    omitted_fields: list[str] = []
+    omitted_value_count = 0
+    fields_with_values_count = 0
+    for field in admitted_fields:
+        detail = details.get(field) if isinstance(details.get(field), dict) else {}
+        unique_count = _safe_int(detail.get("observed_unique_count"))
+        values = detail.get("values") if isinstance(detail.get("values"), list) else []
+        if unique_count <= controls["low_cardinality_max_unique"]:
+            bounded_values = [
+                str(item.get("value"))
+                for item in sorted(values, key=lambda item: str(item.get("value") if isinstance(item, dict) else ""))[: controls["max_values_per_field"]]
+                if isinstance(item, dict) and str(item.get("value") or "").strip()
+            ]
+            if bounded_values:
+                low_values[field] = bounded_values
+                fields_with_values_count += 1
+            omitted_value_count += max(0, len(values) - len(bounded_values))
+        else:
+            omitted_fields.append(field)
+            omitted_value_count += unique_count
+
+    operators, capability_status = _projection_capabilities(inventory_summary)
+    semantic_chunk = {
+        "components": ["note_title", "relative_path", "section_path", "admitted_frontmatter", "paragraph_text"],
+        "admitted_frontmatter_fields": admitted_fields,
+    }
+    projection: dict[str, Any] = {
+        "projection_version": COMPILER_INVENTORY_PROJECTION_VERSION,
+        "inventory_status": str(inventory_summary.get("inventory_diagnostics", {}).get("status") or "unavailable"),
+        "semantic_chunk": semantic_chunk,
+        "available_retrieval_operators": operators,
+        "capability_status": capability_status,
+        "low_cardinality_values": low_values,
+        "value_enumeration_omitted_for": omitted_fields,
+    }
+    source_labels = inventory_summary.get("observed_source_labels")
+    if isinstance(source_labels, list):
+        projection["observed_source_labels"] = [
+            str(item.get("label")) for item in sorted(source_labels, key=lambda item: str(item.get("label") if isinstance(item, dict) else ""))[: controls["max_values_per_field"]]
+            if isinstance(item, dict) and str(item.get("label") or "").strip()
+        ]
+    path_topology = inventory_summary.get("path_topology")
+    if isinstance(path_topology, dict):
+        levels = path_topology.get("levels")
+        if isinstance(levels, dict):
+            projection["path_regions"] = {
+                str(level): [
+                    str(item.get("value"))
+                    for item in sorted(level_data.get("values", []), key=lambda item: str(item.get("value") if isinstance(item, dict) else ""))[: controls["max_path_values"]]
+                    if isinstance(item, dict) and str(item.get("value") or "").strip()
+                ]
+                for level, level_data in sorted(levels.items())
+                if isinstance(level_data, dict)
+            }
+
+    mandatory_keys = {"projection_version", "inventory_status", "semantic_chunk", "available_retrieval_operators", "capability_status"}
+    diagnostics: dict[str, Any] = {
+        "projection_version": COMPILER_INVENTORY_PROJECTION_VERSION,
+        "full_inventory_chars": len(_deterministic_json(inventory_summary, indent=2)),
+        "max_chars": controls["max_chars"],
+        "admitted_field_count": len(admitted_fields),
+        "fields_with_values_count": fields_with_values_count,
+        "fields_without_values_count": len(admitted_fields) - fields_with_values_count,
+        "omitted_value_count": omitted_value_count,
+        "omitted_path_count": 0,
+        "truncation_applied": False,
+    }
+
+    def serialized() -> str:
+        return _deterministic_json(projection, indent=2)
+
+    # Reduce optional observations only; field names and operator/surface keys
+    # are never sacrificed to meet the budget.
+    if len(serialized()) > controls["max_chars"]:
+        projection.pop("path_regions", None)
+        diagnostics["truncation_applied"] = True
+    if len(serialized()) > controls["max_chars"]:
+        projection.pop("observed_source_labels", None)
+        diagnostics["truncation_applied"] = True
+    if len(serialized()) > controls["max_chars"]:
+        projection["low_cardinality_values"] = {}
+        diagnostics["truncation_applied"] = True
+    if len(serialized()) > controls["max_chars"]:
+        raise ValueError(
+            "semantic compiler inventory projection mandatory content exceeds "
+            f"semantic_compiler.inventory_projection.max_chars ({controls['max_chars']})"
+        )
+    diagnostics["projection_chars"] = len(serialized())
+    diagnostics["projection_sha256"] = sha256_text(serialized())
+    diagnostics["omitted_path_count"] = sum(
+        len(values) for values in (path_topology.get("levels", {}).values() if isinstance(path_topology, dict) and isinstance(path_topology.get("levels"), dict) else [])
+        if isinstance(values, dict) and isinstance(values.get("values"), list)
+    ) if "path_regions" not in projection else 0
+    diagnostics["mandatory_keys_preserved"] = sorted(mandatory_keys)
+    return projection, diagnostics
 
 
 def build_resource_inventory(*, connection: sqlite3.Connection | None, config: RuntimeConfig) -> dict[str, Any]:

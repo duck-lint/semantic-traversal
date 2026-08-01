@@ -130,6 +130,12 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "model": (str, type(None)),
         "base_url": str,
         "request_timeout_seconds": int,
+        "inventory_projection": {
+            "max_chars": int,
+            "low_cardinality_max_unique": int,
+            "max_values_per_field": int,
+            "max_path_values": int,
+        },
     },
     "embeddings": {
         "provider": str,
@@ -431,6 +437,13 @@ class RuntimeConfig:
         return int(self.raw["semantic_compiler"]["request_timeout_seconds"])
 
     @property
+    def semantic_compiler_inventory_projection(self) -> dict[str, int]:
+        return {
+            str(key): int(value)
+            for key, value in self.raw["semantic_compiler"]["inventory_projection"].items()
+        }
+
+    @property
     def embedding_model(self) -> str:
         return str(self.raw["embeddings"]["model"])
 
@@ -696,6 +709,20 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError("Runtime config field paths.data_root must not be blank")
     if int(parsed["retrieval"]["max_chunks"]) <= 0:
         raise ConfigError("Runtime config field retrieval.max_chunks must be greater than zero")
+    projection = parsed["semantic_compiler"]["inventory_projection"]
+    projection_bounds = {
+        "max_chars": (1, 1_000_000),
+        "low_cardinality_max_unique": (1, 10_000),
+        "max_values_per_field": (1, 10_000),
+        "max_path_values": (1, 10_000),
+    }
+    for field, (minimum, maximum) in projection_bounds.items():
+        value = int(projection[field])
+        if not minimum <= value <= maximum:
+            raise ConfigError(
+                f"Runtime config field semantic_compiler.inventory_projection.{field} "
+                f"must be between {minimum} and {maximum}"
+            )
     raw_scope_aliases = parsed["retrieval"].get("scope_aliases", {})
     if not isinstance(raw_scope_aliases, dict):
         raise ConfigError("Runtime config field retrieval.scope_aliases must be a mapping")

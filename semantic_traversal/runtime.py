@@ -20,7 +20,7 @@ from .embeddings import (
 )
 from .hashing import sha256_json, sha256_text
 from .llm import LLMBackend
-from .resource_inventory import build_resource_inventory, load_persisted_inventory
+from .resource_inventory import build_compiler_inventory_projection, build_resource_inventory, load_persisted_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, scope_requests_from_text, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness, validate_plan_executability
 from .text_filters import is_low_signal_apparatus_text
@@ -728,6 +728,7 @@ def _semantic_compiler_diagnostic_packet(
     response: SemanticCompilerResponse,
     semantic_compiler_status: str,
     config: RuntimeConfig,
+    inventory_projection_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     raw_response = response.raw_response if isinstance(response.raw_response, str) else None
     return {
@@ -739,6 +740,7 @@ def _semantic_compiler_diagnostic_packet(
         "raw_response_available": bool(raw_response),
         "raw_response_hash": sha256_text(raw_response) if raw_response else None,
         "raw_response_preview": _snippet(raw_response, limit=int(config.runtime_conversation["raw_response_preview_limit"])) if raw_response else None,
+        "inventory_projection": dict(inventory_projection_diagnostics or {}),
     }
 
 
@@ -3509,14 +3511,20 @@ def run_thread_turn(
         except sqlite3.Error:
             resource_inventory_summary = build_resource_inventory(connection=None, config=resolved_config)
 
+    full_resource_inventory_summary = resource_inventory_summary
+    compiler_inventory_projection, inventory_projection_diagnostics = build_compiler_inventory_projection(
+        inventory_summary=full_resource_inventory_summary,
+        config=resolved_config,
+    )
     compiler_request = _compiler_request_packet(
         raw_user_input=user_input,
         prior_thread_state=prior_thread_state,
         recent_messages=recent_messages,
         recent_semantic_turns=recent_semantic_turns,
         active_focus=active_focus,
-        resource_inventory_summary=resource_inventory_summary,
+        resource_inventory_summary=compiler_inventory_projection,
     )
+    compiler_request["inventory_projection_diagnostics"] = inventory_projection_diagnostics
     compiler_backend = semantic_compiler_backend or resolve_semantic_compiler_backend(config=resolved_config)
     try:
         compiler_response = compiler_backend.compile_turn(compiler_request)
@@ -3552,12 +3560,13 @@ def run_thread_turn(
             active_focus=active_focus,
             recent_semantic_turns=recent_semantic_turns,
             config=resolved_config,
-            resource_inventory_summary=resource_inventory_summary,
+            resource_inventory_summary=full_resource_inventory_summary,
         )
     semantic_compiler_diagnostic = _semantic_compiler_diagnostic_packet(
         response=compiler_response,
         semantic_compiler_status=semantic_compiler_status,
         config=resolved_config,
+        inventory_projection_diagnostics=inventory_projection_diagnostics,
     )
     semantic_compiler_diagnostic["plan_repair"] = repair_record
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
