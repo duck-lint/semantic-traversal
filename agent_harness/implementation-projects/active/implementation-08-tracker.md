@@ -92,3 +92,8 @@ The full inventory remains authoritative for persistence, validation, resolver
 binding, traversal, manifests, and diagnostics. No reingest is required; the
 post-alignment run remains operator-preserved and the corrected private rerun
 remains pending. Seam 1 has not begun.
+# Implementation 08 — pre-Seam-1 kernel correction
+
+The post-PR-14 private rerun completed five cases and six turns: all six compiler contracts were valid, with no repair or fallback. Exact-absence coverage and canonical metadata propagation remained healthy. A valid multi-subject temporal plan nevertheless admitted globally earliest unrelated evidence; compiler-emitted substrate terms were rejected by the positive alias gate.
+
+This correction excises the scope-alias subsystem and establishes temporal relevance independently per existing subject before temporal ordering. Missing required subject evidence blocks a complete comparison. No replacement positive ontology, filter language, attachment protocol, or speculative database-safety layer was added. Future UI attachments and the model bakeoff remain separate work. Seam 1 has not begun.

@@ -30,8 +30,8 @@ from semantic_traversal.semantic_compiler import SemanticCompilerResponse, resol
 
 PRIVATE_RELATIVE_ROOT = Path("agent_harness/private")
 FIXTURE_SCHEMA_VERSION = 2
-REPORT_SCHEMA_VERSION = 5
-EVALUATOR_CONTRACT_VERSION = 4
+REPORT_SCHEMA_VERSION = 6
+EVALUATOR_CONTRACT_VERSION = 5
 SUPPORTED_RESPONSE_MODES = {"direct", "traverse"}
 ROOT_FIELDS = {"schema_version", "suite_id", "cases"}
 CASE_FIELDS = {"id", "description", "turns"}
@@ -53,7 +53,7 @@ TOP_LEVEL_COMPILER_FIELDS = {
     "resolved_referents", "planner_retrieval_plan", "limitations",
 }
 PLANNER_FIELDS = {
-    "intent_type", "scope_requests", "concepts", "resolved_referents",
+    "intent_type", "concepts", "resolved_referents",
     "literal_terms", "evidence_requirements", "semantic_queries",
     "lexical_queries", "graph_seeds", "retrieval_layers",
 }
@@ -273,7 +273,7 @@ def evaluate_compiler_contract(*, packet: dict[str, Any], response: SemanticComp
             invalid_planner = sorted(set(planner) - PLANNER_FIELDS)
             for field in ("intent_type",):
                 if not isinstance(planner.get(field), str): invalid_planner.append(field)
-            for field in ("scope_requests", "concepts", "resolved_referents", "evidence_requirements", "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers", "literal_terms"):
+            for field in ("concepts", "resolved_referents", "evidence_requirements", "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers", "literal_terms"):
                 if not isinstance(planner.get(field), list): invalid_planner.append(field)
             for index, layer in enumerate(planner.get("retrieval_layers", []) if isinstance(planner.get("retrieval_layers"), list) else []):
                 if not isinstance(layer, dict) or not isinstance(layer.get("operator"), str) or not layer.get("operator"):

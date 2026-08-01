@@ -83,18 +83,16 @@ class CompilerInventoryProjectionTests(unittest.TestCase):
         self.assertIn("exact_chunk_search", projection["available_retrieval_operators"])
         self.assertNotIn("temporal_retrieve", projection["available_retrieval_operators"])
 
-    def test_prompt_contains_projection_and_scope_aliases_once_without_full_inventory(self) -> None:
+    def test_prompt_contains_projection_once_without_full_inventory(self) -> None:
         projection, _ = build_compiler_inventory_projection(inventory_summary=self._inventory(), config=self.config)
         sentinel = "PROJECTION_SENTINEL_ONLY"
         projection["sentinel"] = sentinel
         packet = {
             "raw_user_input": "probe",
             "resource_inventory_summary": projection,
-            "scope_aliases": {"journal": {"note_type": ("journal_entry",)}},
         }
         prompt = _render_ollama_prompt(packet=packet, template="{resource_inventory_summary}\n{packet}", planner_defaults=self.config.retrieval_planner_defaults)
         self.assertEqual(prompt.count(sentinel), 1)
-        self.assertEqual(prompt.count('"journal"'), 1)
         self.assertNotIn("frontmatter_facet_details", prompt)
 
     def test_projection_budget_trims_optional_content_but_preserves_fields(self) -> None:

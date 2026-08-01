@@ -37,7 +37,7 @@ def canonical(raw_input: str = "synthetic input") -> dict:
         "raw_user_input": raw_input, "intent": "synthetic", "query": "synthetic query",
         "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
         "planner_retrieval_plan": {
-            "intent_type": "fact", "scope_requests": [], "concepts": [], "resolved_referents": [],
+            "intent_type": "fact", "concepts": [], "resolved_referents": [],
             "literal_terms": [], "evidence_requirements": [], "semantic_queries": ["synthetic query"],
             "lexical_queries": ["synthetic query"], "graph_seeds": [],
             "retrieval_layers": [{"operator": "lexical_chunk_search", "required": False}],
@@ -217,7 +217,7 @@ class Implementation08PrivateUATTests(unittest.TestCase):
             output = Path(temp_dir) / "report.json"
             report = export_redacted(run_dir=run_dir, output_path=output)
             exported = output.read_text(encoding="utf-8")
-            self.assertEqual(report["evaluator_contract_version"], 4)
+            self.assertEqual(report["evaluator_contract_version"], 5)
             self.assertEqual(report["cases"][0]["turns"][0]["compiler_attempt_count"], 2)
             self.assertTrue(report["cases"][0]["turns"][0]["repair_attempted"])
             for value in ("private-case-id", "repair secret", "private response"):

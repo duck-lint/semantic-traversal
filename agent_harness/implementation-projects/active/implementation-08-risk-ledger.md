@@ -46,3 +46,8 @@ Seam 0: operator-accepted
 ## Stop conditions
 
 Stop and leave Seam 0 in progress for any missing terminal case, persistence failure, unsupported lexical semantic change, forbidden architecture change, or failed machine gate.
+# Kernel correction risks
+
+Added risks: chronology before semantic admission; global earliest candidates displacing required subjects; one subject satisfying another; missing subjects hidden by a nonempty global pool; aliases reappearing under another name; alias removal permitting model-generated filters; legacy state failing to load; subject provenance disappearing during deduplication; requested limits dropping a comparison subject; and redacted context diagnostics leaking private referents.
+
+Mitigation for model-generated filters: the compiler schema contains semantic queries and operators, not database filters. No speculative parser, sanitizer, or policy layer was added.

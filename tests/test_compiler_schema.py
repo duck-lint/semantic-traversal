@@ -20,7 +20,6 @@ class CompilerSchemaContractTests(unittest.TestCase):
             raw_user_input="explain a concept",
             query="explain a concept",
             concepts=["concept"],
-            scope_requests=[],
             graph_seeds=["explain a concept"],
             planner_defaults=self.defaults,
         )
@@ -36,7 +35,6 @@ class CompilerSchemaContractTests(unittest.TestCase):
     def test_canonical_model_shape_excludes_runtime_policy(self) -> None:
         plan, diagnostics = self.canonicalize({
             "intent_type": "semantic_traversal",
-            "scope_requests": ["journal"],
             "concepts": ["concept"],
             "semantic_queries": ["concept"],
             "retrieval_layers": [{"operator": "vector_search", "required": False, "limit": 7}],
@@ -80,14 +78,12 @@ class CompilerSchemaContractTests(unittest.TestCase):
 
     def test_duplicate_requests_are_deterministic(self) -> None:
         plan, _ = self.canonicalize({
-            "scope_requests": ["journal", "journal", "personal_reflection"],
             "semantic_queries": ["one", "one", "two"],
             "retrieval_layers": [
                 {"operator": "vector_search"},
                 {"operator": "vector_search"},
             ],
         })
-        self.assertEqual(plan["scope_requests"], ["journal", "personal_reflection"])
         self.assertEqual(plan["semantic_queries"], ["one", "two"])
         self.assertEqual(len(plan["retrieval_layers"]), 2)
 
@@ -120,7 +116,6 @@ class CompilerSchemaContractTests(unittest.TestCase):
 
     def test_explicit_empty_planner_lists_are_not_replaced(self) -> None:
         plan, diagnostics = self.canonicalize({
-            "scope_requests": [],
             "concepts": [],
             "resolved_referents": [],
             "literal_terms": [],
@@ -129,10 +124,10 @@ class CompilerSchemaContractTests(unittest.TestCase):
             "graph_seeds": [],
             "retrieval_layers": [],
         })
-        for field in ("scope_requests", "concepts", "resolved_referents", "literal_terms", "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers"):
+        for field in ("concepts", "resolved_referents", "literal_terms", "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers"):
             self.assertEqual(plan[field], [], field)
         self.assertEqual(diagnostics["explicit_empty_fields"], [
-            "scope_requests", "concepts", "resolved_referents", "literal_terms",
+            "concepts", "resolved_referents", "literal_terms",
             "semantic_queries", "lexical_queries", "graph_seeds", "retrieval_layers",
         ])
 

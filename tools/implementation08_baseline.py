@@ -124,7 +124,7 @@ class ControlledPlannerBackend:
             "entities": [], "relations": [], "resolved_referents": [],
             "planner_retrieval_plan": {
                 "intent_type": "semantic_traversal",
-                "scope_requests": [], "concepts": [], "resolved_referents": [], "literal_terms": [],
+                "concepts": [], "resolved_referents": [], "literal_terms": [],
                 "evidence_requirements": [], "semantic_queries": [packet.get("raw_user_input", "")],
                 "lexical_queries": [packet.get("raw_user_input", "")], "graph_seeds": [],
                 "retrieval_layers": [],
@@ -305,7 +305,7 @@ def run_baseline(
         recent_messages = _ensure_message_list(prior_thread_state.get("recent_messages"))
         recent_semantic_turns = _recent_semantic_turns_from_state(prior_thread_state.get("recent_semantic_turns"), config=config)
         active_focus = prior_thread_state.get("active_focus") if isinstance(prior_thread_state.get("active_focus"), dict) else {}
-        resource_inventory_summary = {"scope_aliases": config.retrieval_scope_aliases, "inventory_diagnostics": {"status": "unavailable", "reason": "no persisted inventory available"}}
+        resource_inventory_summary = {"inventory_diagnostics": {"status": "unavailable", "reason": "no persisted inventory available"}}
         compiler_request = _compiler_request_packet(
             raw_user_input=turn.user_input, prior_thread_state=prior_thread_state,
             recent_messages=recent_messages, recent_semantic_turns=recent_semantic_turns,

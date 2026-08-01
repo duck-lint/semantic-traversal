@@ -150,3 +150,16 @@ retrieval, manifests, and diagnostics retain the full inventory. The prompt
 template, canonical response schema, models, timeout, repair, fallback, and
 fixture schema remain unchanged. No reingest is required. Use a fresh suite ID
 for the post-projection rerun. Seam 1 has not begun.
+# Post-PR-14 correction boundary
+
+PR #14 was validated by a completed private rerun: six compiler contracts were valid, with no repair or fallback; exact-absence measurement passed; and canonical metadata propagation remained healthy. The rerun exposed globally earliest unrelated evidence in a valid multi-subject temporal plan and positive alias rejection of compiler-emitted substrate terms.
+
+The alias subsystem is now excised. The resolver performs negative executability validation only, while temporal relevance is established independently per existing subject before temporal operators run. Missing required subject evidence blocks a complete comparison. Legacy conversation state still loads while newly written state omits the dormant field. No reingest is required. The corrected private baseline remains operator-rerun-pending; Seam 1 has not begun.
+
+Expected fresh suite ID:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-context-first-temporal
+```
+
+Expected directory: `agent_harness/private/runs/implementation-08-private-before-v2-post-context-first-temporal/`.
