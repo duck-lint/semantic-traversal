@@ -10,7 +10,7 @@ from .config import RuntimeConfig
 from .hashing import sha256_json
 
 
-INVENTORY_SCHEMA_VERSION = 1
+INVENTORY_SCHEMA_VERSION = 2
 _CURRENT_SNAPSHOT_KEY = "current"
 
 
@@ -54,6 +54,7 @@ def _inventory_policy(config: RuntimeConfig) -> dict[str, Any]:
         "max_graph_types": controls["max_graph_types"],
         "max_temporal_types": controls["max_temporal_types"],
         "capability_sections": ["exact_fts", "vector", "graph", "temporal"],
+        "semantic_chunk_surface_version": 1,
     }
 
 
@@ -161,6 +162,18 @@ def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeCon
     compatibility_facets = {field: bounded_facets[field]["values"] for field in bounded_facets}
     compatibility_paths = {"top_level": path_levels.get("1", {}).get("values", []), "second_level": path_levels.get("2", {}).get("values", [])}
     source_values = [{"label": value, "count": count} for value, count in sorted(source_counter.items())]
+    semantic_chunk_surface = {
+        "surface_version": 1,
+        "components": ["note_title", "relative_path", "section_path", "frontmatter_semantics", "semantic_unit_text"],
+        "admitted_frontmatter_fields": sorted(config.chunking_semantic_frontmatter_fields),
+        "operator_visibility": {
+            "exact_chunk_search": "fts",
+            "lexical_chunk_search": "fts",
+            "vector_search": "embedding",
+            "graph_expand": "canonical_chunk_hydration",
+            "temporal_retrieve": "relevance_plus_anchor_with_canonical_chunk_hydration",
+        },
+    }
     return {
         "corpus_note_count": len(note_rows),
         "corpus_chunk_count": chunk_count,
@@ -170,6 +183,7 @@ def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeCon
         "frontmatter_facet_details": bounded_facets,
         "path_topology": compatibility_paths | {"levels": path_levels, "path_depth": controls["path_depth"]},
         "scope_binding_observations": {"note_type": compatibility_facets.get("note_type", []), "source_labels": source_values, "paths": [*compatibility_paths["top_level"], *compatibility_paths["second_level"]]},
+        "semantic_chunk_surface": semantic_chunk_surface,
         "capabilities": _capability_inventory(connection, config),
     }
 

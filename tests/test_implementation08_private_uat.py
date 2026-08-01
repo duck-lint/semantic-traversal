@@ -17,6 +17,7 @@ from tools.implementation08_private_uat import (
     RecordingSemanticCompilerBackend,
     _assert_private_path,
     _coverage_metrics,
+    _coverage_scope_matches,
     _compare_required,
     _final_response_attempt,
     _plan_source_attempt,
@@ -45,6 +46,17 @@ def canonical(raw_input: str = "synthetic input") -> dict:
 
 
 class Implementation08PrivateUATTests(unittest.TestCase):
+    def test_unrestricted_runtime_scope_matches_complete_eligible_corpus(self) -> None:
+        self.assertTrue(_coverage_scope_matches({"source_label": None, "note_type": [], "path_contains": []}, "complete_eligible_corpus"))
+        self.assertTrue(_coverage_scope_matches("complete_eligible_corpus", "complete_eligible_corpus"))
+
+    def test_restricted_runtime_scopes_do_not_match_complete_eligible_corpus(self) -> None:
+        for scope in (
+            {"source_label": "vault", "note_type": [], "path_contains": []},
+            {"source_label": None, "note_type": ["journal_entry"], "path_contains": []},
+            {"source_label": None, "note_type": [], "path_contains": ["journal"]},
+        ):
+            self.assertFalse(_coverage_scope_matches(scope, "complete_eligible_corpus"))
     def setUp(self) -> None:
         self.fixture = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
 
@@ -199,13 +211,13 @@ class Implementation08PrivateUATTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
             (run_dir / "raw").mkdir(parents=True)
-            (run_dir / "run.json").write_text(json.dumps({"suite_id": "synthetic", "fixture_sha256": "fixture", "run_sha256": "run", "report_schema_version": 4, "evaluator_contract_version": 3}), encoding="utf-8")
+            (run_dir / "run.json").write_text(json.dumps({"suite_id": "synthetic", "fixture_sha256": "fixture", "run_sha256": "run", "report_schema_version": 5, "evaluator_contract_version": 4}), encoding="utf-8")
             raw = {"case_id": "private-case-id", "turns": [{"turn_id": 1, "metrics": {"runtime_status": "completed", "evaluation_status": "review_required", "compiler_contract": {"raw_json_status": "object", "contract_status": "valid"}, "compiler_attempt_count": 2, "repair_attempted": True, "repair_outcome": "complete", "initial_contract_status": "invalid", "repair_contract_status": "valid", "authoritative_attempt_role": "repair", "authoritative_contract_status": "valid", "expectations": {"current_turn_subjects": {"status": "mismatch"}, "resolved_referents": {"status": "match"}, "required_operators": {"status": "match", "additional": ["vector_search"]}}, "coverage": {"coverage_decision": "approved", "claim_authorized": False}}, "compiler_attempts": [{"request": {"repair_context": {"private": "repair secret"}}, "raw_response": "private response"}]}]}
             (run_dir / "raw" / "private.json").write_text(json.dumps(raw), encoding="utf-8")
             output = Path(temp_dir) / "report.json"
             report = export_redacted(run_dir=run_dir, output_path=output)
             exported = output.read_text(encoding="utf-8")
-            self.assertEqual(report["evaluator_contract_version"], 3)
+            self.assertEqual(report["evaluator_contract_version"], 4)
             self.assertEqual(report["cases"][0]["turns"][0]["compiler_attempt_count"], 2)
             self.assertTrue(report["cases"][0]["turns"][0]["repair_attempted"])
             for value in ("private-case-id", "repair secret", "private response"):

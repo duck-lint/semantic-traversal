@@ -787,6 +787,16 @@ def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _parse_frontmatter_semantics(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _layer_limit(layer: dict[str, Any] | None, fallback: int) -> int:
     if not isinstance(layer, dict) or "limit" not in layer:
         return fallback
@@ -3001,6 +3011,7 @@ def _semantic_traversal(
                 "relative_path": str(candidate["relative_path"]),
                 "note_title": str(candidate["note_title"]),
                 "section_label": str(candidate["section_label"]),
+                "frontmatter_semantics": _parse_frontmatter_semantics(candidate.get("frontmatter_semantics_json")),
                 "paragraph_text": str(candidate["paragraph_text"]),
                 "chunk_hash": str(candidate["chunk_hash"]),
                 "source_layers": _candidate_source_layers(candidate),

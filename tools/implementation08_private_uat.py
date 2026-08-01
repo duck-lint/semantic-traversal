@@ -30,8 +30,8 @@ from semantic_traversal.semantic_compiler import SemanticCompilerResponse, resol
 
 PRIVATE_RELATIVE_ROOT = Path("agent_harness/private")
 FIXTURE_SCHEMA_VERSION = 2
-REPORT_SCHEMA_VERSION = 4
-EVALUATOR_CONTRACT_VERSION = 3
+REPORT_SCHEMA_VERSION = 5
+EVALUATOR_CONTRACT_VERSION = 4
 SUPPORTED_RESPONSE_MODES = {"direct", "traverse"}
 ROOT_FIELDS = {"schema_version", "suite_id", "cases"}
 CASE_FIELDS = {"id", "description", "turns"}
@@ -439,7 +439,7 @@ def _coverage_metrics(*, result: Any, expected: dict[str, Any]) -> dict[str, Any
     required_satisfied = True
     reason = "not_required"
     if expected["negative_claim"]["permitted"]:
-        scope_ok = manifest_coverage.get("scope") == required.get("scope") if isinstance(required, dict) else False
+        scope_ok = _coverage_scope_matches(manifest_coverage.get("scope"), required.get("scope") if isinstance(required, dict) else None)
         exact_status = manifest_coverage.get("exact_status")
         inadequate = manifest_coverage.get("inadequate_required_exact_terms") or []
         required_satisfied = requested and exact_executed and not exact_skipped and exact_status in {"completed_no_matches", "completed_with_matches"} and not inadequate and scope_ok
@@ -461,6 +461,21 @@ def _coverage_metrics(*, result: Any, expected: dict[str, Any]) -> dict[str, Any
         "authorization_reason": reason,
         "coverage_decision": coverage.get("decision", "unavailable"),
     }
+
+
+def _coverage_scope_matches(runtime_scope: Any, required_scope: Any) -> bool:
+    """Compare semantic coverage scope without equating aliases to filters."""
+    if required_scope != "complete_eligible_corpus":
+        return runtime_scope == required_scope
+    if runtime_scope == "complete_eligible_corpus":
+        return True
+    if not isinstance(runtime_scope, dict):
+        return False
+    return (
+        runtime_scope.get("source_label") in (None, "")
+        and runtime_scope.get("note_type") in (None, [], "")
+        and runtime_scope.get("path_contains") in (None, [], "")
+    )
 
 
 def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
