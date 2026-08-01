@@ -396,8 +396,8 @@ def _plan_source_attempt(*, attempts: list[dict[str, Any]], packet: dict[str, An
         parsed = _packet_projection(attempt["response"].parsed_payload)
         if parsed is not None and parsed == retained:
             matches.append(attempt)
-    if final_attempt in matches:
-        return final_attempt
+    if isinstance(final_attempt.get("raw_response"), str):
+        return final_attempt if final_attempt in matches else None
     if len(matches) == 1:
         return matches[0]
     # A successful final response is still required to prove packet identity;

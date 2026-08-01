@@ -345,7 +345,7 @@ class Implementation08PrivateUATTests(unittest.TestCase):
         self.assertEqual(_final_response_attempt(attempts=attempts, diagnostic=self._diagnostic(raw=repair["response"].raw_response, attempted=True, outcome="complete"))["attempt_role"], "repair")
 
     def test_timeout_repair_is_accepted_without_repair_hash(self) -> None:
-        initial = self._observation()
+        initial = self._observation(raw=json.dumps(canonical(), sort_keys=True))
         repair = self._observation(repair=True, raw=None, status="unavailable")
         diagnostic = self._diagnostic(raw=None, attempted=True, outcome="incomplete", status="unavailable")
         attempts = _validate_attempt_topology(observations=[initial, repair], diagnostic=diagnostic)
@@ -396,6 +396,26 @@ class Implementation08PrivateUATTests(unittest.TestCase):
         metrics = _turn_metrics(result=result, expected=expected, observation=[initial, repair])
         self.assertEqual(metrics["final_response_attempt_role"], "repair")
         self.assertEqual(metrics["plan_source_attempt_role"], "repair")
+
+    def test_successful_repair_with_initial_packet_is_plan_source_incomplete(self) -> None:
+        initial = self._observation(raw=json.dumps(canonical(), sort_keys=True))
+        repair = self._observation(repair=True)
+        payload = canonical()
+        payload["planner_diagnostics"] = {"plan_completeness": {"status": "complete"}, "plan_executability": {"status": "executable"}}
+        result = SimpleNamespace(
+            semantic_compiler_packet=payload,
+            semantic_compiler_diagnostic=self._diagnostic(raw=repair["response"].raw_response, attempted=True, outcome="complete"),
+            semantic_traversal_manifest={"execution": {"layers_executed": []}},
+            retrieval_packet={"selected_chunks": [{"synthetic": True}]}, runtime_outcome="completed", coverage_report={"decision": "approved"},
+        )
+        expected = copy.deepcopy(self.fixture["cases"][0]["turns"][0]["expected"])
+        # Make the retained packet equal only to the initial parsed payload by
+        # giving the repair a distinct parsed plan while its raw response still
+        # remains a valid observed response.
+        repair["response"] = SemanticCompilerResponse({**canonical(), "query": "different synthetic query"}, repair["response"].raw_response, repair["response"].metadata, repair["response"].diagnostics, repair["response"].status)
+        metrics = _turn_metrics(result=result, expected=expected, observation=[initial, repair])
+        self.assertIsNone(metrics["plan_source_attempt_role"])
+        self.assertIn(metrics["evaluation_status"], {"failed", "incomplete"})
 
     def test_timeout_topology_with_inconsistent_diagnostics_is_rejected(self) -> None:
         initial = self._observation()
