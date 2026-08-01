@@ -243,6 +243,7 @@ chunking:
     - journal_entry_date
     - title
     - creator
+    - book_read_today
   low_signal_apparatus:
     enabled: true
     skip_during_ingest: true
