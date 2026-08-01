@@ -70,12 +70,23 @@ Raw records are written only to:
 agent_harness/private/runs/<suite_id>/raw/
 ```
 
-The runner delegates the existing semantic compiler exactly once per turn,
-records raw compiler status/text/metadata privately, and independently
-measures JSON syntax, canonical contract compliance, canonicalization/fallback
-use, and plan quality. It does not call another model or alter production
-requests. It preserves one persisted thread per case and evaluates every turn
-against that turn's expectations.
+The runner records the production compiler topology as one initial attempt plus
+zero or one repair attempt. It identifies the repair call from the
+production-owned `repair_context` request structure and validates the final
+authoritative response by the runtime diagnostic's raw-response hash. It
+records raw compiler status/text/metadata privately and independently measures
+JSON syntax, canonical contract compliance, canonicalization/fallback use,
+repair cost, and plan quality. It does not call another model or alter
+production requests. It preserves one persisted thread per case and evaluates
+every turn against that turn's expectations.
+
+Required operators and evidence requirements use subset semantics: missing
+required values fail, while additional requested operators remain visible for
+efficiency review. Subject and referent results remain exact normalized
+surface comparisons; mismatches are review signals, not independent semantic
+failures. The redacted report contract is version 3 / evaluator contract 2,
+and a run cannot resume under a different contract version. Use a fresh suite
+ID after this correction rather than mixing records.
 
 ## Optional redacted export
 
@@ -86,10 +97,10 @@ without committing it:
 python tools/implementation08_private_uat.py `
   --fixture agent_harness/private/implementation-08-private-uat.yaml `
   --repo-root . `
-  --export-redacted agent_harness/private/implementation-08-private-uat-v2-redacted.json
+  --export-redacted agent_harness/private/implementation-08-private-uat-v3-redacted.json
 ```
 
-The v2 report exposes only allowlisted statuses, counts, safe operator names,
+The v3 report exposes only allowlisted statuses, counts, safe operator names,
 safe evidence enums, hashes, and reason categories. It excludes questions,
 answers, subject/referent strings, UUIDs, paths, note/chunk identity, prompts,
 raw compiler responses, arbitrary model-generated keys, and response prose.

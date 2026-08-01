@@ -16,7 +16,12 @@ Seam 0: operator-accepted
 | Generic coverage mistaken for negative authorization | `coverage_report.decision: approved` is treated as permission for corpus-wide absence | Read runtime `negative_claims_allowed` and exact manifest execution/status/scope/term adequacy separately |
 | Runtime completion mistaken for evaluation success | Terminal answer is displayed as an overall pass | Preserve runtime status and compute independent `evaluation_status`; unavailable adjudication yields `review_required` |
 | Case-global expectations corrupt multi-turn evaluation | Setup turn is scored against continuation expectations | Schema v2 requires one complete expectation object inside every turn |
-| Redacted report conceals deterministic mismatches | Aggregate exposes only first-turn plan status | Redacted v2 includes safe per-turn component statuses and case aggregation over every turn |
+| Redacted report conceals deterministic mismatches | Aggregate exposes only first-turn plan status | Redacted v3 includes safe per-turn component statuses and case aggregation over every turn |
+| Evaluator assumes one compiler call per turn | Production one-shot repair produces a second legitimate observation | Validate initial-plus-repair topology and preserve both attempt contracts |
+| Repair hides initial compiler weakness | Final repaired plan makes the initial defect invisible | Record initial and authoritative contract statuses separately, including repair outcome |
+| Exact operator-set equality rejects valid plans | Optional operators appear as deterministic failures | Treat required operators as subset containment and expose additional operators |
+| Surface string mismatch is mistaken for semantic failure | Equivalent subjects/referents use different wording | Preserve exact surface diagnostics but route mismatches to review-required |
+| Mixed evaluator versions resume together | Old raw records are interpreted under new semantics | Store evaluator/report versions in the run manifest and require a fresh suite ID |
 | Frozen-surface drift | Seam 0 changes routing, prompts, providers, or retrieval policy | Diff review against authority map; stop if any forbidden surface changes |
 | Inventory overclaim | Missing local inventory is reported as healthy | Read-only inspection and explicit unavailable status |
 

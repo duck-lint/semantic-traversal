@@ -30,8 +30,8 @@ from semantic_traversal.semantic_compiler import SemanticCompilerResponse, resol
 
 PRIVATE_RELATIVE_ROOT = Path("agent_harness/private")
 FIXTURE_SCHEMA_VERSION = 2
-REPORT_SCHEMA_VERSION = 2
-EVALUATOR_CONTRACT_VERSION = 1
+REPORT_SCHEMA_VERSION = 3
+EVALUATOR_CONTRACT_VERSION = 2
 SUPPORTED_RESPONSE_MODES = {"direct", "traverse"}
 ROOT_FIELDS = {"schema_version", "suite_id", "cases"}
 CASE_FIELDS = {"id", "description", "turns"}
@@ -216,6 +216,22 @@ def _compare_lists(expected: Any, observed: Any) -> dict[str, Any]:
     return {"expected": expected, "observed": observed, "missing": missing, "unexpected": unexpected, "status": "match" if not missing and not unexpected else "mismatch"}
 
 
+def _compare_required(expected: Any, observed: Any) -> dict[str, Any]:
+    """Compare a required list as subset containment while retaining extras."""
+    expected_values = list(dict.fromkeys(_norm_list(expected)))
+    observed_values = list(dict.fromkeys(_norm_list(observed)))
+    missing = [item for item in expected_values if item not in observed_values]
+    additional = [item for item in observed_values if item not in expected_values]
+    return {
+        "expected": expected,
+        "observed": observed,
+        "missing": missing,
+        "unexpected": additional,
+        "additional": additional,
+        "status": "match" if not missing else "mismatch",
+    }
+
+
 def _status(value: Any, default: str = "unavailable") -> str:
     return str(value.get("status") or default) if isinstance(value, dict) else default
 
@@ -284,6 +300,66 @@ def evaluate_compiler_contract(*, packet: dict[str, Any], response: SemanticComp
     }
 
 
+def _attempt_role(packet: Any) -> str:
+    """Classify only from the production request structure."""
+    if not isinstance(packet, dict):
+        raise PrivateUATUnavailable("semantic compiler attempt request was not a mapping")
+    has_repair_context = "repair_context" in packet
+    if has_repair_context:
+        if not isinstance(packet.get("repair_context"), dict):
+            raise PrivateUATUnavailable("semantic compiler repair request had malformed repair_context")
+        return "repair"
+    return "initial"
+
+
+def _attempt_record(observation: dict[str, Any], *, attempt_index: int) -> dict[str, Any]:
+    response = observation["response"]
+    request_payload = observation["packet"]
+    role = _attempt_role(request_payload)
+    request_json = json.dumps(request_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    raw_response = response.raw_response
+    return {
+        "attempt_index": attempt_index,
+        "attempt_role": role,
+        "request_sha256": sha256_text(request_json),
+        "raw_response_sha256": sha256_text(raw_response) if isinstance(raw_response, str) else None,
+        "backend_status": response.status,
+        "contract_status": None,
+        "request": request_payload,
+        "raw_response": raw_response,
+        "response_metadata": response.metadata,
+        "response": response,
+    }
+
+
+def _validate_attempt_topology(*, observations: list[dict[str, Any]], diagnostic: dict[str, Any]) -> list[dict[str, Any]]:
+    if not 1 <= len(observations) <= 2:
+        raise PrivateUATUnavailable(f"semantic compiler attempt count was {len(observations)}; expected one initial attempt plus at most one repair attempt")
+    attempts = [_attempt_record(observation, attempt_index=index) for index, observation in enumerate(observations, start=1)]
+    roles = [attempt["attempt_role"] for attempt in attempts]
+    if roles[0] != "initial" or roles.count("initial") != 1 or roles.count("repair") > 1:
+        raise PrivateUATUnavailable("semantic compiler attempt topology was not initial followed by at most one repair")
+    if len(roles) == 2 and roles[1] != "repair":
+        raise PrivateUATUnavailable("semantic compiler repair observation did not follow the initial observation")
+    repair = diagnostic.get("plan_repair") if isinstance(diagnostic.get("plan_repair"), dict) else {}
+    repair_attempted = bool(repair.get("attempted"))
+    if len(roles) == 2 and not repair_attempted:
+        raise PrivateUATUnavailable("semantic compiler repair observation exists but runtime diagnostics say repair was not attempted")
+    if len(roles) == 1 and repair_attempted:
+        raise PrivateUATUnavailable("runtime diagnostics claim repair occurred but no repair observation exists")
+    return attempts
+
+
+def _authoritative_attempt(*, attempts: list[dict[str, Any]], diagnostic: dict[str, Any]) -> dict[str, Any]:
+    authoritative_hash = diagnostic.get("raw_response_hash")
+    if not isinstance(authoritative_hash, str) or not authoritative_hash:
+        raise PrivateUATUnavailable("runtime semantic compiler diagnostic did not identify an authoritative response hash")
+    matches = [attempt for attempt in attempts if attempt.get("raw_response_sha256") == authoritative_hash]
+    if len(matches) != 1:
+        raise PrivateUATUnavailable("final compiler response could not be matched to exactly one authoritative observation")
+    return matches[0]
+
+
 class RecordingSemanticCompilerBackend:
     """Transparent proxy: one production call, unchanged response object."""
 
@@ -341,7 +417,7 @@ def _coverage_metrics(*, result: Any, expected: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
     packet = result.semantic_compiler_packet if isinstance(result.semantic_compiler_packet, dict) else {}
     plan = packet.get("planner_retrieval_plan") if isinstance(packet.get("planner_retrieval_plan"), dict) else {}
     manifest = result.semantic_traversal_manifest if isinstance(result.semantic_traversal_manifest, dict) else {}
@@ -356,10 +432,20 @@ def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[st
         "response_mode": _compare_lists([expected["response_mode"]], ["traverse"]),
         "current_turn_subjects": _compare_lists(expected["current_turn_subjects"], observed_subjects),
         "resolved_referents": _compare_lists(expected["resolved_referents"], observed_referents),
-        "required_operators": _compare_lists(expected["required_operators"], requested_operators),
-        "evidence_requirements": _compare_lists(expected["evidence_requirements"], observed_evidence),
+        "required_operators": _compare_required(expected["required_operators"], requested_operators),
+        "evidence_requirements": _compare_required(expected["evidence_requirements"], observed_evidence),
     }
-    compiler_contract = evaluate_compiler_contract(packet=observation["packet"], response=observation["response"], canonical_packet=packet)
+    observations = observation if isinstance(observation, list) else [observation]
+    diagnostic = result.semantic_compiler_diagnostic if isinstance(result.semantic_compiler_diagnostic, dict) else {}
+    attempts = _validate_attempt_topology(observations=observations, diagnostic=diagnostic)
+    authoritative = _authoritative_attempt(attempts=attempts, diagnostic=diagnostic)
+    compiler_contracts = []
+    for attempt in attempts:
+        contract = evaluate_compiler_contract(packet=attempt["request"], response=attempt["response"], canonical_packet=packet)
+        attempt["contract_status"] = contract["contract_status"]
+        compiler_contracts.append(contract)
+    compiler_contract = compiler_contracts[authoritative["attempt_index"] - 1]
+    repair = diagnostic.get("plan_repair") if isinstance(diagnostic.get("plan_repair"), dict) else {}
     coverage = _coverage_metrics(result=result, expected=expected)
     plan_complete = packet.get("planner_diagnostics", {}).get("plan_completeness", {"status": "unavailable"})
     plan_executable = packet.get("planner_diagnostics", {}).get("plan_executability", {"status": "unavailable"})
@@ -368,8 +454,13 @@ def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[st
     components["plan_executability"] = {"status": _status(plan_executable)}
     components["negative_claim_coverage"] = {"status": "pass" if coverage["required_coverage_satisfied"] else ("not_required" if not coverage["fixture_permits_negative_claim"] else "mismatch")}
     components["runtime_terminal_outcome"] = {"status": "pass" if result.runtime_outcome == "completed" else result.runtime_outcome}
+    hard_components = {
+        "response_mode", "required_operators", "evidence_requirements",
+        "semantic_compiler_contract", "plan_completeness", "plan_executability",
+        "negative_claim_coverage", "runtime_terminal_outcome",
+    }
     deterministic = list(components.values())
-    failed = any(item.get("status") in {"mismatch", "invalid", "blocked"} for item in deterministic)
+    failed = any(components[name].get("status") in {"mismatch", "invalid", "blocked"} for name in hard_components)
     unavailable = any(item.get("status") == "unavailable" for item in deterministic)
     if failed:
         evaluation_status = "failed"
@@ -380,6 +471,26 @@ def _turn_metrics(*, result: Any, expected: dict[str, Any], observation: dict[st
     return {
         "expectations": components,
         "compiler_contract": compiler_contract,
+        "compiler_attempts": [
+            {
+                "attempt_index": attempt["attempt_index"],
+                "attempt_role": attempt["attempt_role"],
+                "request_sha256": attempt["request_sha256"],
+                "raw_response_sha256": attempt["raw_response_sha256"],
+                "backend_status": attempt["backend_status"],
+                "contract_status": attempt["contract_status"],
+            }
+            for attempt in attempts
+        ],
+        "compiler_attempt_count": len(attempts),
+        "repair_attempted": bool(repair.get("attempted")),
+        "repair_outcome": repair.get("outcome", "not_needed"),
+        "initial_backend_status": attempts[0]["backend_status"],
+        "initial_contract_status": compiler_contracts[0]["contract_status"],
+        "repair_backend_status": attempts[1]["backend_status"] if len(attempts) == 2 else None,
+        "repair_contract_status": compiler_contracts[1]["contract_status"] if len(attempts) == 2 else None,
+        "authoritative_attempt_role": authoritative["attempt_role"],
+        "authoritative_contract_status": compiler_contract["contract_status"],
         "plan_completeness": plan_complete,
         "plan_executability": plan_executable,
         "coverage": coverage,
@@ -406,6 +517,9 @@ def _redacted_turn(turn: dict[str, Any]) -> dict[str, Any]:
     coverage = metrics.get("coverage", {})
     def component(name: str) -> str:
         return str(expectations.get(name, {}).get("status", "unavailable"))
+    required_operator = expectations.get("required_operators", {})
+    subjects = expectations.get("current_turn_subjects", {})
+    referents = expectations.get("resolved_referents", {})
     return {
         "turn_id": turn.get("turn_id"),
         "runtime_status": metrics.get("runtime_status", "unavailable"),
@@ -413,10 +527,27 @@ def _redacted_turn(turn: dict[str, Any]) -> dict[str, Any]:
         "compiler_json_status": contract.get("raw_json_status", "unavailable"),
         "compiler_contract_status": contract.get("contract_status", "unavailable"),
         "fallback_plan_used": bool(contract.get("fallback_plan_used", False)),
+        "compiler_attempt_count": metrics.get("compiler_attempt_count", 0),
+        "repair_attempted": bool(metrics.get("repair_attempted", False)),
+        "repair_outcome": metrics.get("repair_outcome", "unavailable"),
+        "initial_backend_status": metrics.get("initial_backend_status", "unavailable"),
+        "initial_contract_status": metrics.get("initial_contract_status", "unavailable"),
+        "repair_backend_status": metrics.get("repair_backend_status"),
+        "repair_contract_status": metrics.get("repair_contract_status"),
+        "authoritative_attempt_role": metrics.get("authoritative_attempt_role", "unavailable"),
+        "authoritative_contract_status": metrics.get("authoritative_contract_status", "unavailable"),
         "response_mode_expectation": component("response_mode"),
         "subject_expectation": component("current_turn_subjects"),
         "referent_expectation": component("resolved_referents"),
         "operator_expectation": component("required_operators"),
+        "required_operator_status": required_operator.get("status", "unavailable"),
+        "additional_operator_count": len(required_operator.get("additional", required_operator.get("unexpected", [])) or []),
+        "subject_surface_status": subjects.get("status", "unavailable"),
+        "referent_surface_status": referents.get("status", "unavailable"),
+        "subject_surface_expected_count": len(subjects.get("expected", []) or []),
+        "subject_surface_observed_count": len(subjects.get("observed", []) or []),
+        "referent_surface_expected_count": len(referents.get("expected", []) or []),
+        "referent_surface_observed_count": len(referents.get("observed", []) or []),
         "evidence_requirement_expectation": component("evidence_requirements"),
         "plan_completeness": component("plan_completeness"),
         "plan_executability": component("plan_executability"),
@@ -432,13 +563,14 @@ def _redacted_turn(turn: dict[str, Any]) -> dict[str, Any]:
 def export_redacted(*, run_dir: Path, output_path: Path) -> dict[str, Any]:
     manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     cases = []
-    for record in _load_raw_records(run_dir):
+    for case_index, record in enumerate(_load_raw_records(run_dir), start=1):
         turns = [_redacted_turn(turn) for turn in record.get("turns", [])]
         statuses = [turn["evaluation_status"] for turn in turns]
         case_status = "failed" if "failed" in statuses else "incomplete" if "incomplete" in statuses else "review_required"
-        cases.append({"case_id": record.get("case_id"), "runtime_status": "completed" if all(turn["runtime_status"] == "completed" for turn in turns) else "blocked", "evaluation_status": case_status, "turn_count": len(turns), "turns": turns})
+        cases.append({"case_id": f"case-{case_index}", "runtime_status": "completed" if all(turn["runtime_status"] == "completed" for turn in turns) else "blocked", "evaluation_status": case_status, "turn_count": len(turns), "turns": turns})
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
+        "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION,
         "suite_id": manifest["suite_id"],
         "case_count": len(cases),
         "cases": cases,
@@ -470,6 +602,8 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
     run_manifest_path = run_dir / "run.json"
     if run_manifest_path.exists() and not replace:
         existing = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        if existing.get("evaluator_contract_version") != EVALUATOR_CONTRACT_VERSION or existing.get("report_schema_version") != REPORT_SCHEMA_VERSION:
+            raise PrivateUATUnavailable("output was produced under a different evaluator/report contract; use a fresh suite_id")
         if existing.get("fixture_sha256") != fixture_sha:
             raise PrivateUATUnavailable("output contains an authoritative run for a different fixture; use --replace explicitly")
     if replace and run_manifest_path.exists():
@@ -486,7 +620,7 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
         raise PrivateUATUnavailable(str(llm_backend.unavailable_reason))
     compiler = RecordingSemanticCompilerBackend(resolve_semantic_compiler_backend(config=config))
     run_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_json(run_manifest_path, {"schema_version": REPORT_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": None})
+    _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": None})
     completed = {record.get("case_id") for record in _load_raw_records(run_dir)}
     for case in fixture["cases"]:
         if case["id"] in completed:
@@ -497,15 +631,18 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
             before = len(compiler.observations)
             result = run_thread_turn(repo_root=repo_root, data_root=config.data_root, user_input=turn["input"], thread_id=thread_id, config=config, llm_backend=llm_backend, semantic_compiler_backend=compiler)
             observed = compiler.observations[before:]
-            if len(observed) != 1:
-                raise PrivateUATUnavailable(f"semantic compiler observation count for case {case['id']} turn {turn_index} was {len(observed)}; expected exactly one")
-            turn_records.append({"turn_id": turn_index, "input": turn["input"], "expected": turn["expected"], "metrics": _turn_metrics(result=result, expected=turn["expected"], observation=observed[0]), "result": {"assistant_response": result.assistant_response, "runtime_outcome": result.runtime_outcome, "semantic_compiler_packet": result.semantic_compiler_packet, "semantic_compiler_diagnostic": result.semantic_compiler_diagnostic, "semantic_traversal_manifest": result.semantic_traversal_manifest, "retrieval_packet": result.retrieval_packet, "coverage_report": result.coverage_report, "llm_metadata": result.llm_metadata}, "compiler_observation": {"raw_response": observed[0]["response"].raw_response, "status": observed[0]["response"].status, "metadata": observed[0]["response"].metadata}})
+            diagnostic = result.semantic_compiler_diagnostic if isinstance(result.semantic_compiler_diagnostic, dict) else {}
+            attempts = _validate_attempt_topology(observations=observed, diagnostic=diagnostic)
+            authoritative = _authoritative_attempt(attempts=attempts, diagnostic=diagnostic)
+            metrics = _turn_metrics(result=result, expected=turn["expected"], observation=observed)
+            turn_records.append({"turn_id": turn_index, "input": turn["input"], "expected": turn["expected"], "metrics": metrics, "result": {"assistant_response": result.assistant_response, "runtime_outcome": result.runtime_outcome, "semantic_compiler_packet": result.semantic_compiler_packet, "semantic_compiler_diagnostic": result.semantic_compiler_diagnostic, "semantic_traversal_manifest": result.semantic_traversal_manifest, "retrieval_packet": result.retrieval_packet, "coverage_report": result.coverage_report, "llm_metadata": result.llm_metadata}, "compiler_attempts": [{"attempt_index": attempt["attempt_index"], "attempt_role": attempt["attempt_role"], "request_sha256": attempt["request_sha256"], "raw_response_sha256": attempt["raw_response_sha256"], "backend_status": attempt["backend_status"], "contract_status": metrics["compiler_attempts"][attempt["attempt_index"] - 1]["contract_status"], "request": attempt["request"], "raw_response": attempt["raw_response"], "metadata": attempt["response_metadata"]} for attempt in attempts], "authoritative_attempt_index": authoritative["attempt_index"]})
         _atomic_json(run_dir / "raw" / f"{case['id']}.json", {"case_id": case["id"], "description": case["description"], "turns": turn_records})
-    if len(compiler.observations) != sum(len(case["turns"]) for case in fixture["cases"] if case["id"] not in completed):
-        raise PrivateUATUnavailable("observed semantic compiler call count did not match executed turn count")
+    expected_minimum = sum(len(case["turns"]) for case in fixture["cases"] if case["id"] not in completed)
+    if not expected_minimum <= len(compiler.observations) <= expected_minimum * 2:
+        raise PrivateUATUnavailable("observed semantic compiler call count was outside the permitted initial-plus-repair range")
     records = _load_raw_records(run_dir)
     run_sha = sha256_text(json.dumps(records, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
-    _atomic_json(run_manifest_path, {"schema_version": REPORT_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": run_sha, "case_count": len(records)})
+    _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": run_sha, "case_count": len(records)})
     report = {"status": "completed", "suite_id": fixture["suite_id"], "case_count": len(records), "run_dir": str(run_dir)}
     if export_path:
         export_path = _assert_private_path(export_path, private_root, "redacted output")
