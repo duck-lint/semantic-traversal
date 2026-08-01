@@ -22,6 +22,7 @@
 | 2026-08-01 | Corrected private-UAT measurement instrument | Replaced schema v1 with incompatible per-turn schema v2; added raw compiler-contract observation, runtime-owned negative authorization metrics, all-turn aggregation, and allowlisted report v2 | Preserve the original v1 run locally; rerun the unchanged private baseline and inspect results before Seam 1 |
 | 2026-08-01 | Corrected private-UAT repair observation semantics | Schema-v2 private rerun reached the unchanged production one-shot repair path; evaluator had assumed one compiler call per turn. Attempts are now explicit, required operators use subset semantics, and surface comparisons are non-authoritative diagnostics | Preserve failed private contents locally; rerun with a fresh post-observation-fix suite ID |
 | 2026-08-01 | Corrected private-UAT repair timeout semantics | A repair request reached the configured 120-second timeout and production returned no raw repair response. The evaluator now records unavailable contract status, separates final response attempt from retained plan source, atomically records blocked turns, and continues to independent cases | Preserve original ignored runs; rerun with a fresh post-repair-timeout suite ID |
+| 2026-08-01 | Canonical semantic chunk alignment correction | The private baseline exposed admitted semantic frontmatter being present in FTS but absent from vector input and selected synthesis evidence; the runtime now uses one admitted chunk surface and the evaluator normalizes unrestricted exact coverage scope | Complete post-fix reingest and rerun with a fresh post-alignment suite ID |
 
 ## Work status
 
@@ -64,3 +65,16 @@ without changing the timeout, repair behaviour, prompts, models, retrieval,
 inventory, synthesis, corpus, or fixture schema. The original private runs
 remain ignored and operator-preserved. The corrected baseline remains
 operator-rerun-pending; Seam 1 has not begun.
+
+The completed pre-fix private baseline also exposed a semantic chunk alignment
+defect: configured semantic frontmatter was stored and indexed in FTS but was
+absent from vector input and selected synthesis evidence, so metadata-only
+changes did not necessarily invalidate vectors. The correction uses one
+generated admitted semantic chunk surface across applicable retrieval and
+synthesis boundaries while preserving each operator's distinct semantics. The
+inventory remains a bounded generated projection, not a second ontology. The
+exact-absence evaluator now recognizes an unrestricted runtime filter as the
+fixture's `complete_eligible_corpus` requirement without conflating coverage
+with negative-claim authorization. The completed pre-fix run remains
+operator-preserved; post-fix reingest and a fresh private baseline are
+pending. Seam 1 has not begun.

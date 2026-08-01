@@ -88,7 +88,7 @@ Required operators and evidence requirements use subset semantics: missing
 required values fail, while additional requested operators remain visible for
 efficiency review. Subject and referent results remain exact normalized
 surface comparisons; mismatches are review signals, not independent semantic
-failures. The redacted report contract is version 4 / evaluator contract 3,
+failures. The redacted report contract is version 5 / evaluator contract 4,
 and a run cannot resume under a different contract version. Use a fresh suite
 ID after this correction rather than mixing records.
 
@@ -101,10 +101,10 @@ without committing it:
 python tools/implementation08_private_uat.py `
   --fixture agent_harness/private/implementation-08-private-uat.yaml `
   --repo-root . `
-  --export-redacted agent_harness/private/implementation-08-private-uat-v4-redacted.json
+  --export-redacted agent_harness/private/implementation-08-private-uat-v5-redacted.json
 ```
 
-The v4 report exposes only allowlisted statuses, counts, safe operator names,
+The v5 report exposes only allowlisted statuses, counts, safe operator names,
 safe evidence enums, hashes, and reason categories. It excludes questions,
 answers, subject/referent strings, UUIDs, paths, note/chunk identity, prompts,
 raw compiler responses, arbitrary model-generated keys, and response prose.
@@ -121,4 +121,16 @@ request/execution, exact status, required-term adequacy, scope, and
 
 The corrected private baseline is still a pre-production-change measurement.
 Inventory inspection or redesign, model replacement/bakeoff, corpus changes,
-and Seam 1 remain separate future work.
+and Seam 1 remain separate future work. The report/evaluator contract for this
+alignment correction is version 5 / evaluator contract 4; fixture schema
+version 2 remains unchanged.
+
+The completed pre-fix private baseline exposed a canonical semantic chunk
+alignment defect: configured semantic frontmatter was present in FTS but absent
+from vector input and selected synthesis evidence. The correction now measures
+the same admitted chunk surface across applicable retrieval and synthesis
+boundaries, preserves distinct operator semantics, and normalizes the runtime's
+unrestricted exact-search scope to the fixture's `complete_eligible_corpus`
+requirement. The original private run remains operator-preserved; complete
+post-fix reingest and a fresh private baseline remain operator-pending. Fixture
+schema version 2 is unchanged and Seam 1 has not begun.

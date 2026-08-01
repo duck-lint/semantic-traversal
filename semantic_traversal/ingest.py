@@ -1001,6 +1001,7 @@ def _extract_chunks(
                 note_title=note_title,
                 relative_path=relative_path,
                 section_path=current_section.path_labels,
+                frontmatter_semantics=frontmatter_semantics,
                 semantic_unit_text=chunk_text,
             )
             embedding_text_hash = sha256_text(embedding_text)
@@ -1107,10 +1108,45 @@ def _build_embedding_text_for_chunk(
     note_title: str,
     relative_path: str,
     section_path: tuple[str, ...],
+    frontmatter_semantics: dict[str, Any],
     semantic_unit_text: str,
 ) -> str:
+    """Serialize the one admitted semantic chunk surface deterministically.
+
+    This is deliberately a representation of the typed chunk, not an
+    interpretation of any field.  JSON is used for values so lists, mappings,
+    nulls, and scalar types have stable, unambiguous serialization.
+    """
     heading_path = " > ".join(section_path) if section_path else note_title
-    return "\n".join([note_title, relative_path, heading_path, "", semantic_unit_text])
+    metadata = json.dumps(
+        _canonical_semantic_value(frontmatter_semantics),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "\n".join(
+        [
+            "Title: " + note_title,
+            "Path: " + relative_path,
+            "Section: " + heading_path,
+            "Semantic metadata: " + metadata,
+            "Content:",
+            semantic_unit_text,
+        ]
+    )
+
+
+def _canonical_semantic_value(value: Any) -> Any:
+    """Return JSON-safe values with recursively stable mapping order."""
+    if isinstance(value, dict):
+        return {str(key): _canonical_semantic_value(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_semantic_value(item) for item in value]
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return value
 
 
 def _chunking_warning(kind: str) -> str:
