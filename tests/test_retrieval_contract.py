@@ -39,6 +39,150 @@ class RetrievalContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.config = load_runtime_config(repo_root=Path(__file__).resolve().parents[1])
 
+    @staticmethod
+    def _coverage_packet(*, has_retrieval_intent: bool = True) -> dict:
+        return {
+            "raw_user_input": "synthetic query",
+            "intent": "search",
+            "query": "synthetic query",
+            "entities": [],
+            "relations": [],
+            "resolved_referents": [],
+            "planner_retrieval_plan": {},
+            "limitations": [],
+            "planner_diagnostics": {
+                "plan_completeness": {"status": "complete"},
+                "plan_executability": {
+                    "status": "executable",
+                    "has_retrieval_intent": has_retrieval_intent,
+                },
+            },
+        }
+
+    @staticmethod
+    def _coverage_manifest(*, has_retrieval_intent: bool = True) -> dict:
+        return {
+            "bound_retrieval_plan": {
+                "retrieval_layers": (
+                    [{"operator": "lexical_chunk_search", "required": False}]
+                    if has_retrieval_intent
+                    else []
+                ),
+                "semantic_queries": ["synthetic query"] if has_retrieval_intent else [],
+                "graph_seeds": [],
+            },
+            "layer_manifests": {},
+            "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
+            "selection_notes": [],
+            "coverage": {},
+        }
+
+    def _coverage_report_for_test(
+        self,
+        *,
+        packet: dict | None = None,
+        manifest: dict | None = None,
+        selected_count: int = 0,
+        compiler_status: str = "parsed",
+    ) -> dict:
+        return _coverage_report(
+            semantic_compiler_packet=packet or self._coverage_packet(),
+            semantic_compiler_status=compiler_status,
+            semantic_compiler_diagnostic={},
+            traversal_manifest=manifest or self._coverage_manifest(),
+            retrieval_packet={"matched_chunk_count": selected_count},
+        )
+
+    def test_coverage_approves_positive_selected_evidence(self) -> None:
+        report = self._coverage_report_for_test(selected_count=1)
+        self.assertEqual(report["decision"], "approved")
+        self.assertEqual(report["blocking_reasons"], [])
+
+    def test_coverage_blocks_zero_evidence_with_retrieval_intent_without_crashing(self) -> None:
+        report = self._coverage_report_for_test()
+        self.assertEqual(report["decision"], "blocked")
+        self.assertIn("retrieval required but no chunks were selected", report["blocking_reasons"])
+
+    def test_coverage_approves_valid_exhaustive_exact_absence(self) -> None:
+        manifest = self._coverage_manifest()
+        manifest["bound_retrieval_plan"]["retrieval_layers"] = [
+            {"operator": "exact_chunk_search", "required": True}
+        ]
+        manifest["layer_manifests"] = {
+            "exact": {
+                "status": "completed_no_matches",
+                "term_results": [
+                    {"term": "synthetic literal", "required": True, "status": "completed_no_matches"}
+                ],
+            }
+        }
+        manifest["coverage"] = {
+            "exact_search_performed": True,
+            "exact_status": "completed_no_matches",
+            "negative_claims_allowed": True,
+        }
+        report = self._coverage_report_for_test(manifest=manifest)
+        self.assertEqual(report["decision"], "approved")
+        self.assertEqual(report["blocking_reasons"], [])
+
+    def test_coverage_without_retrieval_intent_is_deterministic(self) -> None:
+        report = self._coverage_report_for_test(
+            packet=self._coverage_packet(has_retrieval_intent=False),
+            manifest=self._coverage_manifest(has_retrieval_intent=False),
+        )
+        self.assertEqual(report["decision"], "approved")
+        self.assertEqual(report["blocking_reasons"], [])
+
+    def test_coverage_preserves_existing_blocking_stop_gates(self) -> None:
+        for compiler_status, expected_reason in (
+            ("unavailable", "semantic compiler status is unavailable"),
+            ("invalid_json", "semantic compiler status is invalid_json"),
+        ):
+            with self.subTest(compiler_status=compiler_status):
+                report = self._coverage_report_for_test(
+                    compiler_status=compiler_status,
+                    selected_count=1,
+                )
+                self.assertEqual(report["decision"], "blocked")
+                self.assertTrue(any(expected_reason in reason for reason in report["blocking_reasons"]))
+
+        incomplete = self._coverage_packet()
+        incomplete["planner_diagnostics"]["plan_completeness"] = {"status": "incomplete"}
+        report = self._coverage_report_for_test(packet=incomplete, selected_count=1)
+        self.assertEqual(report["decision"], "blocked")
+
+        malformed = self._coverage_packet()
+        del malformed["query"]
+        report = self._coverage_report_for_test(packet=malformed, selected_count=1)
+        self.assertEqual(report["decision"], "blocked")
+
+        non_executable = self._coverage_packet()
+        non_executable["planner_diagnostics"]["plan_executability"] = {
+            "status": "non_executable",
+            "has_retrieval_intent": True,
+            "blocking_reasons": ["synthetic missing retrieval input"],
+        }
+        report = self._coverage_report_for_test(packet=non_executable, selected_count=1)
+        self.assertEqual(report["decision"], "blocked")
+
+        inadequate_required_layer = self._coverage_manifest()
+        inadequate_required_layer["coverage"] = {
+            "required_layer_results": [
+                {
+                    "source": "lexical",
+                    "adequate_contribution": False,
+                    "blocking_reason": "synthetic inadequate layer",
+                }
+            ]
+        }
+        report = self._coverage_report_for_test(manifest=inadequate_required_layer, selected_count=1)
+        self.assertEqual(report["decision"], "blocked")
+
+        unavailable_db = self._coverage_manifest()
+        unavailable_db["selection_notes"] = ["ingestion database unavailable"]
+        report = self._coverage_report_for_test(manifest=unavailable_db, selected_count=1)
+        self.assertEqual(report["decision"], "blocked")
+
     def _vector_connection(self, entries: list[tuple[str, str, list[float], dict[str, object] | None]]) -> sqlite3.Connection:
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row
