@@ -166,6 +166,35 @@ Expected directory: `agent_harness/private/runs/implementation-08-private-before
 
 # Post-PR-15 resolved-referent propagation correction
 
+# Post-PR-16 retrieval-surface completeness boundary
+
+The retrieval-surface correction preserves the PR #16 compiler-to-temporal
+context path while aligning the generic inventory legend with executable
+runtime capability. Inventory schema becomes 3, compiler projection becomes 2,
+and retrieval-surface manifest version 1 is added. Evaluator contract 5,
+redacted report schema 6, fixture schema 2, and the temporal kernel remain
+unchanged.
+
+Complete post-merge reingest is required because FTS coverage, graph
+materialization, graph provenance, inbound traversal, and the persisted
+inventory shape change. Before private UAT, confirm FTS, vector, graph, and
+temporal validation, inventory schema 3, projection version 2, and manifest
+version 1.
+
+Use this fresh ignored suite ID after reingest:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-retrieval-surface-completeness
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-retrieval-surface-completeness/`.
+
+No private questions, answers, titles, paths, dates, UUIDs, note text, or
+artifacts belong in the repository. Lexical multi-query flattening remains
+deferred. No graph-to-temporal chaining, alias, filter language, query recipe,
+field ontology, attachment mechanism, or Seam 1 work was added.
+
 PR #15 successfully excised scope aliases. The post-PR-15 private rerun showed
 compiler referents present upstream, but resolver binding omitted them, so
 temporal execution used an anonymous query-level fallback. The improved answer

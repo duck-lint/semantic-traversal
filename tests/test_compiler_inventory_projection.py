@@ -99,10 +99,8 @@ class CompilerInventoryProjectionTests(unittest.TestCase):
         raw = copy.deepcopy(self.config.raw)
         raw["semantic_compiler"]["inventory_projection"].update({"max_chars": 1_500, "max_values_per_field": 12, "max_path_values": 48})
         config = RuntimeConfig(repo_root=self.config.repo_root, config_path=self.config.config_path, raw=raw)
-        projection, diagnostics = build_compiler_inventory_projection(inventory_summary=self._inventory(), config=config)
-        self.assertLessEqual(diagnostics["projection_chars"], 1_500)
-        self.assertTrue(diagnostics["truncation_applied"])
-        self.assertEqual(projection["semantic_chunk"]["admitted_frontmatter_fields"], sorted(self.config.chunking_semantic_frontmatter_fields))
+        with self.assertRaises(ValueError):
+            build_compiler_inventory_projection(inventory_summary=self._inventory(), config=config)
 
     def test_projection_controls_do_not_change_persisted_inventory_policy_hash(self) -> None:
         raw = copy.deepcopy(self.config.raw)

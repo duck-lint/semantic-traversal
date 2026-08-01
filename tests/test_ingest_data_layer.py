@@ -15,6 +15,7 @@ from copy import deepcopy
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
 from semantic_traversal.ingest import IngestSourceRoot, _validate_lexical_index, _validate_vector_index, run_ingest
+from semantic_traversal.runtime import _exact_candidates, _load_chunk_rows
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -446,21 +447,73 @@ class IngestDataLayerTests(unittest.TestCase):
                     connection,
                     f"SELECT source_node_id, target_node_id, edge_type, metadata_json FROM {config.graph_edges_table} WHERE edge_type = 'note_links_note' ORDER BY metadata_json",
                 )
-                self.assertGreaterEqual(len(edges), 3)
+                # B is linked twice from A (once with a heading fragment). The
+                # graph stores one directed canonical edge and merges all
+                # authored occurrences into provenance.
+                self.assertEqual(len(edges), 2)
 
                 edge_metadata = [json.loads(edge["metadata_json"]) for edge in edges]
                 self.assertTrue(any(meta["target_note"] == "B" and meta["resolved"] for meta in edge_metadata))
                 self.assertTrue(any(meta["target_note"] == "C" and meta["alias"] == "see alias" for meta in edge_metadata))
-                self.assertTrue(
-                    any(
-                        meta["target_note"] == "B"
-                        and meta["target_heading"] == "Sleep Section"
-                        and meta["alias"] == "sleep alias"
-                        for meta in edge_metadata
-                    )
-                )
+                b_edge = next(meta for meta in edge_metadata if meta["target_note"] == "B")
+                self.assertEqual(len(b_edge["provenance"]), 2)
+                self.assertTrue(any(item["target_heading"] == "Sleep Section" and item["alias"] == "sleep alias" for item in b_edge["provenance"]))
             finally:
                 connection.close()
+
+    def test_manifest_exact_metadata_and_frontmatter_wikilinks_are_materialized(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            source_root = data_root / "synthetic"
+            _write_note(source_root, "A.md", """---
+uuid: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+aliases: ["[[B|metadata link]]"]
+note_type: synthetic
+---
+
+# Alpha Section
+
+body-token
+""")
+            _write_note(source_root, "B.md", """---
+uuid: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+---
+
+# Beta Section
+
+target-token
+""")
+            result = run_ingest(
+                repo_root=REPO_ROOT,
+                data_root=data_root,
+                source_roots=(IngestSourceRoot(label="synthetic", path=source_root),),
+                embedding_backend=FakeEmbeddingBackend(),
+                config=config,
+            )
+            with closing(sqlite3.connect(result.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                snapshot = json.loads(connection.execute("SELECT payload_json FROM resource_inventory_snapshots").fetchone()[0])
+                manifest = snapshot["retrieval_surface_manifest"]
+                self.assertEqual(manifest["manifest_version"], 1)
+                self.assertTrue(manifest["closed_world"])
+                self.assertEqual(manifest["operators"]["graph_expand"]["active_direction"], "both")
+                self.assertIn("admitted_frontmatter", manifest["operators"]["graph_expand"]["authored_link_sources"])
+                edge = connection.execute(
+                    f"SELECT metadata_json FROM {config.graph_edges_table} WHERE edge_type = 'note_links_note'"
+                ).fetchone()
+                metadata = json.loads(edge[0])
+                self.assertIn("admitted_frontmatter", metadata["source_surfaces"])
+                self.assertEqual(metadata["provenance"][0]["frontmatter_field_path"], "aliases[0]")
+                rows = _load_chunk_rows(connection)
+                candidates, _, diagnostics = _exact_candidates(
+                    rows,
+                    [{"term": "note_type", "required": True, "match": "case_sensitive_substring"}],
+                    scope_filters={}, limit=10, return_total_count=True, config=config,
+                )
+                self.assertEqual(diagnostics["total_match_count"], 1)
+                self.assertEqual(candidates[0]["exact_match_evidence"][0]["representative_context"]["field"], "frontmatter_semantics.note_type")
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH '"'"note_type"'"'").fetchone()[0], 1)
 
     def test_existing_fixture_ingestion_smoke(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
