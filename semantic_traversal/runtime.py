@@ -758,23 +758,32 @@ def _is_compiler_packet_valid(packet: Any) -> bool:
 
 
 def _load_chunk_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = connection.execute(
-        """
-        SELECT
-            chunk_id,
-            note_id,
-            source_root_label,
-            source_root_path,
-            relative_path,
-            note_title,
-            frontmatter_semantics_json,
-            section_label,
-            paragraph_text,
-            chunk_hash
-        FROM chunks
-        """
-    ).fetchall()
-    return [dict(row) for row in rows]
+    # Test doubles and pre-manifest databases may omit section_path_json. The
+    # canonical ingest schema supplies it; retaining this narrow read fallback
+    # keeps executor diagnostics usable for those intentionally minimal stores.
+    rows = connection.execute("SELECT * FROM chunks").fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["section_path"] = " > ".join(json.loads(str(item.get("section_path_json") or "[]")))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["section_path"] = str(item.get("section_label") or "")
+        result.append(item)
+    return result
+
+
+def _flatten_semantic_leaves(value: Any, path: str = "frontmatter_semantics") -> list[tuple[str, str]]:
+    leaves: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key in sorted(value, key=str):
+            leaves.extend(_flatten_semantic_leaves(value[key], f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            leaves.extend(_flatten_semantic_leaves(item, f"{path}[{index}]"))
+    elif value is not None:
+        leaves.append((path, "true" if value is True else "false" if value is False else str(value)))
+    return [(path, text) for path, text in leaves if text]
 
 
 def _parse_frontmatter_semantics(value: Any) -> dict[str, Any]:
@@ -919,7 +928,7 @@ def _exact_candidates(
     return_total_count: bool = False,
     config: RuntimeConfig,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
-    fields = ("note_title", "section_label", "relative_path", "paragraph_text")
+    fields = ("note_title", "relative_path", "section_path", "paragraph_text")
     notes: list[str] = []
     term_entries = []
     for entry in literal_terms:
@@ -1000,11 +1009,13 @@ def _exact_candidates(
         matched_terms: list[str] = []
         for entry in term_entries:
             term = entry["term"]
-            term_occurrences: list[tuple[str, int, int]] = []
-            for field in fields:
-                value = str(row.get(field) or "")
+            term_occurrences: list[tuple[str, int, int, str]] = []
+            searchable_values = [(field, str(row.get(field) or "")) for field in fields]
+            for path, value in _flatten_semantic_leaves(_parse_frontmatter_semantics(row.get("frontmatter_semantics_json"))):
+                searchable_values.extend(((path, path), (path, value)))
+            for field, value in searchable_values:
                 for start, end in occurrences(value, term, entry["match"]):
-                    term_occurrences.append((field, start, end))
+                    term_occurrences.append((field, start, end, value))
             if not term_occurrences:
                 continue
             matched_terms.append(term)
@@ -1014,8 +1025,8 @@ def _exact_candidates(
             result["matching_note_count"] = None
             result["total_occurrence_count"] += len(term_occurrences)
             total_occurrence_count += len(term_occurrences)
-            for field, start, end in term_occurrences:
-                representative = context(str(row.get(field) or ""), start, end)
+            for field, start, end, matched_value in term_occurrences:
+                representative = context(matched_value, start, end)
                 representative["field"] = field
                 evidence.append({
                     "term": term,
@@ -1047,8 +1058,8 @@ def _exact_candidates(
 
     for term, result in per_term.items():
         result["matching_note_count"] = len({str(row.get("note_id") or "") for row in scoped_rows if any(
-            occurrences(str(row.get(field) or ""), term, next(entry["match"] for entry in term_entries if entry["term"] == term))
-            for field in fields
+            occurrences(value, term, next(entry["match"] for entry in term_entries if entry["term"] == term))
+            for _, value in [(field, str(row.get(field) or "")) for field in fields] + [item for path, value in _flatten_semantic_leaves(_parse_frontmatter_semantics(row.get("frontmatter_semantics_json"))) for item in ((path, path), (path, value))]
         )})
     for result in per_term.values():
         if result["status"] == "completed_no_matches":

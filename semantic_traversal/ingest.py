@@ -567,7 +567,7 @@ def _parse_markdown_note(
     note_title = _derive_note_title(frontmatter=frontmatter, note_path=note_path)
     tag_values = _extract_tag_values(frontmatter)
     frontmatter_semantics = _extract_semantic_frontmatter(frontmatter, config=config)
-    wikilink_targets = _extract_wikilink_targets(body_text)
+    wikilink_targets = _extract_wikilink_targets(body_text, frontmatter_semantics=frontmatter_semantics)
     blocks = _tokenize_markdown_blocks(body_text)
     chunks = _extract_chunks(
         blocks=blocks,
@@ -734,14 +734,32 @@ def _extract_tag_values(frontmatter: dict[str, Any]) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _extract_wikilink_targets(body_text: str) -> tuple[dict[str, Any], ...]:
+def _extract_wikilink_targets(body_text: str, *, frontmatter_semantics: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     targets: list[dict[str, Any]] = []
     for match in WIKILINK_RE.findall(body_text):
         parsed = _parse_wikilink_target(match)
         if parsed is None:
             continue
+        parsed["source_surface"] = "body"
         if parsed not in targets:
             targets.append(parsed)
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key in sorted(value, key=str):
+                walk(value[key], f"{path}.{key}" if path else str(key))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+        elif isinstance(value, str):
+            for match in WIKILINK_RE.findall(value):
+                parsed = _parse_wikilink_target(match)
+                if parsed is None:
+                    continue
+                parsed["source_surface"] = "admitted_frontmatter"
+                parsed["frontmatter_field_path"] = path
+                if parsed not in targets:
+                    targets.append(parsed)
+    walk(frontmatter_semantics, "")
     return tuple(targets)
 
 
@@ -1277,6 +1295,7 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
             paragraph_text,
             note_title,
             section_label,
+            section_path,
             relative_path,
             metadata
         );
@@ -1338,6 +1357,10 @@ def _initialize_schema(connection: sqlite3.Connection, *, config: RuntimeConfig)
         connection.execute(f"ALTER TABLE {vector_table} ADD COLUMN embedding_identity_json TEXT NOT NULL DEFAULT '{{}}'")
     if "embedding_identity_hash" not in vector_columns:
         connection.execute(f"ALTER TABLE {vector_table} ADD COLUMN embedding_identity_hash TEXT NOT NULL DEFAULT ''")
+    fts_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(chunks_fts)").fetchall()}
+    if fts_columns and "section_path" not in fts_columns:
+        connection.execute("DROP TABLE chunks_fts")
+        connection.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, section_path, relative_path, metadata)")
     connection.commit()
 
 
@@ -1549,10 +1572,10 @@ def _validate_lexical_index(*, connection: sqlite3.Connection, config: RuntimeCo
         result["failure_reason"] = "chunks_fts table is missing"
         return result
     canonical_rows = connection.execute(
-        "SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, frontmatter_semantics_json FROM chunks ORDER BY chunk_id"
+        "SELECT chunk_id, paragraph_text, note_title, section_label, section_path_json, relative_path, frontmatter_semantics_json FROM chunks ORDER BY chunk_id"
     ).fetchall()
     fts_rows = connection.execute(
-        "SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, metadata FROM chunks_fts ORDER BY chunk_id"
+        "SELECT chunk_id, paragraph_text, note_title, section_label, section_path, relative_path, metadata FROM chunks_fts ORDER BY chunk_id"
     ).fetchall()
     canonical_by_id = {str(row["chunk_id"]): row for row in canonical_rows}
     fts_ids = [str(row["chunk_id"]) for row in fts_rows]
@@ -1570,6 +1593,7 @@ def _validate_lexical_index(*, connection: sqlite3.Connection, config: RuntimeCo
             str(row["paragraph_text"]) != str(canonical["paragraph_text"])
             or str(row["note_title"]) != str(canonical["note_title"])
             or str(row["section_label"]) != str(canonical["section_label"])
+            or str(row["section_path"]) != " > ".join(json.loads(str(canonical["section_path_json"] or "[]")))
             or str(row["relative_path"]) != str(canonical["relative_path"])
             or str(row["metadata"]) != str(canonical["frontmatter_semantics_json"])
         ) and chunk_id not in mismatch_ids:
@@ -1607,13 +1631,18 @@ def _validate_lexical_index(*, connection: sqlite3.Connection, config: RuntimeCo
 def _refresh_lexical_index(*, connection: sqlite3.Connection) -> None:
     """Keep the FTS surface transactionally aligned with the active chunks."""
     connection.execute("DELETE FROM chunks_fts")
-    connection.execute(
-        """
-        INSERT INTO chunks_fts (chunk_id, paragraph_text, note_title, section_label, relative_path, metadata)
-        SELECT chunk_id, paragraph_text, note_title, section_label, relative_path, frontmatter_semantics_json
-        FROM chunks
-        ORDER BY chunk_id
-        """
+    rows = connection.execute(
+        "SELECT chunk_id, paragraph_text, note_title, section_label, section_path_json, relative_path, frontmatter_semantics_json FROM chunks ORDER BY chunk_id"
+    ).fetchall()
+    connection.executemany(
+        "INSERT INTO chunks_fts (chunk_id, paragraph_text, note_title, section_label, section_path, relative_path, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                row["chunk_id"], row["paragraph_text"], row["note_title"], row["section_label"],
+                " > ".join(json.loads(str(row["section_path_json"] or "[]"))), row["relative_path"], row["frontmatter_semantics_json"],
+            )
+            for row in rows
+        ],
     )
 
 
@@ -2143,6 +2172,8 @@ def _rebuild_graph_layer(
                     "note_links_note",
                     json.dumps(
                         {
+                            "source_surface": target_record.get("source_surface", "body"),
+                            "frontmatter_field_path": target_record.get("frontmatter_field_path"),
                             "raw_wikilink_text": target_record.get("raw_wikilink_text"),
                             "target_raw": target_record.get("target_raw"),
                             "target_note": target_note,
@@ -2158,6 +2189,31 @@ def _rebuild_graph_layer(
                     generated_at,
                 )
             )
+
+    # A directed authored relation has one canonical edge identity. Merge all
+    # body/frontmatter occurrences into deterministic provenance instead of
+    # inflating graph ranking with duplicate links.
+    merged_edges: dict[tuple[str, str, str], tuple[Any, ...]] = {}
+    provenance: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for edge in edge_rows:
+        key = (str(edge[1]), str(edge[2]), str(edge[3]))
+        if edge[3] != "note_links_note":
+            merged_edges[key] = edge
+            continue
+        try:
+            record = json.loads(str(edge[4]))
+        except json.JSONDecodeError:
+            record = {}
+        provenance.setdefault(key, []).append(record)
+        if key not in merged_edges:
+            merged_edges[key] = edge
+    for key, records in provenance.items():
+        edge = merged_edges[key]
+        merged = dict(records[0])
+        merged["provenance"] = sorted(records, key=lambda item: (str(item.get("source_surface")), str(item.get("frontmatter_field_path")), str(item.get("raw_wikilink_text"))))
+        merged["source_surfaces"] = sorted({str(item.get("source_surface") or "body") for item in records})
+        merged_edges[key] = (*edge[:4], json.dumps(merged, ensure_ascii=True, sort_keys=True), *edge[5:])
+    edge_rows = list(merged_edges.values())
 
     connection.executemany(
         f"INSERT INTO {graph_nodes_table} (node_id, node_type, label, ref_id, metadata_json, last_ingested_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",

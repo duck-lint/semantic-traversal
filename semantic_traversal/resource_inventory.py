@@ -10,8 +10,9 @@ from .config import RuntimeConfig
 from .hashing import sha256_json, sha256_text
 
 
-INVENTORY_SCHEMA_VERSION = 2
-COMPILER_INVENTORY_PROJECTION_VERSION = 1
+INVENTORY_SCHEMA_VERSION = 3
+COMPILER_INVENTORY_PROJECTION_VERSION = 2
+RETRIEVAL_SURFACE_MANIFEST_VERSION = 1
 _CURRENT_SNAPSHOT_KEY = "current"
 
 
@@ -54,7 +55,8 @@ def _inventory_policy(config: RuntimeConfig) -> dict[str, Any]:
         "max_path_values": controls["max_path_values"],
         "max_graph_types": controls["max_graph_types"],
         "max_temporal_types": controls["max_temporal_types"],
-        "capability_sections": ["exact_fts", "vector", "graph", "temporal"],
+        "capability_sections": ["retrieval_surface_manifest", "exact_fts", "vector", "graph", "temporal"],
+        "graph_link_source_policy": ["body", "admitted_frontmatter"],
         "semantic_chunk_surface_version": 1,
     }
 
@@ -136,6 +138,61 @@ def _capability_inventory(connection: sqlite3.Connection, config: RuntimeConfig)
     return {"exact_fts": exact, "vector": vector, "graph": {"nodes": graph_nodes, "edges": graph_edges}, "temporal": temporal}
 
 
+def _retrieval_surface_manifest(connection: sqlite3.Connection, config: RuntimeConfig, capabilities: dict[str, Any]) -> dict[str, Any]:
+    """Describe executable projections, deriving availability from live facts."""
+    fts_valid = capabilities.get("exact_fts", {}).get("projection_status") == "valid"
+    vector_valid = capabilities.get("vector", {}).get("validation_status") == "valid"
+    graph = capabilities.get("graph", {})
+    graph_valid = all(isinstance(graph.get(key), dict) and graph[key].get("table_present") for key in ("nodes", "edges"))
+    temporal_valid = capabilities.get("temporal", {}).get("table_present", False)
+    return {
+        "manifest_version": RETRIEVAL_SURFACE_MANIFEST_VERSION,
+        "closed_world": True,
+        "execution_model": "independent_operator_execution_then_fusion",
+        "canonical_chunk_components": ["note_title", "relative_path", "section_path", "admitted_frontmatter", "semantic_unit_text"],
+        "operators": {
+            "exact_chunk_search": {
+                "available": fts_valid,
+                "searchable_components": ["note_title", "relative_path", "section_path", "semantic_unit_text", "admitted_frontmatter.field_names", "admitted_frontmatter.scalar_values"],
+                "match_modes": ["case_sensitive_substring", "case_insensitive_substring"],
+                "coverage_semantics": {"complete_eligible_corpus": True, "negative_claims_require_exact": True},
+            },
+            "lexical_chunk_search": {
+                "available": fts_valid,
+                "searchable_components": ["note_title", "relative_path", "section_path", "semantic_unit_text", "admitted_frontmatter.field_names", "admitted_frontmatter.values"],
+                "modes": ["exact_phrase", "all_tokens", "any_tokens", "prefix", "ranked_fts"],
+            },
+            "vector_search": {
+                "available": vector_valid,
+                "embedded_components": ["note_title", "relative_path", "section_path", "admitted_frontmatter", "semantic_unit_text"],
+                "allocation_semantics": {"per_query_cap": config.retrieval_vector_per_query_max_candidates, "per_note_cap": config.retrieval_vector_max_chunks_per_note},
+            },
+            "graph_expand": {
+                "available": graph_valid,
+                "active_tables": [config.graph_nodes_table, config.graph_edges_table],
+                "edge_types": ["note_links_note"],
+                "authored_link_sources": ["body", "admitted_frontmatter"],
+                "supported_directions": ["outbound", "inbound", "both"],
+                "active_direction": config.graph_traversal_direction,
+                "seed_surfaces": list(config.graph_traversal_seed_sources),
+                "node_types": list(config.graph_traversal_node_type_allowlist),
+                "hydration": "canonical_chunks",
+                "unresolved_links_executable": False,
+            },
+            "temporal_retrieve": {
+                "available": temporal_valid and config.retrieval_temporal_enabled,
+                "relevance_surfaces": ["lexical_chunk_search", "vector_search"],
+                "anchor_types": list(config.retrieval_temporal_default_anchor_types),
+                "authorities": list(config.retrieval_temporal_allowed_authorities),
+                "modes": list(config.retrieval_temporal_allowed_modes),
+                "include_conflicts": config.retrieval_temporal_include_conflicted_by_default,
+                "hydration": "canonical_chunks",
+                "graph_chaining": False,
+            },
+        },
+    }
+
+
 def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
     connection.row_factory = sqlite3.Row
     controls = config.retrieval_resource_inventory
@@ -167,14 +224,8 @@ def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeCon
         "surface_version": 1,
         "components": ["note_title", "relative_path", "section_path", "frontmatter_semantics", "semantic_unit_text"],
         "admitted_frontmatter_fields": sorted(config.chunking_semantic_frontmatter_fields),
-        "operator_visibility": {
-            "exact_chunk_search": "fts",
-            "lexical_chunk_search": "fts",
-            "vector_search": "embedding",
-            "graph_expand": "canonical_chunk_hydration",
-            "temporal_retrieve": "relevance_plus_anchor_with_canonical_chunk_hydration",
-        },
     }
+    capabilities = _capability_inventory(connection, config)
     return {
         "corpus_note_count": len(note_rows),
         "corpus_chunk_count": chunk_count,
@@ -185,7 +236,8 @@ def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeCon
         "path_topology": compatibility_paths | {"levels": path_levels, "path_depth": controls["path_depth"]},
         "scope_binding_observations": {"note_type": compatibility_facets.get("note_type", []), "source_labels": source_values, "paths": [*compatibility_paths["top_level"], *compatibility_paths["second_level"]]},
         "semantic_chunk_surface": semantic_chunk_surface,
-        "capabilities": _capability_inventory(connection, config),
+        "capabilities": capabilities,
+        "retrieval_surface_manifest": _retrieval_surface_manifest(connection, config, capabilities),
     }
 
 
@@ -262,15 +314,20 @@ def build_compiler_inventory_projection(
 
     operators, capability_status = _projection_capabilities(inventory_summary)
     semantic_chunk = {
-        "components": ["note_title", "relative_path", "section_path", "admitted_frontmatter", "paragraph_text"],
+        "components": ["note_title", "relative_path", "section_path", "admitted_frontmatter", "semantic_unit_text"],
         "admitted_frontmatter_fields": admitted_fields,
     }
+    retrieval_manifest = inventory_summary.get("retrieval_surface_manifest")
+    if not isinstance(retrieval_manifest, dict):
+        retrieval_manifest = {"manifest_version": RETRIEVAL_SURFACE_MANIFEST_VERSION, "closed_world": True, "operators": {}}
     projection: dict[str, Any] = {
         "projection_version": COMPILER_INVENTORY_PROJECTION_VERSION,
         "inventory_status": str(inventory_summary.get("inventory_diagnostics", {}).get("status") or "unavailable"),
         "semantic_chunk": semantic_chunk,
         "available_retrieval_operators": operators,
         "capability_status": capability_status,
+        "retrieval_surface_manifest": retrieval_manifest,
+        "execution_model": retrieval_manifest.get("execution_model"),
         "low_cardinality_values": low_values,
         "value_enumeration_omitted_for": omitted_fields,
     }
@@ -294,7 +351,7 @@ def build_compiler_inventory_projection(
                 if isinstance(level_data, dict)
             }
 
-    mandatory_keys = {"projection_version", "inventory_status", "semantic_chunk", "available_retrieval_operators", "capability_status"}
+    mandatory_keys = {"projection_version", "inventory_status", "semantic_chunk", "available_retrieval_operators", "capability_status", "retrieval_surface_manifest", "execution_model"}
     diagnostics: dict[str, Any] = {
         "projection_version": COMPILER_INVENTORY_PROJECTION_VERSION,
         "full_inventory_chars": len(_deterministic_json(inventory_summary, indent=2)),
@@ -416,6 +473,19 @@ def validate_inventory_snapshot(*, connection: sqlite3.Connection, config: Runti
             errors.append("inventory policy hash mismatch")
         if str(row["logical_inventory_hash"]) != sha256_json(payload):
             errors.append("logical inventory hash mismatch")
+        manifest = payload.get("retrieval_surface_manifest")
+        if not isinstance(manifest, dict) or int(manifest.get("manifest_version", 0)) != RETRIEVAL_SURFACE_MANIFEST_VERSION or manifest.get("closed_world") is not True:
+            errors.append("retrieval surface manifest is missing or not closed-world")
+        else:
+            operators = manifest.get("operators") if isinstance(manifest.get("operators"), dict) else {}
+            required = {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
+            if not required.issubset(operators):
+                errors.append("retrieval surface manifest omits a supported operator")
+            graph_manifest = operators.get("graph_expand", {})
+            if graph_manifest.get("active_direction") != config.graph_traversal_direction:
+                errors.append("retrieval surface manifest graph direction mismatch")
+            if graph_manifest.get("authored_link_sources") != ["body", "admitted_frontmatter"]:
+                errors.append("retrieval surface manifest graph link-source mismatch")
         if not connection.execute("SELECT 1 FROM ingest_runs WHERE run_id = ?", (row["source_ingest_run_id"],)).fetchone():
             errors.append("source ingest run is missing")
         else:
