@@ -244,6 +244,33 @@ chunking:
     - title
     - creator
     - book_read_today
+    - uuid
+    - layer
+    - unity_level
+    - vector_direction
+    - register
+    - register_mode
+    - pillar
+    - temporal_pace
+    - hypnagogic_resonance
+    - reactivity
+    - racing_thoughts_while_awake
+    - ran_script_when_racing
+    - dream_motif
+    - dream_motif_valence
+    - dream_location
+    - recall_ability
+    - dream_lucidity
+    - format
+    - publish_studio
+    - original_year_published
+    - origin
+    - entity
+    - entity_type
+    - canonical_name
+    - relationship
+    - first_met
+    - birthday
   low_signal_apparatus:
     enabled: true
     skip_during_ingest: true
