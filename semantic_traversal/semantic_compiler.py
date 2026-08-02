@@ -458,26 +458,50 @@ def _render_ollama_prompt(*, packet: dict[str, Any], template: str, planner_defa
 class OllamaSemanticCompilerBackend:
     mode_name = "ollama"
 
-    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, prompt_template: str, planner_defaults: dict[str, Any]) -> None:
+    def __init__(self, *, model: str | None, base_url: str, timeout_seconds: int = 20, context_window_tokens: int, prompt_template: str, planner_defaults: dict[str, Any]) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        self._context_window_tokens = context_window_tokens
         self._prompt_template = prompt_template
         self._planner_defaults = planner_defaults
+
+    def _metadata(self, *, prompt_hash: str | None = None, prompt_eval_count: Any = None, **extra: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "backend_mode": self.mode_name,
+            "base_url": self._base_url,
+            "semantic_compiler_context_window_tokens": self._context_window_tokens,
+        }
+        if self._model:
+            metadata["model"] = self._model
+        if prompt_hash is not None:
+            metadata["semantic_compiler_prompt_hash"] = prompt_hash
+        if type(prompt_eval_count) is int:
+            metadata["ollama_prompt_eval_count"] = prompt_eval_count
+        metadata.update(extra)
+        return metadata
 
     def compile_turn(self, packet: dict[str, Any]) -> SemanticCompilerResponse:
         if not self._model:
             return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=None,
-                metadata={"backend_mode": self.mode_name, "base_url": self._base_url, "reason": "model not configured"},
+                metadata=self._metadata(reason="model not configured"),
                 diagnostics={},
                 status="unavailable",
             )
         prompt = _render_ollama_prompt(packet=packet, template=self._prompt_template, planner_defaults=self._planner_defaults)
         prompt_hash = sha256_text(prompt)
-        payload = {"model": self._model, "prompt": prompt, "stream": False}
+        payload = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_ctx": self._context_window_tokens,
+            },
+        }
         raw_response_text: str | None = None
+        prompt_eval_count: Any = None
         try:
             http_request = request.Request(
                 f"{self._base_url}/api/generate",
@@ -488,18 +512,14 @@ class OllamaSemanticCompilerBackend:
             with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
                 envelope_text = response.read().decode("utf-8")
             envelope = json.loads(envelope_text)
+            if isinstance(envelope, dict):
+                prompt_eval_count = envelope.get("prompt_eval_count")
             raw_response_text = str(envelope.get("response", ""))
         except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
-                metadata={
-                    "backend_mode": self.mode_name,
-                    "base_url": self._base_url,
-                    "model": self._model,
-                    "semantic_compiler_prompt_hash": prompt_hash,
-                    "error": str(exc),
-                },
+                metadata=self._metadata(prompt_hash=prompt_hash, prompt_eval_count=prompt_eval_count, error=str(exc)),
                 diagnostics={},
                 status="unavailable",
             )
@@ -510,12 +530,7 @@ class OllamaSemanticCompilerBackend:
             return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
-                metadata={
-                    "backend_mode": self.mode_name,
-                    "base_url": self._base_url,
-                    "model": self._model,
-                    "semantic_compiler_prompt_hash": prompt_hash,
-                },
+                metadata=self._metadata(prompt_hash=prompt_hash, prompt_eval_count=prompt_eval_count),
                 diagnostics={},
                 status="invalid_json",
             )
@@ -523,13 +538,11 @@ class OllamaSemanticCompilerBackend:
             return SemanticCompilerResponse(
                 parsed_payload=None,
                 raw_response=raw_response_text,
-                metadata={
-                    "backend_mode": self.mode_name,
-                    "base_url": self._base_url,
-                    "model": self._model,
-                    "semantic_compiler_prompt_hash": prompt_hash,
-                    "error": f"expected object, got {type(parsed_payload).__name__}",
-                },
+                metadata=self._metadata(
+                    prompt_hash=prompt_hash,
+                    prompt_eval_count=prompt_eval_count,
+                    error=f"expected object, got {type(parsed_payload).__name__}",
+                ),
                 diagnostics={},
                 status="invalid_json",
             )
@@ -537,12 +550,7 @@ class OllamaSemanticCompilerBackend:
         return SemanticCompilerResponse(
             parsed_payload=canonical_payload,
             raw_response=raw_response_text,
-            metadata={
-                "backend_mode": self.mode_name,
-                "base_url": self._base_url,
-                "model": self._model,
-                "semantic_compiler_prompt_hash": prompt_hash,
-            },
+            metadata=self._metadata(prompt_hash=prompt_hash, prompt_eval_count=prompt_eval_count),
             diagnostics={},
             status="parsed",
         )
@@ -572,6 +580,7 @@ def resolve_semantic_compiler_backend(
     configured_model = model_override or config.semantic_compiler_model
     configured_base_url = base_url_override or config.semantic_compiler_base_url
     timeout_seconds = config.semantic_compiler_request_timeout_seconds
+    context_window_tokens = config.semantic_compiler_context_window_tokens
 
     if configured_provider == "ollama":
         if not isinstance(configured_base_url, str) or not configured_base_url.strip():
@@ -580,6 +589,7 @@ def resolve_semantic_compiler_backend(
             model=configured_model,
             base_url=configured_base_url.strip(),
             timeout_seconds=timeout_seconds,
+            context_window_tokens=context_window_tokens,
             prompt_template=config.semantic_compiler_prompt_template,
             planner_defaults=config.retrieval_planner_defaults,
         )

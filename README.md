@@ -181,7 +181,9 @@ Before running the project, update:
 - `paths.vault_root` — the Markdown vault to ingest;
 - `paths.data_root` — the SQLite, manifest, thread, and artifact location.
 
-Other major sections configure the semantic compiler, embeddings, frontier model, retrieval operators, graph traversal, temporal retrieval, storage, and prompts.
+The `semantic_compiler` section controls the provider, model, URL, request timeout, and Ollama context window. Its `context_window_tokens` value is transmitted to Ollama as `options.num_ctx`.
+
+Other major sections configure embeddings, the frontier model, retrieval operators, graph traversal, temporal retrieval, storage, and prompts.
 
 The checked-in file is an example operating configuration, not a universal default.
 
