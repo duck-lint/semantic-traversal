@@ -8,6 +8,7 @@ frontmatter field means and does not perform retrieval or graph I/O.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Iterable
 
 
@@ -51,9 +52,24 @@ class GroundingAtom:
     value: str
     source: str
     subject_id: str | None = None
+    original_value: str | None = None
+    subject_ids: tuple[str, ...] = ()
+    subject_spans: tuple[str, ...] = ()
+    predicate_residual: str = ""
+    role: str = "query_level_context"
 
     def as_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "value": self.value, "source": self.source, "subject_id": self.subject_id}
+        return {
+            "kind": self.kind,
+            "value": self.value,
+            "original_value": self.original_value or self.value,
+            "source": self.source,
+            "subject_id": self.subject_id,
+            "subject_ids": list(self.subject_ids),
+            "subject_spans": list(self.subject_spans),
+            "predicate_residual": self.predicate_residual,
+            "role": self.role,
+        }
 
 
 @dataclass(frozen=True)
@@ -63,6 +79,10 @@ class SubjectPropositionBundle:
     referent_atoms: tuple[GroundingAtom, ...] = ()
     supporting_context_atoms: tuple[GroundingAtom, ...] = ()
     shared_context_atoms: tuple[GroundingAtom, ...] = ()
+    subject_bearing_atoms: tuple[GroundingAtom, ...] = ()
+    subject_predicate_atoms: tuple[GroundingAtom, ...] = ()
+    shared_predicate_atoms: tuple[GroundingAtom, ...] = ()
+    query_level_atoms: tuple[GroundingAtom, ...] = ()
     requested_relations: tuple[str, ...] = ()
     required_evidence: tuple[str, ...] = ()
 
@@ -73,6 +93,10 @@ class SubjectPropositionBundle:
             "referent_atoms": [atom.as_dict() for atom in self.referent_atoms],
             "supporting_context_atoms": [atom.as_dict() for atom in self.supporting_context_atoms],
             "shared_context_atoms": [atom.as_dict() for atom in self.shared_context_atoms],
+            "subject_bearing_atoms": [atom.as_dict() for atom in self.subject_bearing_atoms],
+            "subject_predicate_atoms": [atom.as_dict() for atom in self.subject_predicate_atoms],
+            "shared_predicate_atoms": [atom.as_dict() for atom in self.shared_predicate_atoms],
+            "query_level_atoms": [atom.as_dict() for atom in self.query_level_atoms],
             "requested_relations": list(self.requested_relations),
             "required_evidence": list(self.required_evidence),
         }
@@ -98,22 +122,71 @@ class GroundingSpecification:
         }
 
 
-def _context_atoms(plan: dict[str, Any]) -> list[GroundingAtom]:
-    atoms: list[GroundingAtom] = []
+def _raw_context_atoms(plan: dict[str, Any]) -> list[tuple[str, str, str]]:
+    atoms: list[tuple[str, str, str]] = []
     for field_name, kind in (("concepts", "concept"), ("semantic_queries", "semantic_query"), ("lexical_queries", "lexical_query"), ("graph_seeds", "graph_seed")):
-        atoms.extend(GroundingAtom(kind, value, field_name) for value in _strings(plan.get(field_name)))
+        atoms.extend((kind, value, field_name) for value in _strings(plan.get(field_name)))
     for entry in plan.get("literal_terms") or []:
         if isinstance(entry, dict):
             value = str(entry.get("term") or "").strip()
             if value:
-                atoms.append(GroundingAtom("literal_term", value, "literal_terms"))
+                atoms.append(("literal_term", value, "literal_terms"))
     return atoms
+
+
+_INERT_RESIDUE = {"and", "or", "vs", "versus", "regarding", "about", "between", "for", "of", "the"}
+
+
+def _decompose_atom(*, kind: str, value: str, source: str, referents: list[str], named_subjects: bool) -> GroundingAtom:
+    """Split exact referent spans from one compiler atom without inference."""
+    matches: list[tuple[int, int, int, str]] = []
+    # Longest spans win when one referent is contained in another.  Subject IDs
+    # are restored to compiler order after matching.
+    for subject_index, referent in sorted(enumerate(referents), key=lambda item: (-len(item[1]), item[0])):
+        words = [part for part in _norm(referent).split() if part]
+        if not words:
+            continue
+        pattern = r"(?<!\w)" + r"\s+".join(re.escape(word) for word in words) + r"(?!\w)"
+        for match in re.finditer(pattern, value.casefold()):
+            if any(match.start() < end and start < match.end() for start, end, _, _ in matches):
+                continue
+            matches.append((match.start(), match.end(), subject_index, value[match.start():match.end()]))
+    matches.sort(key=lambda item: item[0])
+    subject_ids = tuple(f"subject-{index}" for index in sorted({item[2] for item in matches}))
+    spans = tuple(item[3] for item in matches)
+    residual = value
+    for start, end, _, _ in reversed(matches):
+        residual = residual[:start] + " " + residual[end:]
+    residual = " ".join(residual.split())
+    residual_words = [word.strip(".,:;!?()[]{}") for word in residual.casefold().split()]
+    if residual_words and all(word in _INERT_RESIDUE for word in residual_words):
+        residual = ""
+    if matches and residual:
+        role = "subject_and_predicate"
+    elif matches:
+        role = "subject_only"
+    elif named_subjects:
+        role = "predicate_only"
+    else:
+        role = "query_level_context"
+    return GroundingAtom(
+        kind=kind,
+        value=residual or value,
+        source=source,
+        subject_id=subject_ids[0] if len(subject_ids) == 1 else None,
+        original_value=value,
+        subject_ids=subject_ids,
+        subject_spans=spans,
+        predicate_residual=residual,
+        role=role,
+    )
 
 
 def build_grounding_spec(plan: dict[str, Any]) -> GroundingSpecification:
     """Interpret only the compiler's existing fields into proposition bundles."""
     referents = _strings(plan.get("resolved_referents"))
-    context = _context_atoms(plan)
+    raw_context = _raw_context_atoms(plan)
+    context = [_decompose_atom(kind=kind, value=value, source=source, referents=referents, named_subjects=bool(referents)) for kind, value, source in raw_context]
     relations = _unique(
         str(layer.get("operator") or "").strip()
         for layer in plan.get("retrieval_layers") or []
@@ -123,20 +196,34 @@ def build_grounding_spec(plan: dict[str, Any]) -> GroundingSpecification:
     if not referents:
         bundle = SubjectPropositionBundle(
             subject_id="query-0", referent=None,
-            supporting_context_atoms=tuple(context), requested_relations=tuple(relations), required_evidence=tuple(required),
+            supporting_context_atoms=tuple(context), query_level_atoms=tuple(context),
+            requested_relations=tuple(relations), required_evidence=tuple(required),
         )
         return GroundingSpecification((bundle,), False, tuple(context), tuple(relations), tuple(required))
 
-    shared = tuple(context) if len(referents) > 1 else ()
+    shared = tuple(atom for atom in context if atom.role == "predicate_only" or (atom.role == "subject_and_predicate" and atom.predicate_residual)) if len(referents) > 1 else ()
     bundles: list[SubjectPropositionBundle] = []
     for index, referent in enumerate(referents):
+        subject_id = f"subject-{index}"
+        bearing = tuple(atom for atom in context if subject_id in atom.subject_ids)
+        subject_predicate = tuple(atom for atom in bearing if atom.role == "subject_and_predicate" and atom.predicate_residual)
+        shared_predicate = tuple(shared)
+        predicate_atoms = tuple([*subject_predicate, *shared_predicate])
+        # Compatibility field retains only atoms usable as context; subject-only
+        # atoms are intentionally excluded from predicate admission.
+        supporting = tuple(predicate_atoms) if len(referents) > 1 else tuple(
+            atom for atom in context if atom.role in {"predicate_only", "subject_and_predicate"}
+        )
         # With one subject, compiler context is naturally associated with it.
-        # With several, the same non-referent context is evaluated separately.
         bundles.append(SubjectPropositionBundle(
             subject_id=f"subject-{index}", referent=referent,
-            referent_atoms=(GroundingAtom("referent", referent, "resolved_referents", f"subject-{index}"),),
-            supporting_context_atoms=tuple(context) if len(referents) == 1 else (),
+            referent_atoms=(GroundingAtom("referent", referent, "resolved_referents", subject_id, original_value=referent, subject_ids=(subject_id,), subject_spans=(referent,), role="subject_only"),),
+            supporting_context_atoms=supporting,
             shared_context_atoms=shared,
+            subject_bearing_atoms=bearing,
+            subject_predicate_atoms=subject_predicate,
+            shared_predicate_atoms=shared_predicate,
+            query_level_atoms=(),
             requested_relations=tuple(relations), required_evidence=tuple(required),
         ))
     return GroundingSpecification(tuple(bundles), True, shared, tuple(relations), tuple(required))
@@ -164,15 +251,15 @@ def _identity_match(candidate: dict[str, Any], referent: str) -> list[dict[str, 
 
 
 def _atom_matches(candidate: dict[str, Any], atom: GroundingAtom) -> dict[str, Any] | None:
-    value = atom.value.casefold()
+    value = (atom.predicate_residual or atom.value).casefold()
     if not value:
         return None
     text = _candidate_text(candidate).casefold()
     if value in text:
-        return {"kind": atom.kind, "value": atom.value, "source": atom.source, "match": "contextual_text"}
+        return {"kind": atom.kind, "value": atom.value, "original_value": atom.original_value or atom.value, "source": atom.source, "role": atom.role, "match": "contextual_text"}
     provenance_fields = ("exact_term_provenance", "semantic_query_provenance", "context_probe_provenance", "graph_provenance")
     if any(value == str(item).casefold() or value in str(item).casefold() for field_name in provenance_fields for item in _strings(candidate.get(field_name))):
-        return {"kind": atom.kind, "value": atom.value, "source": atom.source, "match": "retrieval_provenance"}
+        return {"kind": atom.kind, "value": atom.value, "original_value": atom.original_value or atom.value, "source": atom.source, "role": atom.role, "match": "retrieval_provenance"}
     return None
 
 
@@ -187,21 +274,48 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
     }
     identity_by_subject: dict[str, list[dict[str, str]]] = {}
     evidence_by_subject: dict[str, list[dict[str, Any]]] = {}
+    predicate_by_subject: dict[str, list[dict[str, Any]]] = {}
+    subject_evidence_by_subject: dict[str, list[dict[str, Any]]] = {}
+    promotions = candidate.get("wikilink_identity_promotions") if isinstance(candidate.get("wikilink_identity_promotions"), list) else []
     for bundle in specification.bundles:
         if bundle.referent is None:
             atoms = [*bundle.supporting_context_atoms, *bundle.shared_context_atoms]
         else:
             identity = _identity_match(candidate, bundle.referent)
+            identity.extend(
+                {"surface": "resolved_wikilink_target", "value": bundle.referent, "target_note_id": item.get("target_note_id"), "occurrence": item.get("occurrence", {})}
+                for item in promotions if str(item.get("subject_id")) == bundle.subject_id
+            )
             identity_by_subject[bundle.subject_id] = identity
             if identity:
                 assessment["object_identity"]["subjects"].append(bundle.subject_id)
                 assessment["object_identity"]["evidence"].extend({**item, "subject_id": bundle.subject_id} for item in identity)
             atoms = [*bundle.supporting_context_atoms, *bundle.shared_context_atoms]
-        matched = [match for atom in atoms if (match := _atom_matches(candidate, atom))]
+            subject_atoms = bundle.subject_bearing_atoms
+            subject_matches: list[dict[str, Any]] = []
+            candidate_text = _candidate_text(candidate).casefold()
+            for atom in subject_atoms:
+                for span in atom.subject_spans or ((bundle.referent or ""),):
+                    if span and re.search(rf"(?<!\w){re.escape(span.casefold())}(?!\w)", candidate_text):
+                        subject_matches.append({"kind": atom.kind, "value": span, "source": atom.source, "role": atom.role, "match": "subject_span"})
+                        break
+            if subject_matches:
+                subject_evidence_by_subject[bundle.subject_id] = subject_matches
+            elif len(specification.bundles) == 1 and bundle.referent and re.search(
+                rf"(?<!\w){re.escape(bundle.referent.casefold())}(?!\w)", candidate_text
+            ):
+                subject_evidence_by_subject[bundle.subject_id] = [{
+                    "kind": "descriptive_subject", "value": bundle.referent,
+                    "source": "candidate_text", "role": "subject_only", "match": "descriptive_subject",
+                }]
+        matched = [match for atom in atoms if atom.role != "subject_only" and (match := _atom_matches(candidate, atom))]
+        predicate_matches = [match for atom in atoms if atom.role in {"predicate_only", "subject_and_predicate"} and atom.predicate_residual and (match := _atom_matches(candidate, atom))]
         if matched:
             evidence_by_subject[bundle.subject_id] = matched
             assessment["evidence_unit"]["subjects"].append(bundle.subject_id)
             assessment["evidence_unit"]["context_atoms"].extend(matched)
+        if predicate_matches:
+            predicate_by_subject[bundle.subject_id] = predicate_matches
     # Existing graph provenance is trusted only as an explicit relation from an
     # identity-grounded seed; arbitrary context_subjects are not authority.
     raw_graph_subjects = _strings(candidate.get("authorized_subjects"))
@@ -209,8 +323,10 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
     graph_subjects = [referent_to_subject.get(value, value) for value in raw_graph_subjects]
     # A descriptive subject can be proposition-grounded by its supporting
     # context, but it never gains graph-seeding authority from that fact.
-    descriptive_subjects = [subject_id for subject_id, matches in evidence_by_subject.items() if matches]
+    descriptive_subjects = [subject_id for subject_id in subject_evidence_by_subject if not specification.named_subjects or len(specification.bundles) == 1]
     associated_subjects = _unique([*assessment["object_identity"]["subjects"], *graph_subjects, *descriptive_subjects])
+    if len(specification.bundles) > 1:
+        associated_subjects = _unique([*associated_subjects, *subject_evidence_by_subject.keys()])
     if associated_subjects:
         assessment["evidence_unit"]["subjects"] = _unique([*assessment["evidence_unit"]["subjects"], *associated_subjects])
     if assessment["object_identity"]["subjects"] or graph_subjects:
@@ -220,12 +336,17 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
         subjects = set(associated_subjects if specification.named_subjects else [bundle.subject_id])
         if bundle.subject_id not in subjects:
             continue
-        matches = evidence_by_subject.get(bundle.subject_id, [])
-        if not matches:
+        subject_grounded = bundle.subject_id in associated_subjects
+        predicate_matches = predicate_by_subject.get(bundle.subject_id, [])
+        if not subject_grounded:
+            assessment["rejection_reasons"].append("missing_subject_grounding")
+            continue
+        if not predicate_matches:
+            assessment["rejection_reasons"].append("missing_predicate_grounding")
             assessment["rejection_reasons"].append("missing_supporting_context")
             continue
         assessment["relation_proposition"]["subjects"].append(bundle.subject_id)
-        assessment["relation_proposition"]["context_atoms"].extend(matches)
+        assessment["relation_proposition"]["context_atoms"].extend(predicate_matches)
     assessment["relation_proposition"]["subjects"] = _unique(assessment["relation_proposition"]["subjects"])
     subject_to_referent = {bundle.subject_id: bundle.referent for bundle in specification.bundles}
     assessment["relation_proposition"]["subject_referents"] = [
@@ -235,6 +356,11 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
     ]
     assessment["relation_proposition"]["relations"] = list(specification.requested_relations)
     assessment["relation_proposition"]["eligible"] = bool(assessment["relation_proposition"]["subjects"])
+    assessment["diagnostic_subjects"] = {
+        "subject_grounded": sorted(associated_subjects),
+        "predicate_grounded": sorted(predicate_by_subject),
+        "proposition_grounded": sorted(assessment["relation_proposition"]["subjects"]),
+    }
     if specification.named_subjects and not assessment["relation_proposition"]["eligible"]:
         assessment["rejection_reasons"].append("subject_or_supporting_context_not_grounded")
     if not specification.named_subjects and assessment["relation_proposition"]["eligible"]:
@@ -262,7 +388,10 @@ def merge_grounding_assessments(left: dict[str, Any], right: dict[str, Any]) -> 
     for reason in _strings(right.get("rejection_reasons")):
         if reason not in reasons:
             reasons.append(reason)
-    merged["relation_proposition"]["eligible"] = bool(merged["relation_proposition"].get("eligible"))
+    relation = merged["relation_proposition"]
+    # Eligibility is derived from the merged structured records, never from a
+    # compatibility boolean supplied by one retrieval route.
+    relation["eligible"] = bool(relation.get("subjects")) and bool(relation.get("context_atoms"))
     return merged
 
 
