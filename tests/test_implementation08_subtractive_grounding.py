@@ -66,6 +66,9 @@ class SubtractiveGroundingProductionSeamTests(unittest.TestCase):
         repaired_payload["planner_retrieval_plan"]["literal_terms"] = [{
             "term": "target phrase", "match": "case_insensitive_substring", "required": True,
         }]
+        repaired_payload["planner_retrieval_plan"]["retrieval_layers"] = [{
+            "operator": "exact_chunk_search", "required": True, "return_total_count": True,
+        }]
         initial_response = SemanticCompilerResponse(initial_payload, json.dumps(initial_payload), {}, {}, "parsed")
         repaired_response = SemanticCompilerResponse(repaired_payload, json.dumps(repaired_payload), {}, {}, "parsed")
         backend = _RepairBackend(repaired_response)

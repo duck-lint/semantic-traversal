@@ -108,6 +108,22 @@ class SemanticGroundingTests(unittest.TestCase):
         self.assertNotIn("missing_subject_grounding", assessment["rejection_reasons"])
         self.assertTrue(assessment["graph_authority"]["query_level_only"])
 
+    def test_single_descriptive_subject_can_use_bounded_supporting_atom(self):
+        spec = build_grounding_spec(self.plan(
+            resolved_referents=["my transition to X"],
+            concepts=["transition to X"],
+            semantic_queries=["transition to X"],
+            lexical_queries=["transition to X"],
+        ))
+        assessment = classify_candidate(
+            self.candidate(note_title="Journal", paragraph_text="transition to X began today"),
+            spec,
+        )
+        self.assertTrue(assessment["relation_proposition"]["eligible"])
+        self.assertEqual(assessment["relation_proposition"]["subjects"], ["subject-0"])
+        self.assertTrue(assessment["subject_evidence"]["subject-0"])
+        self.assertFalse(assessment["graph_authority"]["may_seed_subject_graph"])
+
     def test_subject_predicate_atom_is_not_broadcast_to_unrelated_subject(self):
         spec = build_grounding_spec(self.plan(
             semantic_queries=["reading activity of Alpha"],
