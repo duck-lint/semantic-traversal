@@ -38,11 +38,52 @@ class SemanticGroundingTests(unittest.TestCase):
         spec = build_grounding_spec(self.plan())
         self.assertEqual([bundle.referent for bundle in spec.bundles], ["Alpha", "Beta"])
         self.assertEqual(len(spec.shared_context_atoms), 3)
-        self.assertFalse(spec.bundles[0].supporting_context_atoms)
+        self.assertTrue(all(atom.role == "predicate_only" for atom in spec.bundles[0].shared_predicate_atoms))
 
     def test_single_subject_context_is_associated_with_subject(self):
         spec = build_grounding_spec(self.plan(resolved_referents=["Alpha"]))
         self.assertEqual([atom.value for atom in spec.bundles[0].supporting_context_atoms], ["reading activity"] * 3)
+
+    def test_subject_spans_are_decomposed_without_shared_literal_predicate(self):
+        spec = build_grounding_spec(self.plan(
+            concepts=["reading order"],
+            semantic_queries=["reading order regarding Alpha Beta"],
+            lexical_queries=["Alpha"],
+            literal_terms=[{"term": "Beta", "required": True}],
+        ))
+        atom = next(atom for atom in spec.shared_context_atoms if atom.kind == "semantic_query")
+        self.assertEqual(atom.role, "subject_and_predicate")
+        self.assertEqual(atom.subject_spans, ("Alpha", "Beta"))
+        self.assertEqual(atom.subject_ids, ("subject-0", "subject-1"))
+        self.assertEqual(atom.predicate_residual, "reading order regarding")
+        self.assertFalse(any(atom.role == "subject_only" for atom in spec.shared_context_atoms))
+        self.assertEqual(next(atom for atom in spec.bundles[0].shared_predicate_atoms if atom.kind == "semantic_query").predicate_residual, "reading order regarding")
+
+    def test_subject_only_identity_does_not_satisfy_another_subject(self):
+        spec = build_grounding_spec(self.plan(
+            concepts=["reading activity"],
+            semantic_queries=["Alpha reading activity"],
+            lexical_queries=[],
+            literal_terms=[{"term": "Beta"}],
+        ))
+        candidate = self.candidate(note_title="Alpha", paragraph_text="Alpha")
+        assessment = classify_candidate(candidate, spec)
+        self.assertNotIn("subject-1", assessment["relation_proposition"]["subjects"])
+        self.assertFalse(assessment["relation_proposition"]["eligible"])
+
+    def test_resolved_wikilink_promotion_is_direct_target_identity(self):
+        candidate = self.candidate(
+            note_title="Activity",
+            paragraph_text="reading activity",
+            wikilink_identity_promotions=[{
+                "subject_id": "subject-0", "referent": "Alpha", "target_note_id": "note-alpha",
+                "occurrence": {"source_surface": "body", "target_base": "Alpha", "resolution_status": "resolved"},
+            }],
+        )
+        assessment = classify_candidate(candidate, build_grounding_spec(self.plan(resolved_referents=["Alpha"])))
+        self.assertEqual(next(item for item in assessment["object_identity"]["evidence"] if item.get("target_note_id"))["target_note_id"], "note-alpha")
+        self.assertTrue(assessment["graph_authority"]["may_seed_subject_graph"])
+        self.assertEqual(candidate["note_id"], "note-1")
 
     def test_no_referents_create_query_bundle_without_named_subject(self):
         spec = build_grounding_spec(self.plan(resolved_referents=[]))

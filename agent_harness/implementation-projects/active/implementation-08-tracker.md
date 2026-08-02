@@ -175,6 +175,29 @@ temporal mode, repair, fallback, synthesis, or evaluator/report/fixture
 contract changed. Same-chunk provenance remains merged without packet
 duplication. No reingest is required. The fresh private rerun remains
 operator-pending, and Seam 1 has not begun.
+
+## Subject–predicate grounding and canonical wikilink identity correction
+
+The post-PR-20 private baseline showed that subject-bearing atoms could still
+contaminate shared predicate context, allowing multi-subject evidence to
+cross-satisfy propositions. Exact matches inside resolved body or admitted
+frontmatter wikilinks also did not promote the target note to canonical object
+identity, while aggregate grounding counts could disagree with final merged
+candidate assessments.
+
+This correction decomposes deterministic subject spans from predicate residuals
+with explicit atom roles, isolates subject and predicate grounding per bundle,
+and keeps query-level plans subjectless. Existing occurrence-level graph
+metadata is extended with structural provenance for supported wikilink forms;
+resolved target notes are promoted directly to identity-authorized graph seeds.
+Source notes remain evidence and do not inherit target identity. Unresolved
+links retain intent but cannot fabricate identity. Grounding summaries now use
+canonical merged assessments and enforce proposition-grounded units being a
+subset of evidence-grounded units. Inventory schema 4, manifest v2, projection
+v3, evaluator 5, report 6, fixture 2, and grounding specification version 1
+remain unchanged. Because persisted graph metadata changed, a complete
+reingest is required; note and chunk identities remain stable. The fresh
+private rerun remains operator-pending and Seam 1 has not begun.
 # Implementation 08 — pre-Seam-1 kernel correction
 
 ## Canonical retrieval-surface completeness
