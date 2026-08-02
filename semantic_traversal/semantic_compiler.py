@@ -419,6 +419,7 @@ def _canonicalize_response_payload(raw_user_input: str, payload: dict[str, Any] 
         "defaulted_missing_fields": list(planner_diagnostics.get("defaulted_missing_fields") or []),
         "invalid_planner_fields": list(planner_diagnostics.get("invalid_planner_fields") or []),
         "explicit_empty_fields": list(planner_diagnostics.get("explicit_empty_fields") or []),
+        "literal_contract": dict(planner_diagnostics.get("literal_contract") or {}),
         "fallback_query_sources": {
             **fallback_sources,
             "subject_candidates": subject_source,

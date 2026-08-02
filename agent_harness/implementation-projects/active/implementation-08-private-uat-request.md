@@ -196,6 +196,33 @@ operator-pending.
 
 # Post-PR-16 retrieval-surface completeness boundary
 
+# Post-PR-23 subtractive grounding and exact-contract correction
+
+This correction is runtime interpretation and canonical-plan validation only.
+It preserves compiler prompt/model/context (40,960), JSON schema, repair count,
+fallback, persistence, embeddings, graph semantics, temporal semantics, fusion,
+synthesis, and negative-claim policy. No reingest is required and private data
+must not be accessed or committed.
+
+After merge, preserve the current post-PR-23 run and change only the ignored
+suite ID:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-subtractive-grounding-contract-correction
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-subtractive-grounding-contract-correction/`.
+
+Before accepting the rerun, verify inventory source/status and versions:
+inventory schema 4, manifest v2, projection v3, grounding v1, evaluator v5,
+report v6, fixture v2, FTS/vector/graph/temporal validity, and compiler context
+40,960. Run the unchanged private fixture without `--replace`; do not edit
+private case definitions automatically. Confirm query-level chronology admits
+anchored context without a named-subject gate, multi-subject typed relations
+remain isolated, and malformed exact contracts are repaired rather than
+silently weakened.
+
 The retrieval-surface correction preserves the PR #16 compiler-to-temporal
 context path while aligning the generic inventory legend with executable
 runtime capability. Inventory schema becomes 3, compiler projection becomes 2,

@@ -125,4 +125,19 @@ Mitigation for model-generated filters: the compiler schema contains semantic qu
 | Fuzzy target promotion | Target identity is serialized back into title/path text | Direct target note ID and graph node ID promotion |
 | Compatibility authority drift | Legacy booleans override structured grounding | Derive compatibility fields after authoritative merge |
 | Stale grounding counts | Route-local assessments disagree with aggregate diagnostics | Count canonical chunk/note identities from merged candidates |
+
+## Subtractive grounding and exact-contract risks
+
+| Risk | Failure mode | Mitigation |
+| --- | --- | --- |
+| Historical truncation compensation | Old under-context planner behavior drives new runtime heuristics | Use only the post-PR-23 full-context baseline for planner corrections; keep compiler prompt/model/context frozen |
+| Query bundle treated as named object | Subject coverage gate rejects valid subjectless context | Admit query-level proposition from matched query context; preserve query-level-only graph status |
+| Subject-and-predicate broadcast | One subject's residual predicate is shared with unrelated subjects | Share only predicate-only atoms; assign residuals only to explicit subject IDs |
+| Boolean merge authority | Route union pairs one subject's evidence with another's predicate | Merge tagged per-subject evidence and recompute eligibility for the same subject |
+| Typed evidence discarded | Authored relation is rejected because prose lacks a repeated predicate | Consume existing resolved frontmatter/link/graph provenance before considering a bridge |
+| Arbitrary typed-link admission | Every resolved link becomes relation truth | Require resolved canonical target, admitted field path, source unit, authorized subject, and authored graph-edge provenance |
+| Bare literal coercion | Required exact contract becomes optional substring search | Preserve raw entry type, mark incomplete, and invoke the existing one-shot repair |
+| Automatic exact masking explicit failure | Context probes make a malformed or unmet required literal look complete | Keep explicit required status and automatic support status separate |
+| Compatibility authority drift | Legacy booleans create a second grounding model | Use structured per-subject records for all authority decisions; retain booleans only as derived diagnostics |
+| Gate-removal overgrowth | New ontology, matcher, or field map is added where information already exists | Record provenance audit and stop if a generic bridge cannot be justified |
 | Proposition/evidence contradiction | Proposition count exceeds evidence-unit count | Deterministic invariant diagnostic and required-evidence rejection |
