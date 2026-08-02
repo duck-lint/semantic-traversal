@@ -317,3 +317,32 @@ Expected directory:
 
 Do not edit or replace the ignored fixture automatically. The model bakeoff is
 still pending, and Seam 1 has not begun.
+
+# Post-PR-20 subject–predicate and canonical-link identity correction
+
+The correction preserves the semantic-grounding authority boundary while
+partitioning subject-bearing atoms from predicate/context atoms. Subject-only
+atoms cannot satisfy predicates, shared predicate residuals are evaluated
+independently for each named subject, and query-level plans remain subjectless.
+Resolved body and admitted-frontmatter wikilinks now promote their canonical
+target note IDs directly into authorized graph seeds; source notes remain
+evidence and unresolved links cannot establish identity. Aggregate grounding
+diagnostics are derived from final merged assessments and enforce the invariant
+that proposition-grounded units imply evidence-grounded units.
+
+No exact-canary correction, compiler prompt/schema/model change, temporal
+interpretation change, frontier prompt change, alias, field route, filter,
+query recipe, reverse edge, or new operator was added. The operator's private
+corpus heading change is not represented in production code. Because graph-edge
+occurrence metadata changed, complete reingest is required before rerun. Use:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-grounding-link-identity-correction
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-grounding-link-identity-correction/`.
+
+Do not access or reproduce private case content, and do not run the private
+UAT in the repository environment. The rerun remains operator-pending; model
+bakeoff remains pending; Seam 1 has not begun.

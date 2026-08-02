@@ -110,3 +110,19 @@ Mitigation for model-generated filters: the compiler schema contains semantic qu
 | Structured/boolean divergence | A compatibility flag becomes a second authority model | Derive compatibility booleans from structured assessments and never branch on them |
 | Temporal ownership drift | Temporal code begins interpreting subject identity or predicate meaning | Keep semantic classification in the grounding layer and temporal parsing/order in `temporal.py` |
 | Hidden ontology | Generic runtime rules acquire field-specific or corpus-specific meaning | Stop on aliases, field mappings, query recipes, domain predicates, or model-directed grounding |
+
+## Subject–predicate and canonical-link risks
+
+| Risk | Failure mode | Mitigation |
+| --- | --- | --- |
+| Subject literals become shared predicates | A referent-only atom satisfies another subject's relation | Explicit atom roles; subject-only atoms cannot ground predicates |
+| Subject spans satisfy predicate residuals | Matching the name is treated as matching the remaining query | Remove exact spans and evaluate only nonempty residuals |
+| Cross-subject contamination | Shared predicate evidence is attached to every subject without subject support | Independent subject-bearing and predicate assessments |
+| Source/target identity collapse | A note containing a wikilink is treated as the linked object | Promote only the resolved target note ID; retain source as evidence |
+| Unresolved-link fabrication | An unresolved target is fuzzy-matched to a note | Preserve occurrence intent without canonical identity |
+| Link-form drift | Aliases, fragments, embeds, or frontmatter paths lose target provenance | Canonical occurrence model with body/frontmatter parity |
+| Graph metadata loss | Occurrence provenance disappears during canonical edge deduplication | Merge occurrence records in existing edge metadata; require reingest |
+| Fuzzy target promotion | Target identity is serialized back into title/path text | Direct target note ID and graph node ID promotion |
+| Compatibility authority drift | Legacy booleans override structured grounding | Derive compatibility fields after authoritative merge |
+| Stale grounding counts | Route-local assessments disagree with aggregate diagnostics | Count canonical chunk/note identities from merged candidates |
+| Proposition/evidence contradiction | Proposition count exceeds evidence-unit count | Deterministic invariant diagnostic and required-evidence rejection |

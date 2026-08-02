@@ -42,7 +42,7 @@ APPARATUS_REFERENCE_LINE_RE = re.compile(
     r"|[a-eA-EаАеЕсС](?:\s+[a-eA-EаАеЕсС]){0,5}"
     r")$"
 )
-WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+WIKILINK_RE = re.compile(r"(?P<embed>!)?\[\[(?P<body>[^\]]+)\]\]")
 
 
 @dataclass(frozen=True)
@@ -582,6 +582,15 @@ def _parse_markdown_note(
         config=config,
         max_chunk_chars=config.chunking_max_chunk_chars,
     )
+    for occurrence in wikilink_targets:
+        occurrence.setdefault("source_note_id", _build_note_id(source_root.label, source_uuid))
+        if occurrence.get("source_surface") == "body":
+            occurrence["source_chunk_id"] = next(
+                (chunk.chunk_id for chunk in chunks if str(occurrence.get("raw_wikilink_text") or "") in chunk.paragraph_text),
+                None,
+            )
+        else:
+            occurrence.setdefault("source_chunk_id", chunks[0].chunk_id if chunks else None)
     return NoteRecord(
         note_id=_build_note_id(source_root.label, source_uuid),
         source_uuid=source_uuid,
@@ -736,11 +745,12 @@ def _extract_tag_values(frontmatter: dict[str, Any]) -> tuple[str, ...]:
 
 def _extract_wikilink_targets(body_text: str, *, frontmatter_semantics: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     targets: list[dict[str, Any]] = []
-    for match in WIKILINK_RE.findall(body_text):
-        parsed = _parse_wikilink_target(match)
+    for match in WIKILINK_RE.finditer(body_text):
+        parsed = _parse_wikilink_target(match.group("body"), embedded=bool(match.group("embed")))
         if parsed is None:
             continue
         parsed["source_surface"] = "body"
+        parsed["source_component"] = "body"
         if parsed not in targets:
             targets.append(parsed)
     def walk(value: Any, path: str) -> None:
@@ -751,11 +761,12 @@ def _extract_wikilink_targets(body_text: str, *, frontmatter_semantics: dict[str
             for index, item in enumerate(value):
                 walk(item, f"{path}[{index}]")
         elif isinstance(value, str):
-            for match in WIKILINK_RE.findall(value):
-                parsed = _parse_wikilink_target(match)
+            for match in WIKILINK_RE.finditer(value):
+                parsed = _parse_wikilink_target(match.group("body"), embedded=bool(match.group("embed")))
                 if parsed is None:
                     continue
                 parsed["source_surface"] = "admitted_frontmatter"
+                parsed["source_component"] = "admitted_frontmatter"
                 parsed["frontmatter_field_path"] = path
                 if parsed not in targets:
                     targets.append(parsed)
@@ -763,7 +774,7 @@ def _extract_wikilink_targets(body_text: str, *, frontmatter_semantics: dict[str
     return tuple(targets)
 
 
-def _parse_wikilink_target(raw_link_text: str) -> dict[str, Any] | None:
+def _parse_wikilink_target(raw_link_text: str, *, embedded: bool = False) -> dict[str, Any] | None:
     raw_text = _normalize_inline_whitespace(raw_link_text)
     if not raw_text:
         return None
@@ -777,9 +788,13 @@ def _parse_wikilink_target(raw_link_text: str) -> dict[str, Any] | None:
     if not target_part:
         return None
     heading_text: str | None = None
+    block_text: str | None = None
     if "#" in target_part:
         target_note_text, heading_part = target_part.split("#", 1)
         heading_text = _normalize_inline_whitespace(heading_part) or None
+        if heading_text and heading_text.startswith("^"):
+            block_text = heading_text[1:] or None
+            heading_text = None
     else:
         target_note_text = target_part
     target_note_text = _strip_optional_md_suffix(_normalize_inline_whitespace(target_note_text))
@@ -787,10 +802,18 @@ def _parse_wikilink_target(raw_link_text: str) -> dict[str, Any] | None:
         return None
     return {
         "raw_wikilink_text": raw_text,
+        "raw_link": f"{'!' if embedded else ''}[[{raw_text}]]",
         "target_raw": target_part,
         "target_note": target_note_text,
+        "target_base": target_note_text,
+        "target_text": target_note_text,
         "target_heading": heading_text,
+        "heading_fragment": heading_text,
+        "block_fragment": block_text,
         "alias": alias_text,
+        "display_text": alias_text,
+        "embedded": embedded,
+        "resolution_status": "unresolved",
     }
 
 
@@ -2172,15 +2195,26 @@ def _rebuild_graph_layer(
                     "note_links_note",
                     json.dumps(
                         {
+                            "source_note_id": note_record.note_id,
+                            "source_chunk_id": target_record.get("source_chunk_id"),
+                            "source_component": "body" if target_record.get("source_surface") == "body" else "admitted_frontmatter",
                             "source_surface": target_record.get("source_surface", "body"),
                             "frontmatter_field_path": target_record.get("frontmatter_field_path"),
                             "raw_wikilink_text": target_record.get("raw_wikilink_text"),
                             "target_raw": target_record.get("target_raw"),
                             "target_note": target_note,
+                            "target_base": target_record.get("target_base") or target_note,
+                            "target_text": target_record.get("target_text") or target_note,
                             "target_heading": target_record.get("target_heading"),
+                            "heading_fragment": target_record.get("heading_fragment"),
+                            "block_fragment": target_record.get("block_fragment"),
                             "alias": target_record.get("alias"),
+                            "display_text": target_record.get("display_text"),
+                            "embedded": bool(target_record.get("embedded")),
                             "resolved": True,
+                            "resolution_status": "resolved",
                             "resolved_note_id": resolved_note_id,
+                            "target_graph_node_id": target_node_id,
                         },
                         ensure_ascii=True,
                         sort_keys=True,

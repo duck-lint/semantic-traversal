@@ -279,8 +279,8 @@ class TemporalTests(unittest.TestCase):
         )
         rows = [
             {"chunk_id": "c-unrelated", "note_id": "n-unrelated", "source_root_label": "fixture", "source_root_path": "", "relative_path": "unrelated.md", "note_title": "Unrelated", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "unrelated global chronology", "chunk_hash": "h-unrelated"},
-            {"chunk_id": "c-a", "note_id": "n-a", "source_root_label": "fixture", "source_root_path": "", "relative_path": "amber.md", "note_title": "Amber", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber evidence", "chunk_hash": "h-a"},
-            {"chunk_id": "c-b", "note_id": "n-b", "source_root_label": "fixture", "source_root_path": "", "relative_path": "beryl.md", "note_title": "Beryl", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "beryl evidence", "chunk_hash": "h-b"},
+            {"chunk_id": "c-a", "note_id": "n-a", "source_root_label": "fixture", "source_root_path": "", "relative_path": "amber.md", "note_title": "Amber", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber development evidence", "chunk_hash": "h-a"},
+            {"chunk_id": "c-b", "note_id": "n-b", "source_root_label": "fixture", "source_root_path": "", "relative_path": "beryl.md", "note_title": "Beryl", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "beryl development evidence", "chunk_hash": "h-b"},
         ]
         connection.executemany("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", rows)
         connection.executemany("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows)
@@ -365,7 +365,7 @@ class TemporalTests(unittest.TestCase):
             """
         )
         rows = [
-            {"chunk_id": "c-seed", "note_id": "n-seed", "source_root_label": "fixture", "source_root_path": "", "relative_path": "amber.md", "note_title": "Amber", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber signal", "chunk_hash": "h-seed"},
+            {"chunk_id": "c-seed", "note_id": "n-seed", "source_root_label": "fixture", "source_root_path": "", "relative_path": "amber.md", "note_title": "Amber", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber development signal", "chunk_hash": "h-seed"},
             {"chunk_id": "c-hop", "note_id": "n-hop", "source_root_label": "fixture", "source_root_path": "", "relative_path": "hop.md", "note_title": "Hop", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "linked development", "chunk_hash": "h-hop"},
             {"chunk_id": "c-unrelated", "note_id": "n-old", "source_root_label": "fixture", "source_root_path": "", "relative_path": "old.md", "note_title": "Old", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "unrelated chronology", "chunk_hash": "h-old"},
         ]
@@ -384,12 +384,12 @@ class TemporalTests(unittest.TestCase):
         packet = {
             "raw_user_input": "amber chronology",
             "query": "amber chronology",
-            "concepts": ["amber"], "entities": [], "relations": [], "resolved_referents": ["amber"], "limitations": [],
+            "concepts": ["amber development"], "entities": [], "relations": [], "resolved_referents": ["amber"], "limitations": [],
             "planner_diagnostics": {"plan_executability": {"status": "executable"}},
             "planner_retrieval_plan": {
-                "intent_type": "semantic_traversal", "concepts": ["amber"], "resolved_referents": ["amber"],
-                "literal_terms": [], "evidence_requirements": ["chronology"], "semantic_queries": ["amber"],
-                "lexical_queries": ["amber"], "graph_seeds": [],
+                "intent_type": "semantic_traversal", "concepts": ["amber development"], "resolved_referents": ["amber"],
+                "literal_terms": [], "evidence_requirements": ["chronology"], "semantic_queries": ["amber development"],
+                "lexical_queries": ["amber development"], "graph_seeds": [],
                 "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "earliest", "limit": 1}],
             },
         }
@@ -436,8 +436,8 @@ class TemporalTests(unittest.TestCase):
             ("note::n-alpha-event", "note", "Alpha event", "n-alpha-event", "{}"), ("note::n-beta-event", "note", "Beta event", "n-beta-event", "{}"),
         ])
         connection.executemany("INSERT INTO graph_edges VALUES (?,?,?,?)", [
-            ("note::n-alpha-event", "note::n-alpha", "note_links_note", '{"provenance":[{"frontmatter_field_path":"related"}]}'),
-            ("note::n-beta-event", "note::n-beta", "note_links_note", '{"provenance":[{"frontmatter_field_path":"related"}]}'),
+            ("note::n-alpha-event", "note::n-alpha", "note_links_note", '{"source_note_id":"n-alpha-event","target_base":"Alpha","resolved":true,"resolution_status":"resolved","resolved_note_id":"n-alpha","target_graph_node_id":"note::n-alpha","provenance":[{"source_surface":"admitted_frontmatter","frontmatter_field_path":"related","target_base":"Alpha","resolved":true,"resolution_status":"resolved","resolved_note_id":"n-alpha","target_graph_node_id":"note::n-alpha"}]}'),
+            ("note::n-beta-event", "note::n-beta", "note_links_note", '{"source_note_id":"n-beta-event","target_base":"Beta","resolved":true,"resolution_status":"resolved","resolved_note_id":"n-beta","target_graph_node_id":"note::n-beta","provenance":[{"source_surface":"admitted_frontmatter","frontmatter_field_path":"related","target_base":"Beta","resolved":true,"resolution_status":"resolved","resolved_note_id":"n-beta","target_graph_node_id":"note::n-beta"}]}'),
         ])
         connection.executemany("INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
             ("a-alpha", "n-alpha-event", None, "journal_entry", "2010-01-01T00:00:00Z", "2010-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2010", "explicit_primary", "valid", None, 0, None),
@@ -454,7 +454,7 @@ class TemporalTests(unittest.TestCase):
                 "intent_type": "semantic_traversal", "concepts": ["reading activity"],
                 "resolved_referents": ["Alpha", "Beta"], "literal_terms": [],
                 "evidence_requirements": ["chronology"], "semantic_queries": ["reading activity"],
-                "lexical_queries": ["reading activity"], "graph_seeds": ["Alpha", "Beta"],
+                "lexical_queries": ["reading activity"], "graph_seeds": [],
                 "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "earliest", "limit": 1}],
             },
         }
@@ -464,6 +464,7 @@ class TemporalTests(unittest.TestCase):
             connection.close()
         grounding = manifest["semantic_grounding"]
         self.assertEqual(grounding["identity_authorized_graph_seed_count"], 2)
+        self.assertEqual(grounding["frontmatter_link_promotion_count"], 2)
         self.assertEqual(grounding["graph_hops_with_subject_authority"], 2)
         self.assertEqual(manifest["layer_manifests"]["temporal"]["diagnostics"]["satisfied_subject_count"], 2)
         selected = {item["chunk_id"] for item in packet["selected_chunks"]}
@@ -473,3 +474,5 @@ class TemporalTests(unittest.TestCase):
         selected_by_id = {item["chunk_id"]: item for item in packet["selected_chunks"]}
         self.assertTrue(selected_by_id["c-alpha-event"].get("grounding"))
         self.assertTrue(selected_by_id["c-beta-event"].get("grounding"))
+        self.assertEqual(selected_by_id["c-alpha-event"]["wikilink_identity_promotions"][0]["target_note_id"], "n-alpha")
+        self.assertEqual(selected_by_id["c-beta-event"]["wikilink_identity_promotions"][0]["target_note_id"], "n-beta")

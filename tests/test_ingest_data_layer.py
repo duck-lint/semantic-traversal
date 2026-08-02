@@ -14,7 +14,7 @@ from copy import deepcopy
 
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse
-from semantic_traversal.ingest import IngestSourceRoot, _validate_lexical_index, _validate_vector_index, run_ingest
+from semantic_traversal.ingest import IngestSourceRoot, _extract_wikilink_targets, _validate_lexical_index, _validate_vector_index, run_ingest
 from semantic_traversal.runtime import _exact_candidates, _load_chunk_rows
 
 
@@ -60,6 +60,21 @@ def _load_rows(connection: sqlite3.Connection, query: str, params: tuple[Any, ..
 
 
 class IngestDataLayerTests(unittest.TestCase):
+    def test_wikilink_occurrence_parser_preserves_structural_forms(self) -> None:
+        occurrences = _extract_wikilink_targets(
+            "[[Note]] [[Note|Alias]] [[Note#Heading]] [[Note#^block]] [[Note#Heading|Shown]] ![[Note]]",
+            frontmatter_semantics={"nested": [{"links": "[[Front|Display]]"}]},
+        )
+        self.assertEqual(len(occurrences), 7)
+        plain = next(item for item in occurrences if item["target_note"] == "Note" and item["alias"] is None and not item["embedded"])
+        self.assertEqual(plain["resolution_status"], "unresolved")
+        alias = next(item for item in occurrences if item["alias"] == "Alias")
+        self.assertEqual(alias["target_base"], "Note")
+        self.assertEqual(next(item for item in occurrences if item["block_fragment"] == "block")["heading_fragment"], None)
+        self.assertTrue(next(item for item in occurrences if item["embedded"])["embedded"])
+        frontmatter = next(item for item in occurrences if item["source_component"] == "admitted_frontmatter")
+        self.assertEqual(frontmatter["frontmatter_field_path"], "nested[0].links")
+
     def test_success_manifest_reports_complete_fts_projection(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
         with tempfile.TemporaryDirectory() as temp_dir:
