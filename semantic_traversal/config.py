@@ -125,6 +125,7 @@ _EXPECTED_CONFIG_SCHEMA: dict[str, Any] = {
         "model": (str, type(None)),
         "base_url": str,
         "request_timeout_seconds": int,
+        "context_window_tokens": int,
         "inventory_projection": {
             "max_chars": int,
             "low_cardinality_max_unique": int,
@@ -405,6 +406,10 @@ class RuntimeConfig:
         return int(self.raw["semantic_compiler"]["request_timeout_seconds"])
 
     @property
+    def semantic_compiler_context_window_tokens(self) -> int:
+        return int(self.raw["semantic_compiler"]["context_window_tokens"])
+
+    @property
     def semantic_compiler_inventory_projection(self) -> dict[str, int]:
         return {
             str(key): int(value)
@@ -677,6 +682,8 @@ def load_runtime_config(*, repo_root: Path, config_path: str | None = None) -> R
         raise ConfigError("Runtime config field paths.data_root must not be blank")
     if int(parsed["retrieval"]["max_chunks"]) <= 0:
         raise ConfigError("Runtime config field retrieval.max_chunks must be greater than zero")
+    if int(parsed["semantic_compiler"]["context_window_tokens"]) <= 0:
+        raise ConfigError("Runtime config field semantic_compiler.context_window_tokens must be greater than zero")
     projection = parsed["semantic_compiler"]["inventory_projection"]
     projection_bounds = {
         "max_chars": (1, 1_000_000),
