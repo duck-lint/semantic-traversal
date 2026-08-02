@@ -389,7 +389,14 @@ def _coerce_literal_terms(value: Any, fallback: list[dict[str, Any]]) -> list[di
             match = "case_insensitive_substring"
             required = False
         if term and not any(item["term"] == term for item in terms):
-            terms.append({"term": term, "match": match, "required": required})
+            canonical = {"term": term, "match": match, "required": required}
+            if not isinstance(entry, dict):
+                # Keep the fact that the compiler supplied an incomplete bare
+                # literal visible.  The executor-compatible fields are not
+                # treated as a valid exact contract by completeness checks.
+                canonical["raw_type"] = "bare"
+                canonical["contract_status"] = "incomplete"
+            terms.append(canonical)
     return terms
 
 
@@ -519,6 +526,14 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
         # requirements from the operator list.
         "evidence_requirements": _canonicalize_planner_list_field(value=value, field="evidence_requirements", fallback=[], diagnostics=diagnostics),
         "retrieval_layers": _canonicalize_planner_list_field(value=value, field="retrieval_layers", fallback=fallback.get("retrieval_layers", []), diagnostics=diagnostics),
+    }
+    literal_entries = result["literal_terms"]
+    diagnostics["literal_contract"] = {
+        "raw_entry_types": ["bare" if isinstance(raw, str) else "structured" if isinstance(raw, dict) else type(raw).__name__ for raw in value.get("literal_terms", [])] if isinstance(value.get("literal_terms"), list) else [],
+        "structured_literal_count": sum(isinstance(raw, dict) for raw in value.get("literal_terms", [])) if isinstance(value.get("literal_terms"), list) else 0,
+        "bare_literal_count": sum(not isinstance(raw, dict) for raw in value.get("literal_terms", [])) if isinstance(value.get("literal_terms"), list) else 0,
+        "unsupported_literal_match_modes": sorted({str(entry.get("match")) for entry in literal_entries if isinstance(entry, dict) and str(entry.get("match")) not in {"case_sensitive_substring", "case_insensitive_substring"}}),
+        "unsupported_exact_layer_modes": sorted({str(layer.get("mode")) for layer in result["retrieval_layers"] if isinstance(layer, dict) and str(layer.get("operator")) == "exact_chunk_search" and str(layer.get("mode") or "") not in {"", "default"}}),
     }
     unsupported_requirements = [
         value for value in result["evidence_requirements"]

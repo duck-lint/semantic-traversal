@@ -33,7 +33,20 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
         for requirement, operator in mapping.items()
         if requirement in declared and operator not in {"exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}
     ]
-    status = "complete" if not (unsupported or missing_operators or unavailable_operators or invalid_operator_configuration) else "incomplete"
+    literal_entries = planner_retrieval_plan.get("literal_terms") if isinstance(planner_retrieval_plan.get("literal_terms"), list) else []
+    bare_literals = [entry for entry in literal_entries if isinstance(entry, dict) and entry.get("raw_type") == "bare"]
+    unsupported_literal_modes = sorted({str(entry.get("match")) for entry in literal_entries if isinstance(entry, dict) and str(entry.get("match") or "") not in {"", "case_sensitive_substring", "case_insensitive_substring"}})
+    exact_layers = [layer for layer in planner_retrieval_plan.get("retrieval_layers", []) if isinstance(layer, dict) and str(layer.get("operator") or "") == "exact_chunk_search"]
+    unsupported_exact_layer_modes = sorted({str(layer.get("mode")) for layer in exact_layers if str(layer.get("mode") or "") not in {"", "default"}})
+    exact_contract_required = "literal_exhaustive" in declared or any(bool(layer.get("required")) for layer in exact_layers)
+    contract_blocking_reasons: list[str] = []
+    if exact_contract_required and bare_literals:
+        contract_blocking_reasons.append("bare_literal_contract")
+    if unsupported_literal_modes:
+        contract_blocking_reasons.append("unsupported_literal_match_mode")
+    if unsupported_exact_layer_modes:
+        contract_blocking_reasons.append("unsupported_exact_layer_mode")
+    status = "complete" if not (unsupported or missing_operators or unavailable_operators or invalid_operator_configuration or contract_blocking_reasons) else "incomplete"
     return {
         "declared_requirements": declared,
         "satisfied_requirements": [value for value in declared if value not in unsupported and value not in missing_operators and not any(item["requirement"] == value for item in unavailable_operators)],
@@ -41,6 +54,17 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
         "unsupported_requirements": unsupported,
         "unavailable_operators": unavailable_operators,
         "invalid_operator_configuration": invalid_operator_configuration,
+        "literal_contract": {
+            "bare_literal_count": len(bare_literals),
+            "structured_literal_count": sum(isinstance(entry, dict) and entry.get("raw_type") != "bare" for entry in literal_entries),
+            "unsupported_literal_match_modes": unsupported_literal_modes,
+            "unsupported_exact_layer_modes": unsupported_exact_layer_modes,
+            "exact_contract_required": exact_contract_required,
+            "completeness": "incomplete" if contract_blocking_reasons else "complete",
+            "repair_triggered": False,
+            "automatic_support_excluded_from_coverage": True,
+        },
+        "blocking_reasons": contract_blocking_reasons,
         "repair_attempted": False,
         "repair_result": None,
         "status": status,

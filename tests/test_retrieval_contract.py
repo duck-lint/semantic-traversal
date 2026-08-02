@@ -10,6 +10,7 @@ from unittest.mock import patch
 from semantic_traversal.config import RuntimeConfig, load_runtime_config
 from semantic_traversal.embeddings import EmbeddingResponse, UnavailableEmbeddingBackend, embedding_identity_hash
 from semantic_traversal.runtime import _chunk_matches_scope, _coverage_report, _exact_candidates, _lexical_candidates, _merge_candidates, _semantic_traversal, _select_retrieval_chunks, _vector_candidates
+from semantic_traversal.retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan
 from semantic_traversal.retrieval_resolver import bind_retrieval_plan, validate_plan_completeness
 
 
@@ -703,6 +704,49 @@ class RetrievalContractTests(unittest.TestCase):
             config=self.config,
         )
         self.assertEqual(result["status"], "complete")
+
+    def test_bare_exhaustive_literal_is_structurally_incomplete(self) -> None:
+        fallback = build_default_retrieval_plan(
+            raw_user_input='find "target phrase"', query="target phrase", concepts=["target phrase"],
+            graph_seeds=[], planner_defaults=self.config.retrieval_planner_defaults,
+        )
+        plan, diagnostics = canonicalize_retrieval_plan(
+            {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": ["target phrase"], "semantic_queries": [], "lexical_queries": [],
+                "graph_seeds": [], "evidence_requirements": ["literal_exhaustive"],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+            },
+            fallback=fallback,
+            planner_defaults=self.config.retrieval_planner_defaults,
+            raw_user_input='find "target phrase"',
+        )
+        self.assertEqual(diagnostics["literal_contract"]["bare_literal_count"], 1)
+        result = validate_plan_completeness(planner_retrieval_plan=plan, config=self.config)
+        self.assertEqual(result["status"], "incomplete")
+        self.assertIn("bare_literal_contract", result["blocking_reasons"])
+
+    def test_unsupported_exact_modes_are_structurally_incomplete(self) -> None:
+        fallback = build_default_retrieval_plan(
+            raw_user_input='find "target phrase"', query="target phrase", concepts=["target phrase"],
+            graph_seeds=[], planner_defaults=self.config.retrieval_planner_defaults,
+        )
+        plan, _ = canonicalize_retrieval_plan(
+            {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": [{"term": "target phrase", "match": "exact_phrase", "required": True}],
+                "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
+                "evidence_requirements": ["literal_exhaustive"],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "mode": "exact_phrase"}],
+            },
+            fallback=fallback,
+            planner_defaults=self.config.retrieval_planner_defaults,
+            raw_user_input='find "target phrase"',
+        )
+        result = validate_plan_completeness(planner_retrieval_plan=plan, config=self.config)
+        self.assertEqual(result["status"], "incomplete")
+        self.assertIn("unsupported_literal_match_mode", result["blocking_reasons"])
+        self.assertIn("unsupported_exact_layer_mode", result["blocking_reasons"])
 
     def test_required_exact_layer_blocks_when_terms_were_skipped(self) -> None:
         packet = {
