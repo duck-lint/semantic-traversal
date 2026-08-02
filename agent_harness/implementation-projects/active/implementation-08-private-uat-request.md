@@ -166,6 +166,34 @@ Expected directory: `agent_harness/private/runs/implementation-08-private-before
 
 # Post-PR-15 resolved-referent propagation correction
 
+# Post-PR-18 typed-closure execution correction
+
+The post-PR-18 private rerun found that the declared typed closure was only
+partly executable: automatic graph support carried zero effective depth,
+grounded notes were rematched from text, seed hydration was not distinct from
+edge traversal, lexical atoms were flattened, and contextual exact support
+was absent without literal terms. The correction is runtime-only and keeps
+the compiler contract, persisted substrate, temporal policy, repair, fallback,
+and evaluator versions unchanged. It preserves canonical identities through
+graph hops, applies one layer canonicalizer to requested and automatic
+surfaces, executes lexical queries independently, and adds bounded optional
+exact probes from contextual atoms. A production-path synthetic test proves
+direct grounding, canonical note hydration, a real graph hop, temporal anchor
+attachment, and relation evaluation while excluding unrelated global evidence.
+
+No private questions, answers, titles, dates, paths, UUIDs, note contents,
+metadata values, screenshots, or run artifacts were accessed. No reingest is
+required. Use fresh suite ID:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-closure-execution-correction
+```
+
+Expected ignored directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-closure-execution-correction/`.
+Preserve the completed post-PR-18 run, do not use `--replace`, and keep Seam 1
+operator-pending.
+
 # Post-PR-16 retrieval-surface completeness boundary
 
 The retrieval-surface correction preserves the PR #16 compiler-to-temporal
