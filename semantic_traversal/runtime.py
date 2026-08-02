@@ -926,14 +926,145 @@ def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[
     return counts
 
 
+def _resolved_wikilink_promotions(
+    *, connection: sqlite3.Connection, candidate: dict[str, Any], plan: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Promote exact link-target matches without rematerializing note text."""
+    source_note_id = str(candidate.get("note_id") or "").strip()
+    if not source_note_id:
+        return []
+    referents = _coerce_string_list(plan.get("resolved_referents"))
+    if not referents:
+        return []
+    try:
+        rows = connection.execute(
+            f"SELECT metadata_json FROM {plan.get('_graph_edges_table', 'graph_edges')} WHERE source_node_id = ? AND edge_type = 'note_links_note'",
+            (f"note::{source_note_id}",),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    promotions: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        occurrences = metadata.get("provenance") if isinstance(metadata.get("provenance"), list) else [metadata]
+        for occurrence in occurrences:
+            if not isinstance(occurrence, dict) or str(occurrence.get("resolution_status") or ("resolved" if occurrence.get("resolved") else "unresolved")) != "resolved":
+                continue
+            target_note_id = str(occurrence.get("resolved_note_id") or occurrence.get("target_note_id") or "").strip()
+            if not target_note_id:
+                continue
+            surfaces = [occurrence.get("target_base"), occurrence.get("target_note"), occurrence.get("target_text"), occurrence.get("alias"), occurrence.get("display_text")]
+            normalized_surfaces = [_normalize_text(value) for value in surfaces if str(value or "").strip()]
+            for index, referent in enumerate(referents):
+                normalized_referent = _normalize_text(referent)
+                if not normalized_referent:
+                    continue
+                matched_surface = next((surface for surface in normalized_surfaces if re.search(rf"(?<!\w){re.escape(normalized_referent)}(?!\w)", surface)), None)
+                if matched_surface is None:
+                    continue
+                item = {
+                    "subject_id": f"subject-{index}",
+                    "referent": referent,
+                    "target_note_id": target_note_id,
+                    "target_graph_node_id": str(occurrence.get("target_graph_node_id") or f"note::{target_note_id}"),
+                    "matched_surface": matched_surface,
+                    "occurrence": occurrence,
+                }
+                if item not in promotions:
+                    promotions.append(item)
+    return promotions
+
+
+def _grounding_summary(*, specification: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize the final canonical candidate assessments, not route scratch."""
+    bundles = specification.get("bundles", []) if isinstance(specification, dict) else []
+    atoms = [
+        atom
+        for bundle in bundles if isinstance(bundle, dict)
+        for key in ("referent_atoms", "subject_bearing_atoms", "subject_predicate_atoms", "shared_predicate_atoms", "query_level_atoms")
+        for atom in ((bundle.get(key) or []) if isinstance(bundle.get(key), list) else [])
+    ]
+    unique_candidates = {str(item.get("chunk_id") or ""): item for item in candidates if str(item.get("chunk_id") or "")}
+    evidence_units = {
+        chunk_id for chunk_id, candidate in unique_candidates.items()
+        if ((candidate.get("grounding") or {}).get("evidence_unit") or {}).get("subjects")
+    }
+    proposition_units = {
+        chunk_id for chunk_id, candidate in unique_candidates.items()
+        if ((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("eligible")
+    }
+    identity_notes: set[str] = set()
+    promotions: set[tuple[str, str, str]] = set()
+    body_promotions = 0
+    frontmatter_promotions = 0
+    unresolved = 0
+    authorized_seeds: set[str] = set()
+    for candidate in unique_candidates.values():
+        grounding = candidate.get("grounding") or {}
+        for subject in (grounding.get("object_identity") or {}).get("subjects", []):
+            target_ids = candidate.get("identity_seed_note_ids") or [candidate.get("note_id")]
+            identity_notes.update(str(value) for value in target_ids if str(value or ""))
+        for promotion in candidate.get("wikilink_identity_promotions", []):
+            if not isinstance(promotion, dict):
+                continue
+            occurrence = promotion.get("occurrence") or {}
+            target_id = str(promotion.get("target_note_id") or "")
+            key = (str(candidate.get("chunk_id") or ""), target_id, str(promotion.get("subject_id") or ""))
+            if target_id:
+                promotions.add(key)
+                authorized_seeds.add(target_id)
+                if occurrence.get("source_surface") == "body":
+                    body_promotions += 1
+                elif occurrence.get("source_surface") == "admitted_frontmatter":
+                    frontmatter_promotions += 1
+        for occurrence in candidate.get("wikilink_occurrences", []):
+            if str(occurrence.get("resolution_status") or "") != "resolved":
+                unresolved += 1
+    diagnostics = {
+        "version": 1,
+        "subject_bundle_count": len(bundles) if specification.get("named_subjects") else 0,
+        "query_level_bundle_count": 0 if specification.get("named_subjects") else len(bundles),
+        "subject_only_atom_count": sum(atom.get("role") == "subject_only" for atom in atoms),
+        "predicate_only_atom_count": sum(atom.get("role") == "predicate_only" for atom in atoms),
+        "subject_and_predicate_atom_count": sum(atom.get("role") == "subject_and_predicate" for atom in atoms),
+        "query_level_atom_count": sum(atom.get("role") == "query_level_context" for atom in atoms),
+        "nonempty_predicate_residual_count": sum(bool(atom.get("predicate_residual")) for atom in atoms),
+        "canonical_object_identity_note_count": len(identity_notes),
+        "descriptive_subject_count": sum(not bool((candidate.get("grounding") or {}).get("object_identity", {}).get("subjects")) and bool((candidate.get("grounding") or {}).get("evidence_unit", {}).get("subjects")) for candidate in unique_candidates.values()),
+        "evidence_grounded_unit_count": len(evidence_units),
+        "proposition_grounded_unit_count": len(proposition_units),
+        "multi_subject_proposition_unit_count": sum(len(((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("subjects", [])) > 1 for candidate in unique_candidates.values()),
+        "resolved_wikilink_target_promotion_count": len(promotions),
+        "resolved_wikilink_occurrence_count": len(promotions),
+        "unresolved_wikilink_occurrence_count": unresolved,
+        "body_link_promotion_count": body_promotions,
+        "frontmatter_link_promotion_count": frontmatter_promotions,
+        "identity_authorized_graph_seed_count": len(authorized_seeds),
+        "evidence_only_note_count": len({str(candidate.get("note_id") or "") for candidate in unique_candidates.values() if not ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")}),
+        "grounding_assessment_merge_count": sum(1 for candidate in candidates if isinstance(candidate.get("grounding"), dict) and len(candidate.get("source_layers", [])) > 1),
+    }
+    diagnostics["proposition_implies_evidence"] = diagnostics["proposition_grounded_unit_count"] <= diagnostics["evidence_grounded_unit_count"]
+    diagnostics["invariant_status"] = "valid" if diagnostics["proposition_implies_evidence"] else "invalid_proposition_without_evidence"
+    if diagnostics["invariant_status"] == "invalid_proposition_without_evidence":
+        diagnostics["invariant_diagnostic"] = "proposition-grounded unit count exceeds evidence-grounded unit count"
+    return diagnostics
+
+
 def _annotate_context_candidates(
-    candidates: list[dict[str, Any]], *, plan: dict[str, Any], config: RuntimeConfig,
+    candidates: list[dict[str, Any]], *, plan: dict[str, Any], config: RuntimeConfig, connection: sqlite3.Connection | None = None,
 ) -> list[dict[str, Any]]:
     """Attach explicit grounding authority without turning referents into filters."""
     specification = build_grounding_spec(plan)
     annotated: list[dict[str, Any]] = []
     for candidate in candidates:
         next_candidate = dict(candidate)
+        if connection is not None:
+            next_candidate["wikilink_identity_promotions"] = _resolved_wikilink_promotions(
+                connection=connection, candidate=next_candidate, plan={**plan, "_graph_edges_table": config.graph_edges_table},
+            )
         assessment = classify_candidate(next_candidate, specification)
         existing = next_candidate.get("grounding")
         if isinstance(existing, dict):
@@ -948,6 +1079,13 @@ def _annotate_context_candidates(
         ))
         authorized_subject_ids = _coerce_string_list((assessment.get("graph_authority") or {}).get("may_propagate_subjects"))
         authorized_subjects = [bundle_referents.get(value, value) for value in authorized_subject_ids]
+        identity_seed_note_ids = [
+            str(item.get("target_note_id") or "") for item in next_candidate.get("wikilink_identity_promotions", [])
+            if str(item.get("target_note_id") or "")
+        ]
+        if identity_seed_note_ids:
+            next_candidate["identity_seed_note_ids"] = list(dict.fromkeys(identity_seed_note_ids))
+            (assessment.setdefault("graph_authority", {}))["identity_seed_note_ids"] = list(dict.fromkeys(identity_seed_note_ids))
         next_candidate["context_subjects"] = list(dict.fromkeys([*_coerce_string_list(candidate.get("context_subjects")), *matched_subjects]))
         next_candidate["authorized_subjects"] = list(dict.fromkeys([
             *_coerce_string_list(candidate.get("authorized_subjects")),
@@ -1659,7 +1797,7 @@ def _graph_candidates(
             f"SELECT node_id, node_type, label, ref_id, metadata_json FROM {config.graph_nodes_table}"
         ).fetchall()
         edge_rows = connection.execute(
-            f"SELECT source_node_id, target_node_id, edge_type FROM {config.graph_edges_table}"
+            f"SELECT source_node_id, target_node_id, edge_type, metadata_json FROM {config.graph_edges_table}"
         ).fetchall()
     except sqlite3.OperationalError:
         return [], ["graph search unavailable"], {
@@ -1698,9 +1836,13 @@ def _graph_candidates(
         if bool(((candidate.get("grounding") or {}).get("graph_authority") or {}).get("may_seed_subject_graph"))
     ]
     canonical_seed_note_ids = list(dict.fromkeys(
-        str(candidate.get("note_id") or "").strip()
+        seed_note_id
         for candidate in grounded_context_candidates
-        if str(candidate.get("note_id") or "").strip()
+        for seed_note_id in [*candidate.get("identity_seed_note_ids", []), *(
+            [str(candidate.get("note_id") or "").strip()]
+            if not candidate.get("identity_seed_note_ids") else []
+        )]
+        if str(seed_note_id).strip()
     ))
     if not seed_values and not canonical_seed_note_ids:
         return [], ["graph search skipped: no graph seeds"], {
@@ -1729,14 +1871,18 @@ def _graph_candidates(
         if item not in submitted_seeds:
             submitted_seeds.append(item)
 
-    outgoing: dict[str, list[tuple[str, str, str]]] = {}
-    incoming: dict[str, list[tuple[str, str, str]]] = {}
+    outgoing: dict[str, list[tuple[str, str, str, dict[str, Any]]]] = {}
+    incoming: dict[str, list[tuple[str, str, str, dict[str, Any]]]] = {}
     for row in edge_rows:
         source_node_id = str(row["source_node_id"])
         target_node_id = str(row["target_node_id"])
         edge_type = str(row["edge_type"])
-        outgoing.setdefault(source_node_id, []).append((target_node_id, edge_type, "outbound"))
-        incoming.setdefault(target_node_id, []).append((source_node_id, edge_type, "inbound"))
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+        outgoing.setdefault(source_node_id, []).append((target_node_id, edge_type, "outbound", metadata))
+        incoming.setdefault(target_node_id, []).append((source_node_id, edge_type, "inbound", metadata))
 
     selected_note_ids: list[str] = []
     note_reasons: dict[str, list[str]] = {}
@@ -1756,6 +1902,18 @@ def _graph_candidates(
         context_subjects_by_note[note_id] = list(dict.fromkeys([
             *context_subjects_by_note.get(note_id, []), *authorized,
         ]))
+        for promotion in candidate.get("wikilink_identity_promotions", []):
+            if not isinstance(promotion, dict):
+                continue
+            target_note_id = str(promotion.get("target_note_id") or "")
+            subject_id = str(promotion.get("subject_id") or "")
+            if target_note_id and subject_id:
+                authorized_subjects_by_note[target_note_id] = list(dict.fromkeys([
+                    *authorized_subjects_by_note.get(target_note_id, []), subject_id,
+                ]))
+                context_subjects_by_note[target_note_id] = list(dict.fromkeys([
+                    *context_subjects_by_note.get(target_note_id, []), subject_id,
+                ]))
     edge_types_used: list[str] = []
     queue: list[tuple[str, int]] = []
     visited_notes: set[str] = set()
@@ -1817,12 +1975,12 @@ def _graph_candidates(
         if current_node is None:
             continue
         current_label = str(current_node.get("label") or current_note_id)
-        traversals: list[tuple[str, str, str]] = []
+        traversals: list[tuple[str, str, str, dict[str, Any]]] = []
         if config.graph_traversal_direction in {"outbound", "both"}:
             traversals.extend(sorted(outgoing.get(current_node_id, []), key=lambda item: (item[1], item[0])))
         if config.graph_traversal_direction in {"inbound", "both"}:
             traversals.extend(sorted(incoming.get(current_node_id, []), key=lambda item: (item[1], item[0])))
-        for target_node_id, edge_type, edge_direction in traversals:
+        for target_node_id, edge_type, edge_direction, edge_metadata in traversals:
             if edge_type not in edge_type_allowlist:
                 continue
             if edge_type not in edge_types_used:
@@ -1863,6 +2021,7 @@ def _graph_candidates(
                 "source_grounding_role": "object_identity" if authorized_subjects_by_note.get(current_note_id) else "evidence_unit",
                 "subject_propagation_authorized": bool(propagated_subjects),
                 "propagated_subjects": list(propagated_subjects),
+                "edge_provenance": edge_metadata,
             }
             target_hops = note_hops.setdefault(target_note_id, [])
             if hop_evidence not in target_hops and len(target_hops) < 8:
@@ -2619,6 +2778,9 @@ def _merge_candidates(
         elif isinstance(candidate.get("grounding"), dict):
             existing["grounding"] = candidate["grounding"]
         merge_list(existing, candidate, "authorized_subjects")
+        merge_list(existing, candidate, "identity_seed_note_ids")
+        merge_list(existing, candidate, "wikilink_identity_promotions")
+        merge_list(existing, candidate, "wikilink_occurrences")
         if existing.get("temporal_governing_anchor_id") is None and candidate.get("temporal_governing_anchor_id") is not None:
             existing["temporal_governing_anchor_id"] = candidate["temporal_governing_anchor_id"]
             existing["temporal_governing_anchor_type"] = candidate.get("temporal_governing_anchor_type")
@@ -3090,6 +3252,7 @@ def _semantic_traversal(
         [*exact_candidates, *lexical_candidates, *vector_candidates],
         plan={**bound_retrieval_plan, "concepts": semantic_compiler_packet.get("concepts", [])},
         config=config,
+        connection=connection,
     )
     grounding_bundles = (bound_retrieval_plan.get("grounding_specification") or {}).get("bundles", [])
     subject_id_to_referent = {
@@ -3144,6 +3307,7 @@ def _semantic_traversal(
         graph_candidates,
         plan={**bound_retrieval_plan, "concepts": semantic_compiler_packet.get("concepts", [])},
         config=config,
+        connection=connection,
     )
     graph_candidates = _enforce_canonical_subject_authority(
         graph_candidates,
@@ -3448,12 +3612,11 @@ def _semantic_traversal(
             "manifest_hash": sha256_json(resource_inventory_summary.get("retrieval_surface_manifest") or {}),
         },
         "semantic_grounding": {
-            "version": 1,
-            "subject_bundle_count": len((bound_retrieval_plan.get("grounding_specification") or {}).get("bundles", [])),
+            **_grounding_summary(
+                specification=bound_retrieval_plan.get("grounding_specification", {}),
+                candidates=merged_candidates,
+            ),
             "named_subjects": bool((bound_retrieval_plan.get("grounding_specification") or {}).get("named_subjects")),
-            "object_identity_grounded_note_count": len({str(candidate.get("note_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates] if ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")}),
-            "evidence_grounded_unit_count": len({str(candidate.get("chunk_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates] if ((candidate.get("grounding") or {}).get("evidence_unit") or {}).get("subjects")}),
-            "proposition_grounded_unit_count": len({str(candidate.get("chunk_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates, *temporal_candidates] if ((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("eligible")}),
             "identity_authorized_graph_seed_count": int(graph_traversal_info.get("hydrated_seed_note_count") or 0),
             "evidence_only_graph_seed_count": max(0, int(graph_traversal_info.get("matched_seed_count") or 0) - int(graph_traversal_info.get("hydrated_seed_note_count") or 0)),
             "graph_hops_with_subject_authority": sum(1 for hop in graph_traversal_info.get("traversal_hops", []) if hop.get("subject_propagation_authorized")),
@@ -3489,6 +3652,8 @@ def _semantic_traversal(
                 "graph_direction": candidate.get("graph_direction"),
                 "graph_provenance": candidate.get("graph_provenance", []),
                 "graph_hop_provenance": candidate.get("graph_hop_provenance", []),
+                "wikilink_identity_promotions": candidate.get("wikilink_identity_promotions", []),
+                "identity_seed_note_ids": candidate.get("identity_seed_note_ids", []),
                 "temporal_mode": candidate.get("temporal_mode"),
                 "temporal_anchor_ids": candidate.get("temporal_anchor_ids", []),
                 "temporal_provenance": candidate.get("temporal_provenance", []),
