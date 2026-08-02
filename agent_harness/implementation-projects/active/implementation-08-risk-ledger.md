@@ -141,3 +141,17 @@ Mitigation for model-generated filters: the compiler schema contains semantic qu
 | Compatibility authority drift | Legacy booleans create a second grounding model | Use structured per-subject records for all authority decisions; retain booleans only as derived diagnostics |
 | Gate-removal overgrowth | New ontology, matcher, or field map is added where information already exists | Record provenance audit and stop if a generic bridge cannot be justified |
 | Proposition/evidence contradiction | Proposition count exceeds evidence-unit count | Deterministic invariant diagnostic and required-evidence rejection |
+
+## Descriptive grounding and exact repair correction risks
+
+| Risk | Failure mode | Mitigation |
+| --- | --- | --- |
+| Descriptive exact-string bias | Supporting evidence is rejected because it does not repeat the referent verbatim | Admit only a single subject through a matched existing bounded atom; preserve the matched atom |
+| Descriptive graph overreach | Contextual association becomes object identity or graph authority | Keep identity and graph-seed authority separate; descriptive association cannot seed or propagate |
+| Layer decoration authority | Redundant exact-layer mode blocks executable literals or changes matching | Ignore layer mode for execution and completeness; retain only safe aggregate diagnostics |
+| Incomplete exhaustive count | Required exact search can claim absence without total-count coverage | Require structured required literals, supported term modes, required exact layer, complete scope, and total count |
+| Automatic exact masking | Contextual probes satisfy an explicit required literal or negative claim | Keep explicit contract and automatic support separate and exclude automatic probes from adequacy |
+| Idealized repair | Tests stop after canonicalization and never execute retrieval | Require two-call production-shaped tests through exact execution and coverage |
+| Repair provenance loss | Later recomputation erases initial failure or final repair state | Pass the final completeness record through all artifacts and retain initial state in repair provenance |
+| Misleading block wording | A pre-retrieval block says no matches were found | Emit deterministic outcome-specific wording keyed to retrieval-start state |
+| Thread-state scope drift | This correction becomes a vehicle for contamination or suite-isolation work | Explicitly exclude thread IDs, state, cache, preflight, replace, and runner behavior |

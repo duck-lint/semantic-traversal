@@ -345,6 +345,26 @@ Expected directory:
 Do not edit or replace the ignored fixture automatically. The model bakeoff is
 still pending, and Seam 1 has not begun.
 
+# Post-PR-24 descriptive grounding and exact repair correction
+
+After merge, preserve the post-PR-24 baseline and change only the ignored suite
+ID:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-descriptive-grounding-exact-repair-correction
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-descriptive-grounding-exact-repair-correction/`.
+
+Run the unchanged private fixture without `--replace` and inspect only the six
+corrected behaviors: single descriptive-subject admission, redundant exact
+layer-mode handling, exhaustive count readiness, successful one-shot repair,
+repair-diagnostic consistency, and blocked-plan wording. Do not investigate or
+modify thread state, suite reuse, contamination, cache behavior, or
+conversation persistence as part of this rerun. No reingest is required;
+Seam 1 remains pending operator acceptance.
+
 # Post-PR-20 subject–predicate and canonical-link identity correction
 
 The correction preserves the semantic-grounding authority boundary while
