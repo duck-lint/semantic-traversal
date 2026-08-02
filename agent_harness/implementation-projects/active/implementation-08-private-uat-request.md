@@ -282,3 +282,38 @@ Expected directory:
 `agent_harness/private/runs/implementation-08-private-before-v2-post-typed-semantic-closure/`.
 
 Seam 1 has not begun.
+
+# Post-PR-19 semantic grounding authority correction
+
+PR #19 made the typed-closure execution path real. The post-PR-19 private
+rerun also exposed that broad relevance could still be treated as object
+identity, graph descendants could inherit subjects without explicit authority,
+and temporal anchors could bypass predicate grounding. This correction adds a
+pure internal grounding specification and preserves the existing compiler
+contract, persisted substrate, retrieval operators, temporal modes, repair,
+fallback, synthesis, and negative-claim policy.
+
+The resolver now records ordered subject proposition bundles or one query-level
+bundle. Runtime distinguishes object-identity, evidence-unit, and
+relation-proposition grounding; only identity-authorized notes or explicit
+graph seeds may start named-subject graph traversal. Temporal evaluation is
+fed only proposition-grounded closure candidates. Descriptive subjects may be
+grounded through supporting context without a canonical object or exact
+referent-string equality. Weak evidence remains available as evidence without
+satisfying required relation coverage.
+
+No private data, referents, titles, paths, UUIDs, dates, or corpus text belong
+in repository records. No reingest is required because canonical chunks,
+embeddings, FTS, graph storage, temporal anchors, persisted inventory, and
+manifest versions are unchanged. Confirm the existing substrate remains valid
+before the operator rerun. Use:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-semantic-grounding-authority
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-semantic-grounding-authority/`.
+
+Do not edit or replace the ignored fixture automatically. The model bakeoff is
+still pending, and Seam 1 has not begun.

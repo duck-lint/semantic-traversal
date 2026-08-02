@@ -23,6 +23,7 @@ from .llm import LLMBackend
 from .resource_inventory import build_compiler_inventory_projection, build_resource_inventory, load_persisted_inventory
 from .retrieval_plan import build_default_retrieval_plan, canonicalize_retrieval_plan, coerce_string_list, is_comparison_intent, retrieval_plan_layer, _focus_carry_terms
 from .retrieval_resolver import bind_retrieval_plan, validate_plan_completeness, validate_plan_executability
+from .semantic_grounding import classify_candidate, merge_grounding_assessments, build_grounding_spec
 from .text_filters import is_low_signal_apparatus_text
 from .temporal import parse_temporal_value, relation_for_anchor
 from .semantic_compiler import (
@@ -928,28 +929,67 @@ def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[
 def _annotate_context_candidates(
     candidates: list[dict[str, Any]], *, plan: dict[str, Any], config: RuntimeConfig,
 ) -> list[dict[str, Any]]:
-    """Attach subject/route provenance without turning referents into filters."""
-    referents = _coerce_string_list(plan.get("resolved_referents"))
-    concepts = _coerce_string_list(plan.get("concepts"))
-    probes = [*_coerce_string_list(plan.get("semantic_queries")), *_coerce_string_list(plan.get("lexical_queries")), *concepts, *[str(item.get("term") or "") for item in plan.get("literal_terms", []) if isinstance(item, dict)]]
+    """Attach explicit grounding authority without turning referents into filters."""
+    specification = build_grounding_spec(plan)
     annotated: list[dict[str, Any]] = []
     for candidate in candidates:
         next_candidate = dict(candidate)
-        haystack = " ".join(str(next_candidate.get(field) or "") for field in ("note_title", "relative_path", "section_label", "paragraph_text", "frontmatter_semantics_json")).casefold()
-        matched_subjects = [subject for subject in referents if subject.casefold() in haystack]
-        matched_probes = [probe for probe in probes if probe.casefold() in haystack]
-        # A query carrying a subject transfers that subject's provenance to
-        # the grounded candidate even when the subject text is not repeated
-        # in the stored prose.
-        for subject in referents:
-            if subject not in matched_subjects and any(subject.casefold() in probe.casefold() for probe in probes) and any(probe.casefold() in haystack for probe in probes if subject.casefold() in probe.casefold()):
-                matched_subjects.append(subject)
+        assessment = classify_candidate(next_candidate, specification)
+        existing = next_candidate.get("grounding")
+        if isinstance(existing, dict):
+            assessment = merge_grounding_assessments(existing, assessment)
+        next_candidate["grounding"] = assessment
+        bundle_referents = {
+            str(bundle.get("subject_id")): str(bundle.get("referent") or "")
+            for bundle in specification.as_dict().get("bundles", [])
+        }
+        matched_subjects = list(dict.fromkeys(
+            str(value) for value in (assessment.get("relation_proposition") or {}).get("subject_referents", []) if str(value).strip()
+        ))
+        authorized_subject_ids = _coerce_string_list((assessment.get("graph_authority") or {}).get("may_propagate_subjects"))
+        authorized_subjects = [bundle_referents.get(value, value) for value in authorized_subject_ids]
         next_candidate["context_subjects"] = list(dict.fromkeys([*_coerce_string_list(candidate.get("context_subjects")), *matched_subjects]))
-        next_candidate["context_probe_provenance"] = list(dict.fromkeys(matched_probes))
-        next_candidate["context_grounded"] = bool(candidate.get("context_grounded")) or bool(matched_probes) or bool(matched_subjects and str(candidate.get("selection_source")) in {"exact", "graph"})
+        next_candidate["authorized_subjects"] = list(dict.fromkeys([
+            *_coerce_string_list(candidate.get("authorized_subjects")),
+            *authorized_subjects,
+        ]))
+        next_candidate["context_probe_provenance"] = list(dict.fromkeys([
+            *(_coerce_string_list(candidate.get("context_probe_provenance"))),
+            *[str(item.get("value") or "") for item in (assessment.get("evidence_unit") or {}).get("context_atoms", []) if isinstance(item, dict)],
+        ]))
+        # Compatibility only: this means proposition/evidence context was
+        # grounded, never that the note is the subject object.
+        next_candidate["context_grounded"] = bool((assessment.get("evidence_unit") or {}).get("subjects")) or bool(candidate.get("context_grounded"))
         next_candidate["context_route"] = str(candidate.get("selection_source") or "unknown")
         annotated.append(next_candidate)
     return annotated
+
+
+def _enforce_canonical_subject_authority(
+    candidates: list[dict[str, Any]], *, canonical_referents: set[str], named_subjects: bool,
+) -> list[dict[str, Any]]:
+    """Prevent descriptive matches from competing with discovered canonical objects."""
+    if not named_subjects or not canonical_referents:
+        return candidates
+    adjusted: list[dict[str, Any]] = []
+    for candidate in candidates:
+        next_candidate = dict(candidate)
+        grounding = dict(next_candidate.get("grounding") or {})
+        relation = dict(grounding.get("relation_proposition") or {})
+        has_identity = bool((grounding.get("object_identity") or {}).get("subjects"))
+        has_authorized_route = bool(next_candidate.get("authorized_subjects"))
+        if not has_identity and not has_authorized_route:
+            subject_ids = list(relation.get("subjects", []))
+            subject_refs = list(relation.get("subject_referents", []))
+            retained = [index for index, value in enumerate(subject_refs) if value not in canonical_referents]
+            relation["subject_referents"] = [subject_refs[index] for index in retained]
+            relation["subjects"] = [subject_ids[index] for index in retained if index < len(subject_ids)]
+            relation["eligible"] = bool(relation["subjects"])
+            grounding["relation_proposition"] = relation
+            next_candidate["grounding"] = grounding
+            next_candidate["context_subjects"] = [value for value in _coerce_string_list(next_candidate.get("context_subjects")) if value not in canonical_referents]
+        adjusted.append(next_candidate)
+    return adjusted
 
 
 def _exact_candidates(
@@ -1653,7 +1693,10 @@ def _graph_candidates(
     )
     # Preserve canonical note identity directly. Known notes must not be
     # serialized to title/path text and fuzzy-rematched.
-    grounded_context_candidates = [candidate for candidate in (context_candidates or []) if candidate.get("context_grounded")]
+    grounded_context_candidates = [
+        candidate for candidate in (context_candidates or [])
+        if bool(((candidate.get("grounding") or {}).get("graph_authority") or {}).get("may_seed_subject_graph"))
+    ]
     canonical_seed_note_ids = list(dict.fromkeys(
         str(candidate.get("note_id") or "").strip()
         for candidate in grounded_context_candidates
@@ -1703,11 +1746,15 @@ def _graph_candidates(
     expanded_note_count = 0
     hydrated_seed_note_count = 0
     context_subjects_by_note: dict[str, list[str]] = {}
+    authorized_subjects_by_note: dict[str, list[str]] = {}
     for candidate in grounded_context_candidates:
         note_id = str(candidate.get("note_id") or "")
+        authorized = _coerce_string_list(candidate.get("authorized_subjects"))
+        authorized_subjects_by_note[note_id] = list(dict.fromkeys([
+            *authorized_subjects_by_note.get(note_id, []), *authorized,
+        ]))
         context_subjects_by_note[note_id] = list(dict.fromkeys([
-            *context_subjects_by_note.get(note_id, []),
-            *_coerce_string_list(candidate.get("context_subjects")),
+            *context_subjects_by_note.get(note_id, []), *authorized,
         ]))
     edge_types_used: list[str] = []
     queue: list[tuple[str, int]] = []
@@ -1736,6 +1783,20 @@ def _graph_candidates(
             note_id = str(node_row.get("ref_id") or "")
             if not note_id:
                 continue
+            referents = _coerce_string_list(planner_retrieval_plan.get("resolved_referents"))
+            normalized_seed = _normalize_text(seed)
+            explicit_subjects = [
+                referent for referent in referents
+                if _normalize_text(referent) == normalized_seed
+            ]
+            if not explicit_subjects and len(referents) == 1 and source_name == "graph_seeds":
+                explicit_subjects = list(referents)
+            authorized_subjects_by_note[note_id] = list(dict.fromkeys([
+                *authorized_subjects_by_note.get(note_id, []), *explicit_subjects,
+            ]))
+            context_subjects_by_note[note_id] = list(dict.fromkeys([
+                *context_subjects_by_note.get(note_id, []), *explicit_subjects,
+            ]))
             node_label = str(node_row.get("label") or note_id)
             note_reasons.setdefault(note_id, []).append(f"{source_name} graph seed matched note: {node_label}")
             if note_id not in matched_seed_note_ids:
@@ -1774,9 +1835,12 @@ def _graph_candidates(
             target_note_id = str(target_node.get("ref_id") or "")
             if not target_note_id:
                 continue
+            propagated_subjects = authorized_subjects_by_note.get(current_note_id, [])
+            authorized_subjects_by_note[target_note_id] = list(dict.fromkeys([
+                *authorized_subjects_by_note.get(target_note_id, []), *propagated_subjects,
+            ]))
             context_subjects_by_note[target_note_id] = list(dict.fromkeys([
-                *context_subjects_by_note.get(target_note_id, []),
-                *context_subjects_by_note.get(current_note_id, []),
+                *context_subjects_by_note.get(target_note_id, []), *propagated_subjects,
             ]))
             target_label = str(target_node.get("label") or target_note_id)
             note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1} ({edge_direction}): {current_label} -> {target_label}")
@@ -1796,6 +1860,9 @@ def _graph_candidates(
                 "edge_target_note_id": edge_target_note_id,
                 "from_note_id": current_note_id,
                 "to_note_id": target_note_id,
+                "source_grounding_role": "object_identity" if authorized_subjects_by_note.get(current_note_id) else "evidence_unit",
+                "subject_propagation_authorized": bool(propagated_subjects),
+                "propagated_subjects": list(propagated_subjects),
             }
             target_hops = note_hops.setdefault(target_note_id, [])
             if hop_evidence not in target_hops and len(target_hops) < 8:
@@ -1868,7 +1935,8 @@ def _graph_candidates(
                 "graph_provenance": note_reasons.get(str(chunk_row["note_id"]), []),
                 "graph_hop_provenance": note_hops.get(str(chunk_row["note_id"]), []),
                 "context_subjects": context_subjects_by_note.get(str(chunk_row["note_id"]), []),
-                "context_grounded": bool(context_subjects_by_note.get(str(chunk_row["note_id"]))) or str(chunk_row["note_id"]) in selected_note_ids,
+                "authorized_subjects": authorized_subjects_by_note.get(str(chunk_row["note_id"]), []),
+                "context_grounded": bool(context_subjects_by_note.get(str(chunk_row["note_id"]))),
             }
         )
     if candidates:
@@ -2238,6 +2306,9 @@ def _temporal_candidates_from_closure(
         "searches_full_temporal_projection": False, "context_source": "semantic_closure",
         "subject_count": len(subjects), "query_context_count": 0 if subjects else 1,
         "context_mode": "named_subjects" if subjects else "query", "per_subject": [],
+        "temporal_candidates_before_proposition_filter": 0,
+        "temporal_candidates_after_proposition_filter": 0,
+        "rejection_reason_counts": {},
     }
     for subject in subjects or [""]:
         relevant: list[dict[str, Any]] = []
@@ -2246,13 +2317,22 @@ def _temporal_candidates_from_closure(
             row = rows_by_id.get(chunk_id)
             if row is None or str(row.get("note_id") or "") not in anchors_by_note:
                 continue
+            diagnostics["temporal_candidates_before_proposition_filter"] += 1
+            grounding = candidate.get("grounding") if isinstance(candidate.get("grounding"), dict) else {}
+            proposition = grounding.get("relation_proposition") if isinstance(grounding.get("relation_proposition"), dict) else {}
+            proposition_subjects_for_candidate = _coerce_string_list(proposition.get("subject_referents")) or _coerce_string_list(proposition.get("subjects"))
+            if not bool(proposition.get("eligible")):
+                for reason in _coerce_string_list(grounding.get("rejection_reasons")) or ["not_proposition_grounded"]:
+                    diagnostics["rejection_reason_counts"][reason] = diagnostics["rejection_reason_counts"].get(reason, 0) + 1
+                continue
             candidate_subjects = _coerce_string_list(candidate.get("context_subjects"))
             if subjects:
-                if subject not in candidate_subjects or not candidate.get("context_grounded"):
+                if subject not in proposition_subjects_for_candidate or subject not in candidate_subjects:
                     continue
             elif not candidate.get("context_grounded"):
                 continue
             relevant.append(candidate)
+            diagnostics["temporal_candidates_after_proposition_filter"] += 1
         # Preserve convergence while preventing one route from multiplying
         # the same semantic unit in the selected packet.
         unique: dict[str, dict[str, Any]] = {}
@@ -2534,6 +2614,11 @@ def _merge_candidates(
         merge_list(existing, candidate, "graph_hop_provenance")
         merge_list(existing, candidate, "temporal_provenance")
         merge_list(existing, candidate, "temporal_anchor_ids")
+        if isinstance(existing.get("grounding"), dict) and isinstance(candidate.get("grounding"), dict):
+            existing["grounding"] = merge_grounding_assessments(existing["grounding"], candidate["grounding"])
+        elif isinstance(candidate.get("grounding"), dict):
+            existing["grounding"] = candidate["grounding"]
+        merge_list(existing, candidate, "authorized_subjects")
         if existing.get("temporal_governing_anchor_id") is None and candidate.get("temporal_governing_anchor_id") is not None:
             existing["temporal_governing_anchor_id"] = candidate["temporal_governing_anchor_id"]
             existing["temporal_governing_anchor_type"] = candidate.get("temporal_governing_anchor_type")
@@ -2595,6 +2680,8 @@ def _merge_candidates(
             "temporal_governing_canonical_start",
             "temporal_governing_canonical_end",
             "selection_reason",
+            "grounding",
+            "authorized_subjects",
             "surface_ranks",
             "surface_raw_scores",
             "ordinal_fusion_score",
@@ -3004,6 +3091,26 @@ def _semantic_traversal(
         plan={**bound_retrieval_plan, "concepts": semantic_compiler_packet.get("concepts", [])},
         config=config,
     )
+    grounding_bundles = (bound_retrieval_plan.get("grounding_specification") or {}).get("bundles", [])
+    subject_id_to_referent = {
+        str(bundle.get("subject_id")): str(bundle.get("referent") or "")
+        for bundle in grounding_bundles if isinstance(bundle, dict) and bundle.get("referent")
+    }
+    canonical_referents = {
+        subject_id_to_referent.get(str(subject_id), "")
+        for candidate in direct_context_candidates
+        for subject_id in ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects", [])
+        if subject_id_to_referent.get(str(subject_id), "")
+    }
+    canonical_referents.update(
+        referent for referent in planner_resolved_referents
+        if any(_normalize_text(seed) == _normalize_text(referent) for seed in _coerce_string_list(bound_retrieval_plan.get("graph_seeds")))
+    )
+    direct_context_candidates = _enforce_canonical_subject_authority(
+        direct_context_candidates,
+        canonical_referents=canonical_referents,
+        named_subjects=bool(planner_resolved_referents),
+    )
     if graph_layer is not None:
         execution["layers_executed"].append(str(graph_layer.get("operator") or "graph_expand"))
         graph_candidates, graph_notes, graph_traversal_info = _graph_candidates(
@@ -3037,6 +3144,11 @@ def _semantic_traversal(
         graph_candidates,
         plan={**bound_retrieval_plan, "concepts": semantic_compiler_packet.get("concepts", [])},
         config=config,
+    )
+    graph_candidates = _enforce_canonical_subject_authority(
+        graph_candidates,
+        canonical_referents=canonical_referents,
+        named_subjects=bool(planner_resolved_referents),
     )
 
     temporal_candidates: list[dict[str, Any]] = []
@@ -3335,6 +3447,21 @@ def _semantic_traversal(
             "manifest_version": (resource_inventory_summary.get("retrieval_surface_manifest") or {}).get("manifest_version"),
             "manifest_hash": sha256_json(resource_inventory_summary.get("retrieval_surface_manifest") or {}),
         },
+        "semantic_grounding": {
+            "version": 1,
+            "subject_bundle_count": len((bound_retrieval_plan.get("grounding_specification") or {}).get("bundles", [])),
+            "named_subjects": bool((bound_retrieval_plan.get("grounding_specification") or {}).get("named_subjects")),
+            "object_identity_grounded_note_count": len({str(candidate.get("note_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates] if ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")}),
+            "evidence_grounded_unit_count": len({str(candidate.get("chunk_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates] if ((candidate.get("grounding") or {}).get("evidence_unit") or {}).get("subjects")}),
+            "proposition_grounded_unit_count": len({str(candidate.get("chunk_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates, *temporal_candidates] if ((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("eligible")}),
+            "identity_authorized_graph_seed_count": int(graph_traversal_info.get("hydrated_seed_note_count") or 0),
+            "evidence_only_graph_seed_count": max(0, int(graph_traversal_info.get("matched_seed_count") or 0) - int(graph_traversal_info.get("hydrated_seed_note_count") or 0)),
+            "graph_hops_with_subject_authority": sum(1 for hop in graph_traversal_info.get("traversal_hops", []) if hop.get("subject_propagation_authorized")),
+            "graph_hops_without_subject_authority": sum(1 for hop in graph_traversal_info.get("traversal_hops", []) if not hop.get("subject_propagation_authorized")),
+            "temporal_candidates_before_proposition_filter": int(temporal_info.get("temporal_candidates_before_proposition_filter") or 0),
+            "temporal_candidates_after_proposition_filter": int(temporal_info.get("temporal_candidates_after_proposition_filter") or 0),
+            "grounding_specification": bound_retrieval_plan.get("grounding_specification", {}),
+        },
     }
 
     retrieval_packet = {
@@ -3371,6 +3498,8 @@ def _semantic_traversal(
                 "match_reason": str(candidate.get("match_reason") or candidate.get("selection_reason") or ""),
                 "scope_match": candidate.get("scope_match"),
                 "selection_reason": str(candidate.get("selection_reason") or ""),
+                "grounding": candidate.get("grounding", {}),
+                "authorized_subjects": candidate.get("authorized_subjects", []),
             }
             for candidate in selected_candidates
         ],

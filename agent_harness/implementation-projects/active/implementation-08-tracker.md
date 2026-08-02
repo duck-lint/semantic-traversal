@@ -56,6 +56,31 @@ fresh suite ID. Production behaviour remains unchanged. Inventory
 inspection/redesign and model replacement/bakeoff remain separate future work;
 Seam 1 has not begun.
 
+## Semantic grounding authority correction
+
+PR #19 made typed closure mechanically executable: canonical seeds, independent
+lexical queries, contextual exact probes, real graph hops, and closure-fed
+temporal evaluation all reached the runtime. The post-PR-19 private rerun then
+showed that relevance, identity, and proposition support were still collapsed
+into one coarse grounding state. Broad evidence could authorize subject-bearing
+graph traversal, descendants could inherit subject provenance without sufficient
+authority, dated mentions could enter chronology without predicate support, and
+descriptive subjects could fail when wording differed.
+
+This correction adds a pure, domain-agnostic semantic-grounding module. The
+resolver builds ordered subject or query proposition bundles from existing
+compiler fields. Runtime classifies object identity, evidence units, and
+relation propositions; graph seeding and propagation now require explicit
+authority. Temporal remains a relation evaluator over proposition-grounded
+closure candidates. Compatibility booleans are derived diagnostics only and do
+not make authority decisions. Provenance merges preserve stronger routes and do
+not duplicate packet chunks.
+
+No field ontology, alias map, filter language, query recipe, model call,
+domain-specific rule, persisted-schema change, or reingest was introduced. The
+model bakeoff remains pending. The fresh private rerun remains operator-pending,
+and Seam 1 has not begun.
+
 The private schema-v2 baseline reached the one-shot repair path. The repair
 request reached the configured timeout, production returned no raw repair
 response, and the evaluator's prior requirement for a hash on every final

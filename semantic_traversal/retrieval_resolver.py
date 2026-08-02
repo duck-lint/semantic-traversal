@@ -4,6 +4,7 @@ from typing import Any
 
 from .config import RuntimeConfig
 from .retrieval_plan import SUPPORTED_EVIDENCE_REQUIREMENTS, coerce_string_list, is_search_intent
+from .semantic_grounding import build_grounding_spec
 
 
 def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config: RuntimeConfig) -> dict[str, Any]:
@@ -398,5 +399,6 @@ def bind_retrieval_plan(
         "execution_model": "contextual_surface_closure_then_relation_evaluation",
         "selection_policy": selection_policy,
         "claim_policy": claim_policy,
+        "grounding_specification": build_grounding_spec(planner_retrieval_plan).as_dict(),
     }
     return bound_plan, adjustments, inventory_summary
