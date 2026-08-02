@@ -64,6 +64,38 @@ def create_thread_paths(data_root: Path, *, config: RuntimeConfig, thread_id: st
     return paths
 
 
+def inspect_thread_state(data_root: Path, *, config: RuntimeConfig, thread_id: str) -> dict[str, Any]:
+    """Read-only summary used to prove a deterministic thread is unused.
+
+    This deliberately does not create the thread directory or expose any
+    message/state content. Production turn loading continues to use
+    ``create_thread_paths`` and therefore retains its existing semantics.
+    """
+    paths = ThreadPaths(data_root=data_root, thread_id=thread_id, config=config)
+    if not paths.thread_root.exists():
+        return {"status": "clean", "nonempty": False}
+    conversation = load_json(paths.conversation_thread_path) or {}
+    state = load_json(paths.thread_state_path) or {}
+    ledger = read_ledger(paths.thread_ledger_path)
+    messages = conversation.get("messages") if isinstance(conversation.get("messages"), list) else []
+    recent_messages = state.get("recent_messages") if isinstance(state.get("recent_messages"), list) else []
+    recent_turns = state.get("recent_semantic_turns") if isinstance(state.get("recent_semantic_turns"), list) else []
+    active_focus = state.get("active_focus") if isinstance(state.get("active_focus"), dict) else {}
+    nonempty = bool(
+        messages
+        or recent_messages
+        or recent_turns
+        or ledger
+        or int(conversation.get("latest_turn_id") or 0) > 0
+        or int(state.get("latest_turn_id") or 0) > 0
+        or any(bool(value) for value in active_focus.values())
+        or state.get("latest_user_input") is not None
+        or state.get("latest_assistant_response") is not None
+        or any(paths.turns_root.glob("turn-*"))
+    )
+    return {"status": "contaminated" if nonempty else "clean", "nonempty": nonempty}
+
+
 def load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None

@@ -35,6 +35,7 @@ from semantic_traversal.resource_inventory import (
 )
 from semantic_traversal.runtime import run_thread_turn
 from semantic_traversal.semantic_compiler import SemanticCompilerResponse, resolve_semantic_compiler_backend
+from semantic_traversal.storage import inspect_thread_state
 
 
 PRIVATE_RELATIVE_ROOT = Path("agent_harness/private")
@@ -589,6 +590,39 @@ def _load_raw_records(run_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(path.read_text(encoding="utf-8")) for path in sorted((run_dir / "raw").glob("*.json"))]
 
 
+def _thread_id_for_case(*, suite_id: str, case_id: str) -> str:
+    return "private-uat-" + hashlib.sha256(f"{suite_id}:{case_id}".encode()).hexdigest()[:24]
+
+
+def _preflight_pending_threads(*, fixture: dict[str, Any], completed: set[str], data_root: Path, config: Any) -> dict[str, Any]:
+    pending = [case for case in fixture["cases"] if case["id"] not in completed]
+    clean_count = 0
+    contaminated_count = 0
+    for case in pending:
+        status = inspect_thread_state(
+            data_root,
+            config=config,
+            thread_id=_thread_id_for_case(suite_id=fixture["suite_id"], case_id=case["id"]),
+        )
+        if status.get("nonempty"):
+            contaminated_count += 1
+        else:
+            clean_count += 1
+    result = {
+        "status": "clean" if contaminated_count == 0 else "contaminated",
+        "pending_case_count": len(pending),
+        "clean_thread_count": clean_count,
+        "contaminated_thread_count": contaminated_count,
+        "model_calls_began": False,
+    }
+    if contaminated_count:
+        raise PrivateUATUnavailable(
+            "private UAT thread preflight failed: pending deterministic threads are not clean "
+            f"(pending={len(pending)}, clean={clean_count}, contaminated={contaminated_count}); use a new suite_id"
+        )
+    return result
+
+
 def _redacted_turn(turn: dict[str, Any]) -> dict[str, Any]:
     metrics = turn.get("metrics", {})
     expectations = metrics.get("expectations", {})
@@ -691,6 +725,7 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
         for path in (run_dir / "raw").glob("*.json"):
             path.unlink()
     config = load_runtime_config(repo_root=repo_root)
+    completed = {record.get("case_id") for record in _load_raw_records(run_dir)}
     database_path = (config.data_root / config.storage_ingestion_root / config.storage_ingestion_database_filename).resolve()
     if not config.vault_root.exists():
         raise PrivateUATUnavailable(f"configured vault is unavailable: {config.vault_root}")
@@ -721,18 +756,23 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
         temporal_ok = bool(capabilities.get("temporal", {}).get("table_present"))
         if not all((exact_ok, vector_ok, graph_ok, temporal_ok)):
             raise PrivateUATUnavailable("persisted inventory preflight failed: required index is invalid")
+    thread_preflight = _preflight_pending_threads(
+        fixture=fixture,
+        completed=completed,
+        data_root=config.data_root,
+        config=config,
+    )
     llm_backend = resolve_llm_backend(repo_root=repo_root, config=config, llm_mode="auto")
     if getattr(llm_backend, "unavailable_reason", None):
         raise PrivateUATUnavailable(str(llm_backend.unavailable_reason))
     compiler = RecordingSemanticCompilerBackend(resolve_semantic_compiler_backend(config=config))
     run_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": None})
-    completed = {record.get("case_id") for record in _load_raw_records(run_dir)}
+    _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": None, "thread_preflight": thread_preflight})
     executed_turn_count = 0
     for case in fixture["cases"]:
         if case["id"] in completed:
             continue
-        thread_id = "private-uat-" + hashlib.sha256(f"{fixture['suite_id']}:{case['id']}".encode()).hexdigest()[:24]
+        thread_id = _thread_id_for_case(suite_id=fixture["suite_id"], case_id=case["id"])
         turn_records = []
         for turn_index, turn in enumerate(case["turns"], start=1):
             executed_turn_count += 1
@@ -754,7 +794,8 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
         raise PrivateUATUnavailable("observed semantic compiler call count was outside the permitted initial-plus-repair range")
     records = _load_raw_records(run_dir)
     run_sha = sha256_text(json.dumps(records, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
-    _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": run_sha, "case_count": len(records)})
+    thread_preflight["model_calls_began"] = bool(executed_turn_count)
+    _atomic_json(run_manifest_path, {"report_schema_version": REPORT_SCHEMA_VERSION, "evaluator_contract_version": EVALUATOR_CONTRACT_VERSION, "fixture_schema_version": FIXTURE_SCHEMA_VERSION, "suite_id": fixture["suite_id"], "fixture_sha256": fixture_sha, "run_sha256": run_sha, "case_count": len(records), "thread_preflight": thread_preflight})
     report = {"status": "completed", "suite_id": fixture["suite_id"], "case_count": len(records), "run_dir": str(run_dir)}
     if export_path:
         export_path = _assert_private_path(export_path, private_root, "redacted output")

@@ -37,15 +37,37 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
     bare_literals = [entry for entry in literal_entries if isinstance(entry, dict) and entry.get("raw_type") == "bare"]
     unsupported_literal_modes = sorted({str(entry.get("match")) for entry in literal_entries if isinstance(entry, dict) and str(entry.get("match") or "") not in {"", "case_sensitive_substring", "case_insensitive_substring"}})
     exact_layers = [layer for layer in planner_retrieval_plan.get("retrieval_layers", []) if isinstance(layer, dict) and str(layer.get("operator") or "") == "exact_chunk_search"]
-    unsupported_exact_layer_modes = sorted({str(layer.get("mode")) for layer in exact_layers if str(layer.get("mode") or "") not in {"", "default"}})
-    exact_contract_required = "literal_exhaustive" in declared or any(bool(layer.get("required")) for layer in exact_layers)
+    unsupported_exact_layer_modes: list[str] = []
+    exhaustive_required = "literal_exhaustive" in declared
+    exact_contract_required = exhaustive_required or any(bool(layer.get("required")) for layer in exact_layers)
     contract_blocking_reasons: list[str] = []
-    if exact_contract_required and bare_literals:
+    if exhaustive_required:
+        if not exact_layers:
+            contract_blocking_reasons.append("missing_exact_layer")
+        elif not any(bool(layer.get("required")) for layer in exact_layers):
+            contract_blocking_reasons.append("exact_layer_not_required")
+        if not literal_entries or bare_literals:
+            contract_blocking_reasons.append("literal_entries_not_structured")
+        if bare_literals:
+            contract_blocking_reasons.append("bare_literal_contract")
+        if not any(isinstance(entry, dict) and not bool(entry.get("automatic")) and str(entry.get("term") or "").strip() for entry in literal_entries):
+            contract_blocking_reasons.append("missing_explicit_literal")
+        if any(not isinstance(entry, dict) or not str(entry.get("term") or "").strip() for entry in literal_entries):
+            contract_blocking_reasons.append("empty_literal_term")
+        if any(isinstance(entry, dict) and not bool(entry.get("automatic")) and entry.get("required") is not True for entry in literal_entries):
+            contract_blocking_reasons.append("required_literal_not_required")
+        if any(isinstance(entry, dict) and str(entry.get("match") or "") not in {"case_sensitive_substring", "case_insensitive_substring"} for entry in literal_entries):
+            contract_blocking_reasons.append("unsupported_literal_match_mode")
+        if not any(bool(layer.get("return_total_count")) for layer in exact_layers):
+            contract_blocking_reasons.append("return_total_count_not_requested")
+        scope_filters = planner_retrieval_plan.get("scope_filters")
+        if isinstance(scope_filters, dict) and scope_filters:
+            contract_blocking_reasons.append("exact_scope_not_exhaustive")
+    elif exact_contract_required and bare_literals:
         contract_blocking_reasons.append("bare_literal_contract")
     if unsupported_literal_modes:
-        contract_blocking_reasons.append("unsupported_literal_match_mode")
-    if unsupported_exact_layer_modes:
-        contract_blocking_reasons.append("unsupported_exact_layer_mode")
+        if "unsupported_literal_match_mode" not in contract_blocking_reasons:
+            contract_blocking_reasons.append("unsupported_literal_match_mode")
     status = "complete" if not (unsupported or missing_operators or unavailable_operators or invalid_operator_configuration or contract_blocking_reasons) else "incomplete"
     return {
         "declared_requirements": declared,
@@ -63,6 +85,8 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
             "completeness": "incomplete" if contract_blocking_reasons else "complete",
             "repair_triggered": False,
             "automatic_support_excluded_from_coverage": True,
+            "explicit_literal_completeness": "incomplete" if contract_blocking_reasons else "complete",
+            "exhaustive_total_count_readiness": bool(exhaustive_required and any(bool(layer.get("return_total_count")) for layer in exact_layers) and not any(reason in contract_blocking_reasons for reason in {"missing_exact_layer", "exact_layer_not_required", "return_total_count_not_requested", "literal_entries_not_structured", "missing_explicit_literal", "empty_literal_term", "required_literal_not_required", "unsupported_literal_match_mode", "exact_scope_not_exhaustive"})),
         },
         "blocking_reasons": contract_blocking_reasons,
         "repair_attempted": False,

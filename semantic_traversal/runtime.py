@@ -492,8 +492,15 @@ def _canonicalize_compiler_packet(
             }
         )
     }
-    if planner_diagnostics.get("literal_contract") is not None:
-        packet["planner_diagnostics"]["literal_contract"] = dict(planner_diagnostics["literal_contract"])
+    for key in (
+        "literal_contract",
+        "exact_layer_mode_count",
+        "ignored_redundant_exact_layer_mode_count",
+        "redundant_exact_layer_modes_ignored",
+    ):
+        if planner_diagnostics.get(key) is not None:
+            value = planner_diagnostics[key]
+            packet["planner_diagnostics"][key] = dict(value) if isinstance(value, dict) else list(value) if isinstance(value, list) else value
     return packet
 
 
@@ -1068,6 +1075,7 @@ def _grounding_summary(*, specification: dict[str, Any], candidates: list[dict[s
         "nonempty_predicate_residual_count": sum(bool(atom.get("predicate_residual")) for atom in atoms),
         "canonical_object_identity_note_count": len(identity_notes),
         "descriptive_subject_count": sum(not bool((candidate.get("grounding") or {}).get("object_identity", {}).get("subjects")) and bool((candidate.get("grounding") or {}).get("evidence_unit", {}).get("subjects")) for candidate in unique_candidates.values()),
+        "descriptive_subject_exact_span_bypass_count": sum(bool((candidate.get("grounding") or {}).get("descriptive_subject_bypass")) for candidate in unique_candidates.values()),
         "evidence_grounded_unit_count": len(evidence_units),
         "proposition_grounded_unit_count": len(proposition_units),
         "multi_subject_proposition_unit_count": sum(len(((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("subjects", [])) > 1 for candidate in unique_candidates.values()),
@@ -3170,7 +3178,10 @@ def _semantic_traversal(
         "bound_count": len(bound_resolved_referents),
         "order_preserved": planner_resolved_referents == bound_resolved_referents,
     }
-    plan_completeness = validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
+    existing_completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness")
+    plan_completeness = dict(existing_completeness) if isinstance(existing_completeness, dict) else validate_plan_completeness(
+        planner_retrieval_plan=planner_retrieval_plan, config=config
+    )
     plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
     plan_executability = dict(plan_executability) if isinstance(plan_executability, dict) else {}
     if referent_propagation["status"] == "failed":
@@ -3817,14 +3828,18 @@ def _coverage_report(
 def _blocked_turn_response(*, blocking_reasons: list[str]) -> str:
     """Return an honest assistant message for a turn that never reached synthesis."""
     reasons = " ".join(str(reason).strip() for reason in blocking_reasons if str(reason).strip()).lower()
+    if "compiler-declared evidence requirements are incomplete" in reasons:
+        return "I couldn't complete the required retrieval because the retrieval plan remained structurally incomplete after one repair attempt. No corpus search result was established."
+    if "required" in reasons and "unavailable" in reasons:
+        return "I couldn't complete the required retrieval because a required retrieval surface was unavailable. No complete result was established."
     if "non-executable retrieval plan" in reasons:
-        return "I couldn't search the vault because the retrieval plan did not contain usable search inputs."
+        return "I couldn't complete the required retrieval because the retrieval plan was not executable. No corpus search result was established."
     if "semantic compiler" in reasons:
         return "I couldn't interpret that turn because the semantic compiler is unavailable or returned invalid output."
     if "ingestion database" in reasons:
         return "I couldn't search the vault because the ingestion index is unavailable. Run ingestion, then retry."
-    if "no chunks were selected" in reasons:
-        return "I couldn't find matching material in the indexed vault. Try rephrasing the request or narrowing its scope."
+    if "no chunks were selected" in reasons and "exact" not in reasons:
+        return "The retrieval ran, but the available evidence was not sufficient to answer reliably."
     if "llm backend unavailable" in reasons or "frontier llm" in reasons:
         return "I prepared the turn, but the frontier agent was unavailable. Please retry when the frontier provider is available."
     return "I couldn't complete that turn. Please retry after checking the runtime diagnostics."
@@ -4233,6 +4248,9 @@ def run_thread_turn(
         inventory_projection_diagnostics=inventory_projection_diagnostics,
     )
     semantic_compiler_diagnostic["plan_repair"] = repair_record
+    semantic_compiler_diagnostic["plan_completeness"] = dict(
+        semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness") or {}
+    )
     planner_retrieval_plan = semantic_compiler_packet.get("planner_retrieval_plan") if isinstance(semantic_compiler_packet.get("planner_retrieval_plan"), dict) else {}
     if not planner_retrieval_plan:
         planner_retrieval_plan = build_default_retrieval_plan(

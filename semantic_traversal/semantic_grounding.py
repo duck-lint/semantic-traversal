@@ -309,12 +309,22 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
                         break
             if subject_matches:
                 subject_evidence_by_subject[bundle.subject_id] = subject_matches
-            elif len(specification.bundles) == 1 and bundle.referent and re.search(
-                rf"(?<!\w){re.escape(bundle.referent.casefold())}(?!\w)", candidate_text
+            elif len(specification.bundles) == 1 and bundle.referent and any(
+                atom.role in {"predicate_only", "subject_and_predicate"}
+                and atom.predicate_residual
+                and _atom_matches(candidate, atom)
+                for atom in bundle.supporting_context_atoms
             ):
                 subject_evidence_by_subject[bundle.subject_id] = [{
                     "kind": "descriptive_subject", "value": bundle.referent,
-                    "source": "candidate_text", "role": "subject_only", "match": "descriptive_subject",
+                    "source": "supporting_context", "role": "subject_only", "match": "descriptive_subject",
+                    "established_by": [
+                        atom.as_dict()
+                        for atom in bundle.supporting_context_atoms
+                        if atom.role in {"predicate_only", "subject_and_predicate"}
+                        and atom.predicate_residual
+                        and _atom_matches(candidate, atom)
+                    ],
                 }]
         matched = [match for atom in atoms if atom.role != "subject_only" and (match := _atom_matches(candidate, atom))]
         predicate_matches = [match for atom in atoms if atom.role in {"predicate_only", "subject_and_predicate"} and atom.predicate_residual and (match := _atom_matches(candidate, atom))]
@@ -398,6 +408,12 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
         "predicate_grounded": sorted(predicate_by_subject),
         "proposition_grounded": sorted(assessment["relation_proposition"]["subjects"]),
     }
+    assessment["descriptive_subject_bypass"] = any(
+        item.get("match") == "descriptive_subject" and item.get("source") == "supporting_context"
+        for evidence in subject_evidence_by_subject.values()
+        for item in evidence
+        if isinstance(item, dict)
+    )
     if specification.named_subjects and not assessment["relation_proposition"]["eligible"]:
         assessment["rejection_reasons"].append("subject_or_supporting_context_not_grounded")
     if not specification.named_subjects and assessment["relation_proposition"]["eligible"]:
