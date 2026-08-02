@@ -595,9 +595,11 @@ def _repair_incomplete_compiler_plan(
         "latency_ms": latency_ms,
         "outcome": "complete" if repaired_completeness.get("status") == "complete" else "incomplete",
         "response_status": repair_response.status,
+        "initial_plan_completeness": initial_completeness,
     }
     repaired_completeness["repair_attempted"] = True
     repaired_completeness["repair_result"] = repair_record["outcome"]
+    repaired_completeness["repair_triggered"] = True
     if isinstance(repaired_completeness.get("literal_contract"), dict):
         repaired_completeness["literal_contract"]["repair_triggered"] = True
     repaired_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = repaired_completeness
@@ -619,7 +621,8 @@ def _incomplete_plan_artifacts(
         config=config,
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
-    completeness = validate_plan_completeness(planner_retrieval_plan=planner, config=config)
+    completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    completeness = dict(completeness) if isinstance(completeness, dict) else validate_plan_completeness(planner_retrieval_plan=planner, config=config)
     plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
     note = "retrieval blocked: compiler-declared evidence requirements are incomplete"
     manifest = {
@@ -3170,7 +3173,8 @@ def _semantic_traversal(
         "bound_count": len(bound_resolved_referents),
         "order_preserved": planner_resolved_referents == bound_resolved_referents,
     }
-    plan_completeness = validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
+    plan_completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    plan_completeness = dict(plan_completeness) if isinstance(plan_completeness, dict) else validate_plan_completeness(planner_retrieval_plan=planner_retrieval_plan, config=config)
     plan_executability = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {})
     plan_executability = dict(plan_executability) if isinstance(plan_executability, dict) else {}
     if referent_propagation["status"] == "failed":
@@ -3665,6 +3669,49 @@ def _semantic_traversal(
             "temporal_candidates_before_proposition_filter": int(temporal_info.get("temporal_candidates_before_proposition_filter") or 0),
             "temporal_candidates_after_proposition_filter": int(temporal_info.get("temporal_candidates_after_proposition_filter") or 0),
             "grounding_specification": bound_retrieval_plan.get("grounding_specification", {}),
+            "single_descriptive_subject_candidate_count": sum(
+                1 for candidate in merged_candidates
+                if len((bound_retrieval_plan.get("grounding_specification") or {}).get("bundles", [])) == 1
+                and not ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")
+                and ((candidate.get("grounding") or {}).get("subject_evidence") or {}).get("subject-0")
+            ),
+            "descriptive_subject_grounded_unit_count": sum(
+                1 for candidate in merged_candidates
+                if not ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")
+                and ((candidate.get("grounding") or {}).get("evidence_unit") or {}).get("subjects")
+            ),
+            "descriptive_subject_proposition_count": sum(
+                1 for candidate in merged_candidates
+                if not ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")
+                and ((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("eligible")
+            ),
+            "exact_referent_span_bypass_count": sum(
+                1 for candidate in merged_candidates
+                for evidence in (((candidate.get("grounding") or {}).get("subject_evidence") or {}).values())
+                if isinstance(evidence, list)
+                for item in evidence
+                if isinstance(item, dict) and item.get("match") in {"descriptive_subject", "contextual_text", "retrieval_provenance"}
+            ),
+            "raw_exact_layer_mode_presence_count": sum(
+                1 for layer in requested_layers
+                if isinstance(layer, dict) and str(layer.get("operator") or "") == "exact_chunk_search"
+                and str(layer.get("mode") or "") not in {"", "default"}
+            ),
+            "redundant_exact_layer_mode_ignored_count": sum(
+                1 for layer in requested_layers
+                if isinstance(layer, dict) and str(layer.get("operator") or "") == "exact_chunk_search"
+                and str(layer.get("mode") or "") not in {"", "default"}
+            ),
+            "structured_literal_count": sum(isinstance(entry, dict) and not entry.get("automatic") for entry in explicit_literal_terms),
+            "required_structured_literal_count": sum(isinstance(entry, dict) and bool(entry.get("required")) and not entry.get("automatic") for entry in explicit_literal_terms),
+            "exhaustive_total_count_readiness": bool(exact_info.get("return_total_count_requested") and exact_info.get("count_status") == "completed"),
+            "explicit_exact_contract_status": (plan_completeness.get("literal_contract") or {}).get("completeness"),
+            "automatic_exact_support_status": "present" if runtime_contextual_terms else "none",
+            "initial_completeness_status": (semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_repair") or {}).get("initial_plan_completeness", {}).get("status"),
+            "final_completeness_status": plan_completeness.get("status"),
+            "repair_attempted": bool((semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_repair") or {}).get("attempted")),
+            "repair_result": (semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_repair") or {}).get("outcome"),
+            "retrieval_started": bool(execution.get("layers_executed")),
         },
     }
 
@@ -3796,6 +3843,15 @@ def _coverage_report(
     selection_notes = traversal_manifest.get("selection_notes") if isinstance(traversal_manifest, dict) else []
     if isinstance(selection_notes, list) and any("ingestion database unavailable" in str(note).lower() for note in selection_notes):
         blocking_reasons.append("ingestion database unavailable; run ingest before asking corpus questions")
+    retrieval_started = bool((traversal_manifest.get("execution") or {}).get("layers_executed"))
+    if not retrieval_started and isinstance(plan_completeness, dict) and plan_completeness.get("status") != "complete":
+        deterministic_block_reason = "structurally_incomplete_after_repair"
+    elif not retrieval_started and any("ingestion database unavailable" in reason for reason in blocking_reasons):
+        deterministic_block_reason = "required_surface_unavailable"
+    elif retrieval_started and blocking_reasons:
+        deterministic_block_reason = "retrieval_evidence_inadequate"
+    else:
+        deterministic_block_reason = None
     return {
         # All coverage and stop-gate policy has already been reduced to this
         # list above.  Do not re-derive intent from retired local names here:
@@ -3811,12 +3867,20 @@ def _coverage_report(
         "selected_chunk_count": selected_count,
         "plan_completeness": plan_completeness,
         "plan_executability": plan_executability,
+        "retrieval_started": retrieval_started,
+        "deterministic_block_reason": deterministic_block_reason,
     }
 
 
-def _blocked_turn_response(*, blocking_reasons: list[str]) -> str:
+def _blocked_turn_response(*, blocking_reasons: list[str], retrieval_started: bool = False, deterministic_block_reason: str | None = None) -> str:
     """Return an honest assistant message for a turn that never reached synthesis."""
     reasons = " ".join(str(reason).strip() for reason in blocking_reasons if str(reason).strip()).lower()
+    if deterministic_block_reason == "structurally_incomplete_after_repair":
+        return "I couldn't complete the required retrieval because the retrieval plan remained structurally incomplete after one repair attempt. No corpus search result was established."
+    if deterministic_block_reason == "required_surface_unavailable":
+        return "I couldn't complete the required retrieval because a required retrieval surface was unavailable. No complete result was established."
+    if deterministic_block_reason == "retrieval_evidence_inadequate" and retrieval_started:
+        return "The retrieval ran, but the available evidence was not sufficient to answer reliably."
     if "non-executable retrieval plan" in reasons:
         return "I couldn't search the vault because the retrieval plan did not contain usable search inputs."
     if "semantic compiler" in reasons:
@@ -4299,6 +4363,8 @@ def run_thread_turn(
             "candidate_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
             "selected_counts": {"exact": 0, "lexical": 0, "vector": 0, "graph": 0},
             "selected_chunk_ids": [],
+            "plan_completeness": semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {}),
+            "plan_executability": semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {}),
             "selection_notes": ["ingestion database unavailable"],
             "coverage": {
                 "exact_search_performed": False,
@@ -4308,12 +4374,15 @@ def run_thread_turn(
                 "matching_note_count": 0,
                 "coverage_claims_allowed": False,
                 "negative_claims_allowed": False,
+                "plan_completeness": semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {}),
+                "plan_executability": semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_executability", {}),
             },
             "limits": ["No ingestion database available."],
         }
         retrieval_packet = {
             "bound_retrieval_plan": bound_retrieval_plan,
             "coverage": semantic_traversal_manifest["coverage"],
+            "diagnostics": {"plan_completeness": semantic_traversal_manifest["plan_completeness"]},
             "limits": semantic_traversal_manifest["limits"],
             "selected_chunks": [],
             "matched_chunk_count": 0,
@@ -4328,6 +4397,29 @@ def run_thread_turn(
         traversal_manifest=semantic_traversal_manifest,
         retrieval_packet=retrieval_packet,
     )
+
+    # The post-repair canonical completeness record is the sole authority.
+    # Persist the same projection instead of allowing each artifact to
+    # recompute and silently discard repair provenance.
+    authoritative_completeness = semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_completeness", {})
+    if not isinstance(authoritative_completeness, dict):
+        authoritative_completeness = {}
+    semantic_compiler_diagnostic["plan_completeness"] = dict(authoritative_completeness)
+    semantic_compiler_diagnostic["plan_repair"] = dict(
+        semantic_compiler_packet.get("planner_diagnostics", {}).get("plan_repair")
+        or repair_record
+    )
+    semantic_traversal_manifest["plan_completeness"] = dict(authoritative_completeness)
+    semantic_traversal_manifest["plan_repair"] = dict(semantic_compiler_diagnostic["plan_repair"])
+    semantic_traversal_manifest.setdefault("coverage", {})["plan_completeness"] = dict(authoritative_completeness)
+    semantic_traversal_manifest["coverage"]["plan_repair"] = dict(semantic_compiler_diagnostic["plan_repair"])
+    retrieval_packet["diagnostics"] = {
+        "plan_completeness": dict(authoritative_completeness),
+        "plan_repair": dict(semantic_compiler_diagnostic["plan_repair"]),
+    }
+    retrieval_packet.setdefault("coverage", {})["plan_completeness"] = dict(authoritative_completeness)
+    coverage_report["plan_completeness"] = dict(authoritative_completeness)
+    coverage_report["plan_repair"] = dict(semantic_compiler_diagnostic["plan_repair"])
 
     blocking_reasons = list(coverage_report.get("blocking_reasons") or [])
     llm_unavailable_reason = getattr(llm_backend, "unavailable_reason", None)
@@ -4368,7 +4460,11 @@ def run_thread_turn(
             # frontier provider fails. The caller can retry the same thread.
             blocking_reasons.append(f"frontier LLM failed: {type(exc).__name__}: {exc}")
             runtime_outcome = "blocked"
-            assistant_response_text = _blocked_turn_response(blocking_reasons=blocking_reasons)
+            assistant_response_text = _blocked_turn_response(
+                blocking_reasons=blocking_reasons,
+                retrieval_started=bool(coverage_report.get("retrieval_started")),
+                deterministic_block_reason=coverage_report.get("deterministic_block_reason"),
+            )
             describe_call = getattr(llm_backend, "describe_call", None)
             llm_metadata = dict(describe_call()) if callable(describe_call) else {
                 "mode": getattr(llm_backend, "mode_name", "unknown"),
@@ -4389,7 +4485,11 @@ def run_thread_turn(
                 blocking_reasons=blocking_reasons,
             )
     else:
-        assistant_response_text = _blocked_turn_response(blocking_reasons=blocking_reasons)
+        assistant_response_text = _blocked_turn_response(
+            blocking_reasons=blocking_reasons,
+            retrieval_started=bool(coverage_report.get("retrieval_started")),
+            deterministic_block_reason=coverage_report.get("deterministic_block_reason"),
+        )
 
     thread_state = _update_thread_state(
         prior_thread_state=prior_thread_state,

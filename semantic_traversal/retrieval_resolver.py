@@ -37,15 +37,35 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
     bare_literals = [entry for entry in literal_entries if isinstance(entry, dict) and entry.get("raw_type") == "bare"]
     unsupported_literal_modes = sorted({str(entry.get("match")) for entry in literal_entries if isinstance(entry, dict) and str(entry.get("match") or "") not in {"", "case_sensitive_substring", "case_insensitive_substring"}})
     exact_layers = [layer for layer in planner_retrieval_plan.get("retrieval_layers", []) if isinstance(layer, dict) and str(layer.get("operator") or "") == "exact_chunk_search"]
-    unsupported_exact_layer_modes = sorted({str(layer.get("mode")) for layer in exact_layers if str(layer.get("mode") or "") not in {"", "default"}})
+    redundant_exact_layer_modes = sorted({str(layer.get("mode")) for layer in exact_layers if str(layer.get("mode") or "") not in {"", "default"}})
     exact_contract_required = "literal_exhaustive" in declared or any(bool(layer.get("required")) for layer in exact_layers)
     contract_blocking_reasons: list[str] = []
     if exact_contract_required and bare_literals:
         contract_blocking_reasons.append("bare_literal_contract")
     if unsupported_literal_modes:
         contract_blocking_reasons.append("unsupported_literal_match_mode")
-    if unsupported_exact_layer_modes:
-        contract_blocking_reasons.append("unsupported_exact_layer_mode")
+    if "literal_exhaustive" in declared:
+        exact_layer = next((layer for layer in exact_layers if bool(layer.get("required"))), None)
+        if exact_layer is None:
+            contract_blocking_reasons.append("required_exact_layer_missing")
+        if not literal_entries:
+            contract_blocking_reasons.append("explicit_literal_contract_missing")
+        else:
+            for entry in literal_entries:
+                if not isinstance(entry, dict) or entry.get("raw_type") == "bare":
+                    contract_blocking_reasons.append("structured_literal_contract_required")
+                    break
+                if not str(entry.get("term") or "").strip():
+                    contract_blocking_reasons.append("empty_literal_term")
+                    break
+                if not bool(entry.get("required")):
+                    contract_blocking_reasons.append("required_literal_contract_incomplete")
+                    break
+                if str(entry.get("match") or "") not in {"case_sensitive_substring", "case_insensitive_substring"}:
+                    contract_blocking_reasons.append("unsupported_literal_match_mode")
+                    break
+        if exact_layer is not None and exact_layer.get("return_total_count") is not True:
+            contract_blocking_reasons.append("exact_total_count_not_requested")
     status = "complete" if not (unsupported or missing_operators or unavailable_operators or invalid_operator_configuration or contract_blocking_reasons) else "incomplete"
     return {
         "declared_requirements": declared,
@@ -58,7 +78,8 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
             "bare_literal_count": len(bare_literals),
             "structured_literal_count": sum(isinstance(entry, dict) and entry.get("raw_type") != "bare" for entry in literal_entries),
             "unsupported_literal_match_modes": unsupported_literal_modes,
-            "unsupported_exact_layer_modes": unsupported_exact_layer_modes,
+            "redundant_exact_layer_modes": redundant_exact_layer_modes,
+            "redundant_exact_layer_mode_ignored": len(redundant_exact_layer_modes),
             "exact_contract_required": exact_contract_required,
             "completeness": "incomplete" if contract_blocking_reasons else "complete",
             "repair_triggered": False,
@@ -67,6 +88,7 @@ def validate_plan_completeness(*, planner_retrieval_plan: dict[str, Any], config
         "blocking_reasons": contract_blocking_reasons,
         "repair_attempted": False,
         "repair_result": None,
+        "repair_triggered": False,
         "status": status,
     }
 
