@@ -107,7 +107,7 @@ semantic_compiler:
   model: qwen3:8b
   base_url: "http://localhost:11434"
   request_timeout_seconds: 120
-  context_window_tokens: 20000
+  context_window_tokens: 40960
   inventory_projection:
     max_chars: 24000
     low_cardinality_max_unique: 24
