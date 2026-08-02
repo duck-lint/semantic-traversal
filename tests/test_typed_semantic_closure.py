@@ -72,6 +72,16 @@ class TypedSemanticClosureContractTests(unittest.TestCase):
         self.assertTrue({"lexical_chunk_search", "vector_search", "graph_expand"}.issubset(expanded))
         self.assertTrue(all(not layer.get("required") for layer in bound["expanded_support_surfaces"]))
 
+        automatic_graph = next(layer for layer in bound["expanded_support_surfaces"] if layer["operator"] == "graph_expand")
+        self.assertIsNone(automatic_graph["requested_depth"])
+        self.assertEqual(automatic_graph["effective_depth"], self.config.retrieval_graph_default_depth)
+        self.assertEqual(automatic_graph["depth_adjustment"], "defaulted")
+        self.assertEqual(automatic_graph["source"], "runtime_expansion")
+        self.assertTrue(automatic_graph["automatic"])
+        self.assertTrue(bound["runtime_contextual_exact_terms"])
+        self.assertEqual(bound["runtime_contextual_exact_terms"][0]["automatic"], True)
+        self.assertEqual(bound["runtime_contextual_exact_terms"][0]["exhaustive"], False)
+
     def test_binding_does_not_turn_referents_into_filters(self) -> None:
         plan = {"concepts": [], "resolved_referents": ["unlisted semantic subject"], "semantic_queries": [], "lexical_queries": [], "literal_terms": [], "graph_seeds": [], "evidence_requirements": [], "retrieval_layers": []}
         bound, _, _ = bind_retrieval_plan(planner_retrieval_plan=plan, inventory_summary={"frontmatter_facets": {}}, config=self.config)

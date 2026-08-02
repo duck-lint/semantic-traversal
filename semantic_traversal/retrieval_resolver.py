@@ -169,10 +169,20 @@ def bind_retrieval_plan(
 
     literal_terms = [entry for entry in planner_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
     retrieval_layers = [entry for entry in planner_retrieval_plan.get("retrieval_layers", []) if isinstance(entry, dict)]
-    canonical_layers: list[dict[str, Any]] = []
-    for raw_layer in retrieval_layers:
+    def canonicalize_layer(
+        raw_layer: dict[str, Any],
+        *,
+        source: str,
+        automatic: bool = False,
+        support_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply one runtime-owned contract to requested and support layers."""
         layer = dict(raw_layer)
         operator = str(layer.get("operator") or "")
+        layer["source"] = source
+        layer["automatic"] = bool(automatic)
+        if support_reason:
+            layer["support_reason"] = support_reason
         if operator in {"lexical_chunk_search", "vector_search", "graph_expand", "temporal_retrieve"}:
             if operator == "lexical_chunk_search":
                 default_limit = config.retrieval_planner_defaults["lexical_limit"]
@@ -270,7 +280,12 @@ def bind_retrieval_plan(
             requested_authorities = [str(value) for value in layer.get("authorities", []) if str(value).strip()]
             layer["authorities"] = [value for value in requested_authorities if value in config.retrieval_temporal_allowed_authorities] or list(config.retrieval_temporal_allowed_authorities)
             layer["include_unresolved"] = bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default))
-        canonical_layers.append(layer)
+        return layer
+
+    canonical_layers: list[dict[str, Any]] = [
+        canonicalize_layer(raw_layer, source="compiler")
+        for raw_layer in retrieval_layers
+    ]
     retrieval_layers = canonical_layers
     requested_operators = {str(layer.get("operator") or "") for layer in retrieval_layers}
     expanded_support_surfaces: list[dict[str, Any]] = []
@@ -280,12 +295,19 @@ def bind_retrieval_plan(
             return
         layer: dict[str, Any] = {"operator": operator, "required": False, "automatic": True, "support_reason": reason}
         if limit is not None:
-            layer.update({"limit": int(limit), "effective_limit": int(limit)})
-        expanded_support_surfaces.append(layer)
+            layer["limit"] = int(limit)
+        expanded_support_surfaces.append(canonicalize_layer(layer, source="runtime_expansion", automatic=True, support_reason=reason))
 
     # Compiler layers express required evidence/explicit intent.  They do not
     # suppress structurally compatible grounding surfaces.
-    if literal_terms:
+    contextual_atoms = [
+        *[("concept", value) for value in concepts],
+        *[("semantic_query", value) for value in semantic_queries],
+        *[("lexical_query", value) for value in coerce_string_list(planner_retrieval_plan.get("lexical_queries"))],
+        *[("resolved_referent", value) for value in resolved_referents],
+        *[("graph_seed", value) for value in coerce_string_list(planner_retrieval_plan.get("graph_seeds"))],
+    ]
+    if literal_terms or contextual_atoms:
         add_support("exact_chunk_search", reason="contextual exact grounding")
     if semantic_queries or coerce_string_list(planner_retrieval_plan.get("lexical_queries")) or concepts:
         add_support("lexical_chunk_search", reason="contextual lexical grounding", limit=config.retrieval_lexical_max_candidates)
@@ -293,6 +315,26 @@ def bind_retrieval_plan(
         add_support("vector_search", reason="contextual semantic grounding", limit=config.retrieval_vector_max_candidates)
     if config.graph_traversal_enabled and (semantic_queries or concepts or resolved_referents or coerce_string_list(planner_retrieval_plan.get("graph_seeds"))):
         add_support("graph_expand", reason="graph propagation from grounded semantic objects", limit=config.retrieval_graph_max_candidates)
+    runtime_contextual_exact_terms: list[dict[str, Any]] = []
+    seen_contextual_terms: set[str] = set()
+    explicit_term_values = {
+        str(entry.get("term") or "").strip()
+        for entry in literal_terms
+        if isinstance(entry, dict)
+    }
+    for atom_type, value in contextual_atoms:
+        value = str(value).strip()
+        if not value or len(value) < 3 or value in explicit_term_values or value in seen_contextual_terms:
+            continue
+        seen_contextual_terms.add(value)
+        runtime_contextual_exact_terms.append({
+            "term": value,
+            "match": "case_insensitive_substring",
+            "required": False,
+            "automatic": True,
+            "source_atom": atom_type,
+            "exhaustive": False,
+        })
     expanded_layers = [*retrieval_layers, *expanded_support_surfaces]
     requested_selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})
     runtime_selection_policy = config.retrieval_planner_defaults["selection_policy"]
@@ -344,6 +386,7 @@ def bind_retrieval_plan(
         "resolved_referents": resolved_referents,
         "scope_filters": scope_filters,
         "literal_terms": literal_terms,
+        "runtime_contextual_exact_terms": runtime_contextual_exact_terms,
         "evidence_requirements": coerce_string_list(planner_retrieval_plan.get("evidence_requirements")),
         "semantic_queries": semantic_queries,
         "lexical_queries": coerce_string_list(planner_retrieval_plan.get("lexical_queries")) or concepts,

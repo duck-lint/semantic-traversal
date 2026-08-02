@@ -794,6 +794,26 @@ class RetrievalContractTests(unittest.TestCase):
         self.assertEqual(diagnostics["returned_candidate_count"], 1)
         self.assertEqual(diagnostics["candidate_count"], 1)
 
+    def test_lexical_queries_execute_as_independent_atoms(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata)")
+        rows = [
+            {"chunk_id": "c-a", "note_id": "n-a", "note_title": "A", "section_label": "Body", "relative_path": "a.md", "paragraph_text": "amber signal", "frontmatter_semantics_json": "{}"},
+            {"chunk_id": "c-b", "note_id": "n-b", "note_title": "B", "section_label": "Body", "relative_path": "b.md", "paragraph_text": "beryl signal", "frontmatter_semantics_json": "{}"},
+        ]
+        connection.executemany(
+            "INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows,
+        )
+        candidates, _, diagnostics = _lexical_candidates(
+            rows, ["amber signal", "beryl signal"], connection=connection, limit=10,
+            config=self.config, mode="all_tokens", return_diagnostics=True,
+        )
+        self.assertEqual({item["chunk_id"] for item in candidates}, {"c-a", "c-b"})
+        self.assertEqual([item["query"] for item in diagnostics["query_results"]], ["amber signal", "beryl signal"])
+        self.assertEqual({tuple(item["lexical_query_provenance"]) for item in candidates}, {("amber signal",), ("beryl signal",)})
+        connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()

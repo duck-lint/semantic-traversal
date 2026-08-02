@@ -827,6 +827,12 @@ def _non_exact_layer_manifest(
         "maximum_limit": layer.get("maximum_limit"),
         "effective_limit": layer.get("effective_limit", layer.get("limit")),
         "limit_adjustment": layer.get("limit_adjustment", "none"),
+        "requested_depth": layer.get("requested_depth"),
+        "effective_depth": layer.get("effective_depth"),
+        "depth_adjustment": layer.get("depth_adjustment", "none"),
+        "source": layer.get("source"),
+        "automatic": bool(layer.get("automatic")),
+        "support_reason": layer.get("support_reason"),
         "candidate_count": int(candidate_count),
         "selected_contribution_count": int(selected_contribution_count),
         "selected_chunk_ids": list(selected_chunk_ids or []),
@@ -967,6 +973,9 @@ def _exact_candidates(
                 "term": term,
                 "match": str(entry.get("match") or "case_insensitive_substring").strip(),
                 "required": bool(entry.get("required")),
+                "automatic": bool(entry.get("automatic")),
+                "source_atom": entry.get("source_atom"),
+                "exhaustive": bool(entry.get("exhaustive", not entry.get("automatic"))),
             })
     terms = [entry["term"] for entry in term_entries]
     base_info = {
@@ -1021,6 +1030,7 @@ def _exact_candidates(
     per_term: dict[str, dict[str, Any]] = {
         entry["term"]: {
             "term": entry["term"], "required": entry["required"], "match": entry["match"],
+            "automatic": entry["automatic"], "source_atom": entry["source_atom"], "exhaustive": entry["exhaustive"],
             "status": "failed" if entry["match"] not in {"case_sensitive_substring", "case_insensitive_substring"} else "completed_no_matches",
             "matching_chunk_count": 0, "matching_note_count": 0, "total_occurrence_count": 0,
             "returned_candidate_count": 0, "selected_exact_chunk_count": 0, "selected_chunk_ids": [],
@@ -1037,7 +1047,8 @@ def _exact_candidates(
         for entry in term_entries:
             term = entry["term"]
             term_occurrences: list[tuple[str, int, int, str]] = []
-            searchable_values = [(field, str(row.get(field) or "")) for field in fields]
+            searchable_fields = (("note_id",) + fields) if entry["automatic"] else fields
+            searchable_values = [(field, str(row.get(field) or "")) for field in searchable_fields]
             for path, value in _flatten_semantic_leaves(_parse_frontmatter_semantics(row.get("frontmatter_semantics_json"))):
                 searchable_values.extend(((path, path), (path, value)))
             for field, value in searchable_values:
@@ -1058,6 +1069,8 @@ def _exact_candidates(
                 evidence.append({
                     "term": term,
                     "match": entry["match"],
+                    "automatic": entry["automatic"],
+                    "source_atom": entry["source_atom"],
                     "matched_fields": [field],
                     "occurrence_count_in_chunk": len([item for item in term_occurrences if item[0] == field]),
                     "representative_context": representative,
@@ -1209,6 +1222,7 @@ def _lexical_candidates(
         "requested_queries": list(query_terms),
         "original_query": list(query_terms),
         "effective_query": None,
+        "query_results": [],
         "requested_mode": mode,
         "effective_mode": None,
         "fts_available": None,
@@ -1236,53 +1250,68 @@ def _lexical_candidates(
         message = [f"lexical search unavailable: unsupported mode {selected_mode}"]
         return ([], message, diagnostics) if return_diagnostics else ([], message)
     terms = [str(term).strip() for term in query_terms if str(term).strip()]
-    tokens = [token for term in terms for token in QUERY_TOKEN_RE.findall(term.casefold())]
-    if not tokens:
+    if not terms:
         diagnostics["status"] = "skipped_no_input"
         return finish()
-    if selected_mode == "exact_phrase":
-        # Keep phrase punctuation as literal content while rejecting a
-        # punctuation-only request before it reaches FTS5.
-        normalized_phrase = " ".join(" ".join(terms).split())
-        fts_query = _serialize_fts5_atom(normalized_phrase)
-    else:
-        fts_query = _serialize_fts5_query_atoms(tokens, mode=selected_mode)
-    if not fts_query:
+    rows_by_id = {str(row.get("chunk_id")): row for row in _scoped_chunk_rows(chunk_rows, scope_filters or {})}
+    merged: dict[str, dict[str, Any]] = {}
+    raw_match_count = 0
+    scoped_match_count = 0
+    for query in terms:
+        tokens = QUERY_TOKEN_RE.findall(query.casefold())
+        if not tokens:
+            continue
+        if selected_mode == "exact_phrase":
+            fts_query = _serialize_fts5_atom(" ".join(query.split()))
+        else:
+            fts_query = _serialize_fts5_query_atoms(tokens, mode=selected_mode)
+        if not fts_query:
+            continue
+        if diagnostics["effective_query"] is None:
+            diagnostics["effective_query"] = fts_query
+        try:
+            match_rows = connection.execute(
+                "SELECT chunk_id, bm25(chunks_fts) AS fts_rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY fts_rank ASC, chunk_id ASC",
+                (fts_query,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            diagnostics["status"] = "unavailable" if "no such table" in str(exc).lower() else "failed"
+            diagnostics["fts_available"] = False
+            message = [f"lexical search unavailable: FTS5 index error: {exc}"]
+            return ([], message, diagnostics) if return_diagnostics else ([], message)
+        diagnostics["query_results"].append({"query": query, "fts_query": fts_query, "raw_match_count": len(match_rows)})
+        raw_match_count += len(match_rows)
+        scoped_match_count += sum(1 for match_row in match_rows if str(match_row["chunk_id"]) in rows_by_id)
+        for match_row in match_rows:
+            chunk_id = str(match_row["chunk_id"])
+            row = rows_by_id.get(chunk_id)
+            if row is None:
+                continue
+            rank = float(match_row["fts_rank"] or 0.0)
+            existing = merged.get(chunk_id)
+            if existing is None or rank < float(existing["fts_rank"]):
+                merged[chunk_id] = {
+                    **row,
+                    "selection_reason": f"FTS5 {selected_mode} match: {query}",
+                    "score": (1.0 / (1.0 + abs(rank))) + float(config.retrieval_scoring["lexical_bonus"]),
+                    "selection_source": "lexical",
+                    "match_reason": f"FTS5 {selected_mode} query {fts_query}",
+                    "lexical_mode": selected_mode,
+                    "lexical_query": query,
+                    "lexical_query_provenance": [query],
+                    "fts_rank": rank,
+                }
+            elif query not in existing["lexical_query_provenance"]:
+                existing["lexical_query_provenance"].append(query)
+    ordered = sorted(merged.values(), key=lambda item: (float(item["fts_rank"]), str(item["chunk_id"])))
+    candidates = ordered[: max(0, int(limit))] if limit is not None else ordered
+    if not diagnostics["query_results"]:
         diagnostics["status"] = "skipped_no_input"
         return finish()
-    diagnostics["effective_query"] = fts_query
-    try:
-        match_rows = connection.execute(
-            "SELECT chunk_id, bm25(chunks_fts) AS fts_rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY fts_rank ASC, chunk_id ASC",
-            (fts_query,),
-        ).fetchall()
-    except sqlite3.Error as exc:
-        diagnostics["status"] = "unavailable" if "no such table" in str(exc).lower() else "failed"
-        diagnostics["fts_available"] = False
-        message = [f"lexical search unavailable: FTS5 index error: {exc}"]
-        return ([], message, diagnostics) if return_diagnostics else ([], message)
     diagnostics["fts_available"] = True
     diagnostics["index_row_count"] = int(connection.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0])
-    rows_by_id = {str(row.get("chunk_id")): row for row in _scoped_chunk_rows(chunk_rows, scope_filters or {})}
-    diagnostics["raw_match_count"] = len(match_rows)
-    diagnostics["scoped_match_count"] = sum(
-        1 for match_row in match_rows if str(match_row["chunk_id"]) in rows_by_id
-    )
-    for match_row in match_rows:
-        row = rows_by_id.get(str(match_row["chunk_id"]))
-        if row is None or (limit is not None and len(candidates) >= limit):
-            continue
-        rank = float(match_row["fts_rank"] or 0.0)
-        candidates.append({
-            **row,
-            "selection_reason": f"FTS5 {selected_mode} match: {', '.join(terms)}",
-            "score": (1.0 / (1.0 + abs(rank))) + float(config.retrieval_scoring["lexical_bonus"]),
-            "selection_source": "lexical",
-            "match_reason": f"FTS5 {selected_mode} query {fts_query}",
-            "lexical_mode": selected_mode,
-            "lexical_query": " ".join(terms),
-            "fts_rank": rank,
-        })
+    diagnostics["raw_match_count"] = raw_match_count
+    diagnostics["scoped_match_count"] = scoped_match_count
     if candidates:
         notes.append(f"lexical FTS5 search mode={selected_mode} matched {len(candidates)} chunk(s)")
     else:
@@ -1622,15 +1651,15 @@ def _graph_candidates(
         planner_retrieval_plan=planner_retrieval_plan,
         config=config,
     )
-    # Every canonically grounded note is a graph seed. This is a structural
-    # transition, not a compiler-generated semantic field or filter.
+    # Preserve canonical note identity directly. Known notes must not be
+    # serialized to title/path text and fuzzy-rematched.
     grounded_context_candidates = [candidate for candidate in (context_candidates or []) if candidate.get("context_grounded")]
-    for candidate in grounded_context_candidates:
-        for value in (candidate.get("note_title"), candidate.get("relative_path")):
-            text = str(value or "").strip()
-            if text and ("contextual_result", text) not in seed_values:
-                seed_values.append(("contextual_result", text))
-    if not seed_values:
+    canonical_seed_note_ids = list(dict.fromkeys(
+        str(candidate.get("note_id") or "").strip()
+        for candidate in grounded_context_candidates
+        if str(candidate.get("note_id") or "").strip()
+    ))
+    if not seed_values and not canonical_seed_note_ids:
         return [], ["graph search skipped: no graph seeds"], {
             "status": "skipped_no_input",
             "enabled": config.graph_traversal_enabled,
@@ -1639,7 +1668,10 @@ def _graph_candidates(
             "submitted_seeds": [],
             "matched_seed_count": 0,
             "matched_seed_note_ids": [],
+            "seed_note_ids": [],
+            "hydrated_seed_note_count": 0,
             "expanded_note_count": 0,
+            "traversed_note_count": 0,
             "selected_note_ids": [],
             "edge_types_used": [],
             "direction": config.graph_traversal_direction,
@@ -1669,9 +1701,24 @@ def _graph_candidates(
     matched_seed_note_ids: list[str] = []
     matched_seed_count = 0
     expanded_note_count = 0
+    hydrated_seed_note_count = 0
+    context_subjects_by_note: dict[str, list[str]] = {}
+    for candidate in grounded_context_candidates:
+        note_id = str(candidate.get("note_id") or "")
+        context_subjects_by_note[note_id] = list(dict.fromkeys([
+            *context_subjects_by_note.get(note_id, []),
+            *_coerce_string_list(candidate.get("context_subjects")),
+        ]))
     edge_types_used: list[str] = []
     queue: list[tuple[str, int]] = []
     visited_notes: set[str] = set()
+
+    for note_id in canonical_seed_note_ids:
+        visited_notes.add(note_id)
+        selected_note_ids.append(note_id)
+        matched_seed_note_ids.append(note_id)
+        hydrated_seed_note_count += 1
+        queue.append((note_id, 0))
 
     for source_name, seed in seed_values:
         matched_nodes = _graph_match_note_nodes(
@@ -1727,6 +1774,10 @@ def _graph_candidates(
             target_note_id = str(target_node.get("ref_id") or "")
             if not target_note_id:
                 continue
+            context_subjects_by_note[target_note_id] = list(dict.fromkeys([
+                *context_subjects_by_note.get(target_note_id, []),
+                *context_subjects_by_note.get(current_note_id, []),
+            ]))
             target_label = str(target_node.get("label") or target_note_id)
             note_reasons.setdefault(target_note_id, []).append(f"wikilink hop {hop + 1} ({edge_direction}): {current_label} -> {target_label}")
             edge_source_note_id = str(nodes_by_id.get(
@@ -1800,10 +1851,6 @@ def _graph_candidates(
             break
         round_index += 1
 
-    context_subjects_by_note: dict[str, list[str]] = {}
-    for candidate in grounded_context_candidates:
-        note_id = str(candidate.get("note_id") or "")
-        context_subjects_by_note[note_id] = list(dict.fromkeys([*context_subjects_by_note.get(note_id, []), *_coerce_string_list(candidate.get("context_subjects"))]))
     candidates = []
     for chunk_id in selected_chunk_ids:
         chunk_row = chunk_rows.get(chunk_id)
@@ -1840,7 +1887,10 @@ def _graph_candidates(
         "submitted_seeds": submitted_seeds,
         "matched_seed_count": matched_seed_count,
         "matched_seed_note_ids": matched_seed_note_ids,
+        "seed_note_ids": canonical_seed_note_ids,
+        "hydrated_seed_note_count": hydrated_seed_note_count,
         "expanded_note_count": expanded_note_count,
+        "traversed_note_count": expanded_note_count,
         "selected_note_ids": list(selected_note_ids),
         "edge_types_used": edge_types_used,
         "direction": config.graph_traversal_direction,
@@ -2228,7 +2278,7 @@ def _temporal_candidates_from_closure(
             })
         ordered = _order_temporal_candidates(temporal, mode=mode, direction=str(layer.get("direction") or "ascending"))
         by_subject.append(ordered)
-        diagnostics["per_subject"].append({"subject": subject or None, "context_type": "subject" if subject else "query", "closure_candidate_count": len(relevant), "temporal_candidate_count": len(ordered), "governing_anchor_count": len(ordered)})
+        diagnostics["per_subject"].append({"subject": subject or None, "context_type": "subject" if subject else "query", "closure_candidate_count": len(unique), "temporal_candidate_count": len(ordered), "governing_anchor_count": len(ordered)})
     requested_limit = max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit))))
     effective_limit = min(config.retrieval_temporal_max_candidates, max(requested_limit, len(subjects)))
     temporal: list[dict[str, Any]] = []
@@ -2844,7 +2894,9 @@ def _semantic_traversal(
         }
 
     scope_filters = bound_retrieval_plan.get("scope_filters") if isinstance(bound_retrieval_plan.get("scope_filters"), dict) else {}
-    literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
+    explicit_literal_terms = [entry for entry in bound_retrieval_plan.get("literal_terms", []) if isinstance(entry, dict)]
+    runtime_contextual_terms = [entry for entry in bound_retrieval_plan.get("runtime_contextual_exact_terms", []) if isinstance(entry, dict)]
+    literal_terms = [*explicit_literal_terms, *runtime_contextual_terms]
     semantic_queries = _coerce_string_list(bound_retrieval_plan.get("semantic_queries"))
     lexical_queries = _coerce_string_list(bound_retrieval_plan.get("lexical_queries")) or semantic_queries
     graph_layer = retrieval_plan_layer(bound_retrieval_plan, "graph_expand")
@@ -3137,7 +3189,7 @@ def _semantic_traversal(
             manifest["adequate_contribution"] = False
             manifest["inadequacy_reason"] = "required temporal subject context is incomplete"
     exact_info = layer_manifests.get("exact", {}) if isinstance(layer_manifests.get("exact"), dict) else {}
-    exact_search_performed = exact_layer is not None
+    exact_search_performed = exact_layer is not None and not bool(exact_layer.get("automatic"))
     total_exact_matches = exact_info.get("total_match_count")
     matching_note_count = exact_info.get("matching_note_count")
     for term_result in exact_info.get("term_results", []) if isinstance(exact_info.get("term_results"), list) else []:
@@ -3165,6 +3217,7 @@ def _semantic_traversal(
     no_matches = exact_info.get("status") == "completed_no_matches"
     negative_allowed = bool(
         negative_policy_supported
+        and exact_search_performed
         and no_matches
         and bool(exact_info.get("search_exhaustive"))
         and all_terms_completed
@@ -3224,7 +3277,7 @@ def _semantic_traversal(
         "matching_note_count": matching_note_count,
         "total_occurrence_count": exact_info.get("total_occurrence_count"),
         "count_status": exact_info.get("count_status"),
-        "coverage_claims_allowed": bool(exact_info.get("search_exhaustive")) and exact_info.get("status") in {"completed_no_matches", "completed_with_matches"},
+        "coverage_claims_allowed": bool(exact_search_performed and exact_info.get("search_exhaustive")) and exact_info.get("status") in {"completed_no_matches", "completed_with_matches"},
         "negative_claims_allowed": negative_allowed,
         "negative_claims_require_exact_layer": negative_policy_requires_exact,
         "negative_claim_policy_diagnostic": None if negative_policy_supported else "runtime YAML negative-claim policy is unsupported or unavailable; permission remains false",

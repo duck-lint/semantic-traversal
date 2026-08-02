@@ -130,7 +130,7 @@ class Implementation08LexicalTests(unittest.TestCase):
         self.assertEqual(first[0], second[0])
         self.assertEqual(first[2]["original_query"], ["author's", "concept", "author's"])
 
-    def test_runtime_traversal_records_lexical_failure_and_does_not_invoke_frontier(self) -> None:
+    def test_runtime_traversal_records_lexical_failure_while_optional_exact_grounding_runs(self) -> None:
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row
         connection.execute("CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT)")
@@ -150,7 +150,7 @@ class Implementation08LexicalTests(unittest.TestCase):
             )
         finally:
             connection.close()
-        self.assertEqual(traversal_packet["selected_chunks"], [])
+        self.assertEqual([item["chunk_id"] for item in traversal_packet["selected_chunks"]], ["c1"])
         self.assertEqual(manifest["layer_manifests"]["lexical"]["status"], "unavailable")
         self.assertEqual(manifest["candidate_counts"]["lexical"], 0)
         self.assertFalse(manifest["coverage"]["coverage_claims_allowed"])

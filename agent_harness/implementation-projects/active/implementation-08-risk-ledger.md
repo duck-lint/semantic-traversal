@@ -62,6 +62,17 @@ Seam 0: operator-accepted
 | Unrelated global evidence appears corrective | Other retrieved evidence makes final prose look valid while intended temporal context is broken | Assert independent relevance admission, per-subject anchors, and exclusion of globally earlier unrelated chunks |
 | Lexical multi-query flattening | Multiple lexical queries lose some subject separation | Record as deferred known weakness; do not redesign lexical retrieval in this correction |
 
+## Typed-closure execution correction risks
+
+| Risk | Failure mode | Mitigation |
+| --- | --- | --- |
+| Automatic layer bypass | Runtime-expanded graph support receives zero depth or inconsistent limits | Requested and automatic layers share one canonicalization helper and expose requested/effective diagnostics |
+| Identity re-materialization | Grounded notes are title/path strings and fuzzy-rematched | Canonical `note_id` seeds hydrate directly; text matching remains only for unresolved compiler seeds |
+| Seed/traversal conflation | Diagnostics call seed hydration a graph hop or claim edges were traversed | Record canonical seed hydration separately from expanded/traversed notes and hop provenance |
+| Contextual exact overreach | Optional contextual atoms authorize exhaustive or negative claims | Runtime probes are automatic, non-required, non-exhaustive, and provenance-linked to their source atom |
+| Lexical atom flattening | Independent queries become one shared FTS expression | Execute each query separately and preserve per-query provenance before deterministic merge |
+| Production seam bypass | Synthetic tests pass only by injecting graph or temporal candidates | End-to-end synthetic coverage passes through `_semantic_traversal`, graph tables, closure, manifest, and selected packet |
+
 ## Stop conditions
 
 Stop and leave Seam 0 in progress for any missing terminal case, persistence failure, unsupported lexical semantic change, forbidden architecture change, or failed machine gate.

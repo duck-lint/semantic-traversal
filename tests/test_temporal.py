@@ -351,3 +351,61 @@ class TemporalTests(unittest.TestCase):
         self.assertFalse(diagnostics["one_per_subject_reservation_satisfied"])
         self.assertEqual(diagnostics["per_subject"][0]["subject"], None)
         connection.close()
+
+    def test_typed_closure_executes_direct_note_graph_hop_and_temporal_path(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata);
+            CREATE TABLE temporal_anchors (anchor_id TEXT, note_id TEXT, chunk_id TEXT, anchor_type TEXT, canonical_start TEXT, canonical_end TEXT, precision TEXT, source_field TEXT, original_source_value TEXT, authority TEXT, parsing_status TEXT, conflict_group TEXT, unresolved INTEGER, diagnostic_reason TEXT);
+            CREATE TABLE graph_nodes (node_id TEXT, node_type TEXT, label TEXT, ref_id TEXT, metadata_json TEXT);
+            CREATE TABLE graph_edges (source_node_id TEXT, target_node_id TEXT, edge_type TEXT, metadata_json TEXT);
+            """
+        )
+        rows = [
+            {"chunk_id": "c-seed", "note_id": "n-seed", "source_root_label": "fixture", "source_root_path": "", "relative_path": "seed.md", "note_title": "Seed", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber signal", "chunk_hash": "h-seed"},
+            {"chunk_id": "c-hop", "note_id": "n-hop", "source_root_label": "fixture", "source_root_path": "", "relative_path": "hop.md", "note_title": "Hop", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "linked development", "chunk_hash": "h-hop"},
+            {"chunk_id": "c-unrelated", "note_id": "n-old", "source_root_label": "fixture", "source_root_path": "", "relative_path": "old.md", "note_title": "Old", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "unrelated chronology", "chunk_hash": "h-old"},
+        ]
+        connection.executemany("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", rows)
+        connection.executemany("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows)
+        connection.executemany("INSERT INTO graph_nodes VALUES (?,?,?,?,?)", [("note::n-seed", "note", "Seed", "n-seed", "{}"), ("note::n-hop", "note", "Hop", "n-hop", "{}")])
+        connection.execute("INSERT INTO graph_edges VALUES (?,?,?,?)", ("note::n-seed", "note::n-hop", "note_links_note", "{}"))
+        connection.executemany(
+            "INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("a-seed", "n-seed", None, "journal_entry", "2020-01-01T00:00:00Z", "2020-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2020", "explicit_primary", "valid", None, 0, None),
+                ("a-hop", "n-hop", None, "journal_entry", "2010-01-01T00:00:00Z", "2010-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2010", "explicit_primary", "valid", None, 0, None),
+                ("a-old", "n-old", None, "journal_entry", "2000-01-01T00:00:00Z", "2000-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2000", "explicit_primary", "valid", None, 0, None),
+            ],
+        )
+        packet = {
+            "raw_user_input": "amber chronology",
+            "query": "amber chronology",
+            "concepts": ["amber"], "entities": [], "relations": [], "resolved_referents": ["amber"], "limitations": [],
+            "planner_diagnostics": {"plan_executability": {"status": "executable"}},
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "concepts": ["amber"], "resolved_referents": ["amber"],
+                "literal_terms": [], "evidence_requirements": ["chronology"], "semantic_queries": ["amber"],
+                "lexical_queries": ["amber"], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "earliest", "limit": 1}],
+            },
+        }
+        manifest, retrieval_packet = _semantic_traversal(
+            connection=connection, config=self.config, semantic_compiler_packet=packet,
+            prior_thread_state={}, embedding_backend=_UnavailableEmbedding(), resource_inventory_summary={},
+        )
+        graph = manifest["graph_traversal"]
+        temporal = manifest["layer_manifests"]["temporal"]["diagnostics"]
+        self.assertEqual(manifest["bound_retrieval_plan"]["resolved_referents"], ["amber"])
+        self.assertEqual(graph["hydrated_seed_note_count"], 1)
+        self.assertEqual(graph["expanded_note_count"], 1)
+        self.assertTrue(any(hop["edge_type"] == "note_links_note" for hop in graph["traversal_hops"]))
+        self.assertEqual(temporal["subject_count"], 1)
+        self.assertEqual(temporal["satisfied_subject_count"], 1)
+        self.assertEqual(temporal["per_subject"][0]["closure_candidate_count"], 2)
+        self.assertIn("c-hop", manifest["layer_manifests"]["temporal"]["selected_chunk_ids"])
+        self.assertNotIn("c-unrelated", {item["chunk_id"] for item in retrieval_packet["selected_chunks"]})
+        connection.close()

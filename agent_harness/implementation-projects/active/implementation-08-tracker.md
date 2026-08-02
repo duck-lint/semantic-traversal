@@ -129,6 +129,27 @@ visited identities, deduplication, repair, fallback, synthesis, negative-claim
 policy, and Seam 1 remain unchanged. Complete reingest is required for
 inventory schema 4, manifest v2, projection v3, and the changed policy hash.
 The fresh private rerun remains operator-pending.
+
+## Typed-closure execution correction
+
+The post-PR-18 private baseline confirmed the typed semantic-closure contract
+but exposed execution gaps: automatic graph support bypassed graph-depth
+defaulting, grounded notes were converted back to fuzzy title/path seeds,
+seed hydration and edge traversal were conflated, lexical queries were
+flattened, and contextual exact support depended only on explicit literal
+terms. This correction routes requested and automatic layers through one
+runtime-owned canonicalizer, generates bounded optional exact probes from
+contextual atoms, preserves canonical note identity through graph hops, and
+evaluates lexical queries independently. The production synthetic path now
+proves direct grounding → canonical note → graph hop → hydrated unit →
+temporal evaluation, including hop provenance and exclusion of unrelated
+global chronology.
+
+No compiler schema, prompt, provider, model, index, chunk, embedding,
+temporal mode, repair, fallback, synthesis, or evaluator/report/fixture
+contract changed. Same-chunk provenance remains merged without packet
+duplication. No reingest is required. The fresh private rerun remains
+operator-pending, and Seam 1 has not begun.
 # Implementation 08 — pre-Seam-1 kernel correction
 
 ## Canonical retrieval-surface completeness
