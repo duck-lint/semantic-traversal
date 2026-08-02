@@ -62,7 +62,7 @@ class RuntimeConfigTests(unittest.TestCase):
 
     def test_inventory_controls_are_yaml_owned(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
-        self.assertEqual(config.retrieval_resource_inventory["schema_version"], 3)
+        self.assertEqual(config.retrieval_resource_inventory["schema_version"], 4)
         self.assertEqual(config.retrieval_resource_inventory["path_depth"], 2)
         self.assertGreater(config.retrieval_resource_inventory["max_values_per_facet"], 0)
 

@@ -316,6 +316,9 @@ class TemporalTests(unittest.TestCase):
         self.assertEqual(bound["resolved_referents"], ["amber", "beryl"])
         self.assertEqual(manifest["resolved_referent_propagation"]["status"], "preserved")
         temporal_diagnostics = temporal["diagnostics"]
+        self.assertFalse(temporal_diagnostics["searches_full_temporal_projection"])
+        self.assertEqual(temporal_diagnostics["context_source"], "semantic_closure")
+        self.assertIn("lexical_chunk_search", [layer["operator"] for layer in manifest["bound_retrieval_plan"]["retrieval_layers"]])
         self.assertEqual(temporal_diagnostics["subject_count"], 2)
         self.assertEqual(temporal_diagnostics["satisfied_subject_count"], 2)
         self.assertEqual(temporal_diagnostics["missing_subject_count"], 0)

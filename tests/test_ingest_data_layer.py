@@ -495,8 +495,10 @@ target-token
                 connection.row_factory = sqlite3.Row
                 snapshot = json.loads(connection.execute("SELECT payload_json FROM resource_inventory_snapshots").fetchone()[0])
                 manifest = snapshot["retrieval_surface_manifest"]
-                self.assertEqual(manifest["manifest_version"], 1)
+                self.assertEqual(manifest["manifest_version"], 2)
                 self.assertTrue(manifest["closed_world"])
+                self.assertEqual(manifest["execution_model"], "contextual_surface_closure_then_relation_evaluation")
+                self.assertIn("transitions", manifest)
                 self.assertEqual(manifest["operators"]["graph_expand"]["active_direction"], "both")
                 self.assertIn("admitted_frontmatter", manifest["operators"]["graph_expand"]["authored_link_sources"])
                 edge = connection.execute(

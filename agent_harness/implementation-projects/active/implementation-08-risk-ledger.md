@@ -70,3 +70,17 @@ Stop and leave Seam 0 in progress for any missing terminal case, persistence fai
 Added risks: chronology before semantic admission; global earliest candidates displacing required subjects; one subject satisfying another; missing subjects hidden by a nonempty global pool; aliases reappearing under another name; alias removal permitting model-generated filters; legacy state failing to load; subject provenance disappearing during deduplication; requested limits dropping a comparison subject; and redacted context diagnostics leaking private referents.
 
 Mitigation for model-generated filters: the compiler schema contains semantic queries and operators, not database filters. No speculative parser, sanitizer, or policy layer was added.
+
+## Typed semantic closure risks
+
+| Risk | Failure mode | Mitigation / stop gate |
+| --- | --- | --- |
+| Isolated manifest surfaces | Inventory lists operators but omits valid transitions | Persist and validate one generated finite semantic-space grammar |
+| Compiler omission suppresses support | Chronology-only plans prevent useful grounding | Preserve required layers while adding optional compatible direct surfaces |
+| Referent over-admission | Subject identity is mistaken for broad relevance | Require non-referent probe, canonical identity, or grounded graph provenance |
+| Temporal restart | Chronology forms a new full-corpus relevance pool | Evaluate only anchored candidates already in contextual closure |
+| Graph evidence stranded | Reached notes cannot participate in later relations | Hydrate canonical units and carry route/subject provenance into evaluators |
+| Unbounded closure | Retrieved prose becomes recursive search input | Use finite declared transitions, visited identities, graph depth, and existing caps |
+| Duplicate-route inflation | Convergent routes multiply rank or selected chunks | Merge by canonical chunk identity and preserve all provenance |
+| Grammar drift | Manifest declares a transition without an executor | Validate transition pairs during staged ingest and projection construction |
+| Stale private substrate | UAT runs against old inventory or indexes | Preflight persisted source, validity, versions, policy hash, and index status |
