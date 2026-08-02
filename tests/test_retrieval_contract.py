@@ -746,7 +746,33 @@ class RetrievalContractTests(unittest.TestCase):
         result = validate_plan_completeness(planner_retrieval_plan=plan, config=self.config)
         self.assertEqual(result["status"], "incomplete")
         self.assertIn("unsupported_literal_match_mode", result["blocking_reasons"])
-        self.assertIn("unsupported_exact_layer_mode", result["blocking_reasons"])
+
+    def test_redundant_exact_layer_mode_is_non_authoritative(self) -> None:
+        result = validate_plan_completeness(
+            planner_retrieval_plan={
+                "evidence_requirements": ["literal_exhaustive"],
+                "literal_terms": [{"term": "target phrase", "match": "case_insensitive_substring", "required": True}],
+                "retrieval_layers": [{
+                    "operator": "exact_chunk_search", "required": True,
+                    "return_total_count": True, "mode": "exact_phrase",
+                }],
+            },
+            config=self.config,
+        )
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["literal_contract"]["redundant_exact_layer_mode_ignored"], 1)
+
+    def test_literal_exhaustive_requires_explicit_total_count_contract(self) -> None:
+        result = validate_plan_completeness(
+            planner_retrieval_plan={
+                "evidence_requirements": ["literal_exhaustive"],
+                "literal_terms": [{"term": "target phrase", "match": "case_insensitive_substring", "required": True}],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+            },
+            config=self.config,
+        )
+        self.assertEqual(result["status"], "incomplete")
+        self.assertIn("exact_total_count_not_requested", result["blocking_reasons"])
 
     def test_required_exact_layer_blocks_when_terms_were_skipped(self) -> None:
         packet = {

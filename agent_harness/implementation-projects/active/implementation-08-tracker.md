@@ -228,6 +228,33 @@ implementation-08-private-before-v2-post-subtractive-grounding-contract-correcti
 ```
 
 Seam 1 has not begun. Private UAT is not run by this PR.
+
+## Descriptive grounding and exact repair correction
+
+The post-PR-24 baseline exposed six remaining defects: single descriptive
+subjects were over-gated by exact referent wording; redundant exact-layer mode
+decorations overrode executable term semantics; exhaustive exact validation did
+not require total-count readiness; repaired plans had not been demonstrated
+through live retrieval; repair provenance disagreed across artifacts; and
+pre-retrieval blocks were described like no-match results.
+
+This subtraction-first correction narrows the descriptive gate to one bounded
+supporting atom without creating identity, aliases, graph seeds, or subject
+propagation. Exact term-level match semantics remain authoritative; a raw exact
+layer mode is retained only as a non-authoritative diagnostic. Literal
+exhaustive plans now require structured required literals, executable match
+modes, a required exact layer, and `return_total_count: true`. Successful
+no-match and match repairs, plus failed repair blocking, execute through the
+runtime seam. One final completeness record is propagated through compiler,
+diagnostic, manifest, coverage, and retrieval artifacts, while the initial
+failure remains in repair provenance. Blocked messages now distinguish
+structural blocks, unavailable surfaces, and inadequate post-retrieval
+evidence.
+
+No thread-state, suite-isolation, contamination, cache, or private-UAT runner
+behavior was changed. No reingest is required. Inventory schema 4, manifest 2,
+projection 3, grounding 1, evaluator 5, report 6, and fixture 2 remain fixed.
+Model bakeoff remains pending and Seam 1 has not begun.
 # Implementation 08 — pre-Seam-1 kernel correction
 
 ## Canonical retrieval-surface completeness

@@ -533,7 +533,7 @@ def canonicalize_retrieval_plan(value: Any, *, fallback: dict[str, Any], planner
         "structured_literal_count": sum(isinstance(raw, dict) for raw in value.get("literal_terms", [])) if isinstance(value.get("literal_terms"), list) else 0,
         "bare_literal_count": sum(not isinstance(raw, dict) for raw in value.get("literal_terms", [])) if isinstance(value.get("literal_terms"), list) else 0,
         "unsupported_literal_match_modes": sorted({str(entry.get("match")) for entry in literal_entries if isinstance(entry, dict) and str(entry.get("match")) not in {"case_sensitive_substring", "case_insensitive_substring"}}),
-        "unsupported_exact_layer_modes": sorted({str(layer.get("mode")) for layer in result["retrieval_layers"] if isinstance(layer, dict) and str(layer.get("operator")) == "exact_chunk_search" and str(layer.get("mode") or "") not in {"", "default"}}),
+        "redundant_exact_layer_modes": sorted({str(layer.get("mode")) for layer in result["retrieval_layers"] if isinstance(layer, dict) and str(layer.get("operator")) == "exact_chunk_search" and str(layer.get("mode") or "") not in {"", "default"}}),
     }
     unsupported_requirements = [
         value for value in result["evidence_requirements"]

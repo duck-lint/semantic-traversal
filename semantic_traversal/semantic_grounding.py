@@ -316,6 +316,15 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
                     "kind": "descriptive_subject", "value": bundle.referent,
                     "source": "candidate_text", "role": "subject_only", "match": "descriptive_subject",
                 }]
+            elif len(specification.bundles) == 1:
+                # Consume an existing bounded atom for descriptive association
+                # without inventing an alias, identity, or graph seed.
+                bounded_subject_matches = [
+                    match for atom in (*bundle.subject_bearing_atoms, *bundle.supporting_context_atoms)
+                    if atom.role != "subject_only" and (match := _atom_matches(candidate, atom))
+                ]
+                if bounded_subject_matches:
+                    subject_evidence_by_subject[bundle.subject_id] = bounded_subject_matches
         matched = [match for atom in atoms if atom.role != "subject_only" and (match := _atom_matches(candidate, atom))]
         predicate_matches = [match for atom in atoms if atom.role in {"predicate_only", "subject_and_predicate"} and atom.predicate_residual and (match := _atom_matches(candidate, atom))]
 

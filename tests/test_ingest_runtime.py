@@ -2873,6 +2873,91 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertEqual(result.semantic_traversal_manifest["candidate_counts"]["lexical"], 0)
         self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], [])
 
+    def test_exact_repair_executes_no_match_path_with_exhaustive_authority(self) -> None:
+        data_root = _prepare_data_root()
+        initial = {
+            "raw_user_input": "find absent phrase", "intent": "exact_search", "query": "absent phrase",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+            "planner_retrieval_plan": {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": ["absent phrase"], "evidence_requirements": ["literal_exhaustive"],
+                "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "mode": "exact_phrase"}],
+            },
+        }
+        repaired = {**initial, "planner_retrieval_plan": {
+            **initial["planner_retrieval_plan"],
+            "literal_terms": [{"term": "absent phrase", "match": "case_insensitive_substring", "required": True}],
+            "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "mode": "exact_phrase", "return_total_count": True}],
+        }}
+        compiler = SequenceCompilerBackend([initial, repaired])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="find absent phrase",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], ["exact_chunk_search"])
+        exact = result.semantic_traversal_manifest["layer_manifests"]["exact"]
+        self.assertEqual(exact["term_results"][0]["term"], "absent phrase")
+        self.assertEqual(exact["total_match_count"], 0)
+        self.assertEqual(exact["status"], "completed_no_matches")
+        self.assertTrue(result.semantic_traversal_manifest["coverage"]["negative_claims_allowed"])
+        self.assertEqual(result.coverage_report["plan_completeness"], result.semantic_compiler_diagnostic["plan_completeness"])
+        self.assertEqual(result.semantic_compiler_packet["planner_diagnostics"]["plan_completeness"], result.semantic_compiler_diagnostic["plan_completeness"])
+        self.assertEqual(result.semantic_traversal_manifest["plan_completeness"], result.retrieval_packet["diagnostics"]["plan_completeness"])
+        self.assertEqual(result.semantic_compiler_diagnostic["plan_repair"]["initial_plan_completeness"]["status"], "incomplete")
+
+    def test_exact_repair_executes_match_path_without_negative_authority(self) -> None:
+        data_root = _prepare_data_root()
+        initial = {
+            "raw_user_input": "find candy snack food before bed", "intent": "exact_search", "query": "candy snack food before bed",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+            "planner_retrieval_plan": {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": ["candy snack food before bed"], "evidence_requirements": ["literal_exhaustive"],
+                "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+            },
+        }
+        repaired = {**initial, "planner_retrieval_plan": {
+            **initial["planner_retrieval_plan"],
+            "literal_terms": [{"term": "candy snack food before bed", "match": "case_insensitive_substring", "required": True}],
+            "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "return_total_count": True}],
+        }}
+        compiler = SequenceCompilerBackend([initial, repaired])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="find candy snack food before bed",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        exact = result.semantic_traversal_manifest["layer_manifests"]["exact"]
+        self.assertGreater(exact["total_match_count"], 0)
+        self.assertEqual(exact["status"], "completed_with_matches")
+        self.assertFalse(result.semantic_traversal_manifest["coverage"]["negative_claims_allowed"])
+
+    def test_structural_block_message_does_not_claim_search_was_run(self) -> None:
+        data_root = _prepare_data_root()
+        incomplete = {
+            "raw_user_input": "find absent phrase", "intent": "exact_search", "query": "absent phrase",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+            "planner_retrieval_plan": {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": ["absent phrase"], "evidence_requirements": ["literal_exhaustive"],
+                "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+            },
+        }
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input="find absent phrase",
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=SequenceCompilerBackend([incomplete, incomplete]),
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertIn("structurally incomplete", result.assistant_response)
+        self.assertNotIn("no matches were found", result.assistant_response.lower())
+        self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
