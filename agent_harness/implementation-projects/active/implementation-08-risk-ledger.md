@@ -95,3 +95,18 @@ Mitigation for model-generated filters: the compiler schema contains semantic qu
 | Duplicate-route inflation | Convergent routes multiply rank or selected chunks | Merge by canonical chunk identity and preserve all provenance |
 | Grammar drift | Manifest declares a transition without an executor | Validate transition pairs during staged ingest and projection construction |
 | Stale private substrate | UAT runs against old inventory or indexes | Preflight persisted source, validity, versions, policy hash, and index status |
+
+## Semantic grounding authority risks
+
+| Risk | Failure mode | Mitigation / stop gate |
+| --- | --- | --- |
+| Relevance mistaken for identity | A prose, lexical, or vector match turns its parent note into the subject object | Require canonical identity surfaces or explicit graph seeds for object identity |
+| Parent promotion | A child evidence match authorizes the parent note as the subject object | Keep evidence-unit grounding distinct from object-identity grounding |
+| Unauthorized graph propagation | A broad seed causes every neighbor to inherit every named subject | Propagate only recorded subject authority across authored graph hops |
+| Referent mistaken for predicate | A subject string alone satisfies a relation evaluator | Require non-referent context atoms for proposition grounding |
+| Anchor mistaken for proposition | A dated note enters chronology solely because it has an accepted anchor | Temporal admission consumes proposition-grounded candidates only |
+| Descriptive exact-string bias | Supporting evidence with different wording is rejected | Permit descriptive proposition grounding through associated context without fabricating an object |
+| Weak evidence discarded | Non-proposition evidence disappears before synthesis | Retain evidence-unit grounding while excluding it from required relation pools |
+| Structured/boolean divergence | A compatibility flag becomes a second authority model | Derive compatibility booleans from structured assessments and never branch on them |
+| Temporal ownership drift | Temporal code begins interpreting subject identity or predicate meaning | Keep semantic classification in the grounding layer and temporal parsing/order in `temporal.py` |
+| Hidden ontology | Generic runtime rules acquire field-specific or corpus-specific meaning | Stop on aliases, field mappings, query recipes, domain predicates, or model-directed grounding |

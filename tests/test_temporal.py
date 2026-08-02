@@ -365,13 +365,13 @@ class TemporalTests(unittest.TestCase):
             """
         )
         rows = [
-            {"chunk_id": "c-seed", "note_id": "n-seed", "source_root_label": "fixture", "source_root_path": "", "relative_path": "seed.md", "note_title": "Seed", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber signal", "chunk_hash": "h-seed"},
+            {"chunk_id": "c-seed", "note_id": "n-seed", "source_root_label": "fixture", "source_root_path": "", "relative_path": "amber.md", "note_title": "Amber", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "amber signal", "chunk_hash": "h-seed"},
             {"chunk_id": "c-hop", "note_id": "n-hop", "source_root_label": "fixture", "source_root_path": "", "relative_path": "hop.md", "note_title": "Hop", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "linked development", "chunk_hash": "h-hop"},
             {"chunk_id": "c-unrelated", "note_id": "n-old", "source_root_label": "fixture", "source_root_path": "", "relative_path": "old.md", "note_title": "Old", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "unrelated chronology", "chunk_hash": "h-old"},
         ]
         connection.executemany("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", rows)
         connection.executemany("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows)
-        connection.executemany("INSERT INTO graph_nodes VALUES (?,?,?,?,?)", [("note::n-seed", "note", "Seed", "n-seed", "{}"), ("note::n-hop", "note", "Hop", "n-hop", "{}")])
+        connection.executemany("INSERT INTO graph_nodes VALUES (?,?,?,?,?)", [("note::n-seed", "note", "Amber", "n-seed", "{}"), ("note::n-hop", "note", "Hop", "n-hop", "{}")])
         connection.execute("INSERT INTO graph_edges VALUES (?,?,?,?)", ("note::n-seed", "note::n-hop", "note_links_note", "{}"))
         connection.executemany(
             "INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -409,3 +409,67 @@ class TemporalTests(unittest.TestCase):
         self.assertIn("c-hop", manifest["layer_manifests"]["temporal"]["selected_chunk_ids"])
         self.assertNotIn("c-unrelated", {item["chunk_id"] for item in retrieval_packet["selected_chunks"]})
         connection.close()
+
+    def test_grounding_authority_separates_two_identity_objects_from_noise(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE chunks (chunk_id TEXT, note_id TEXT, source_root_label TEXT, source_root_path TEXT, relative_path TEXT, note_title TEXT, frontmatter_semantics_json TEXT, section_label TEXT, paragraph_text TEXT, chunk_hash TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, paragraph_text, note_title, section_label, relative_path, metadata);
+            CREATE TABLE temporal_anchors (anchor_id TEXT, note_id TEXT, chunk_id TEXT, anchor_type TEXT, canonical_start TEXT, canonical_end TEXT, precision TEXT, source_field TEXT, original_source_value TEXT, authority TEXT, parsing_status TEXT, conflict_group TEXT, unresolved INTEGER, diagnostic_reason TEXT);
+            CREATE TABLE graph_nodes (node_id TEXT, node_type TEXT, label TEXT, ref_id TEXT, metadata_json TEXT);
+            CREATE TABLE graph_edges (source_node_id TEXT, target_node_id TEXT, edge_type TEXT, metadata_json TEXT);
+            """
+        )
+        rows = [
+            {"chunk_id": "c-alpha", "note_id": "n-alpha", "source_root_label": "fixture", "source_root_path": "", "relative_path": "alpha.md", "note_title": "Alpha", "frontmatter_semantics_json": "{}", "section_label": "Identity", "paragraph_text": "canonical object", "chunk_hash": "h-alpha"},
+            {"chunk_id": "c-beta", "note_id": "n-beta", "source_root_label": "fixture", "source_root_path": "", "relative_path": "beta.md", "note_title": "Beta", "frontmatter_semantics_json": "{}", "section_label": "Identity", "paragraph_text": "canonical object", "chunk_hash": "h-beta"},
+            {"chunk_id": "c-alpha-event", "note_id": "n-alpha-event", "source_root_label": "fixture", "source_root_path": "", "relative_path": "alpha-event.md", "note_title": "Alpha event", "frontmatter_semantics_json": '{"related":[{"value":"[[Alpha]]"}]}', "section_label": "Evidence", "paragraph_text": "reading activity occurred", "chunk_hash": "h-alpha-event"},
+            {"chunk_id": "c-beta-event", "note_id": "n-beta-event", "source_root_label": "fixture", "source_root_path": "", "relative_path": "beta-event.md", "note_title": "Beta event", "frontmatter_semantics_json": '{"related":[{"value":"[[Beta]]"}]}', "section_label": "Evidence", "paragraph_text": "reading activity occurred", "chunk_hash": "h-beta-event"},
+            {"chunk_id": "c-noise", "note_id": "n-noise", "source_root_label": "fixture", "source_root_path": "", "relative_path": "noise.md", "note_title": "Noise", "frontmatter_semantics_json": "{}", "section_label": "Body", "paragraph_text": "reading activity occurred", "chunk_hash": "h-noise"},
+        ]
+        connection.executemany("INSERT INTO chunks VALUES (:chunk_id,:note_id,:source_root_label,:source_root_path,:relative_path,:note_title,:frontmatter_semantics_json,:section_label,:paragraph_text,:chunk_hash)", rows)
+        connection.executemany("INSERT INTO chunks_fts VALUES (:chunk_id,:paragraph_text,:note_title,:section_label,:relative_path,:frontmatter_semantics_json)", rows)
+        connection.executemany("INSERT INTO graph_nodes VALUES (?,?,?,?,?)", [
+            ("note::n-alpha", "note", "Alpha", "n-alpha", "{}"), ("note::n-beta", "note", "Beta", "n-beta", "{}"),
+            ("note::n-alpha-event", "note", "Alpha event", "n-alpha-event", "{}"), ("note::n-beta-event", "note", "Beta event", "n-beta-event", "{}"),
+        ])
+        connection.executemany("INSERT INTO graph_edges VALUES (?,?,?,?)", [
+            ("note::n-alpha-event", "note::n-alpha", "note_links_note", '{"provenance":[{"frontmatter_field_path":"related"}]}'),
+            ("note::n-beta-event", "note::n-beta", "note_links_note", '{"provenance":[{"frontmatter_field_path":"related"}]}'),
+        ])
+        connection.executemany("INSERT INTO temporal_anchors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("a-alpha", "n-alpha-event", None, "journal_entry", "2010-01-01T00:00:00Z", "2010-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2010", "explicit_primary", "valid", None, 0, None),
+            ("a-beta", "n-beta-event", None, "journal_entry", "2020-01-01T00:00:00Z", "2020-12-31T23:59:59.999999Z", "year", "journal_entry_date", "2020", "explicit_primary", "valid", None, 0, None),
+            ("a-noise", "n-noise", None, "journal_entry", "1990-01-01T00:00:00Z", "1990-12-31T23:59:59.999999Z", "year", "journal_entry_date", "1990", "explicit_primary", "valid", None, 0, None),
+        ])
+        packet = {
+            "raw_user_input": "compare Alpha and Beta reading activity",
+            "query": "compare Alpha and Beta reading activity",
+            "concepts": ["reading activity"], "entities": [], "relations": [],
+            "resolved_referents": ["Alpha", "Beta"], "limitations": [],
+            "planner_diagnostics": {"plan_executability": {"status": "executable"}},
+            "planner_retrieval_plan": {
+                "intent_type": "semantic_traversal", "concepts": ["reading activity"],
+                "resolved_referents": ["Alpha", "Beta"], "literal_terms": [],
+                "evidence_requirements": ["chronology"], "semantic_queries": ["reading activity"],
+                "lexical_queries": ["reading activity"], "graph_seeds": ["Alpha", "Beta"],
+                "retrieval_layers": [{"operator": "temporal_retrieve", "required": True, "mode": "earliest", "limit": 1}],
+            },
+        }
+        try:
+            manifest, packet = _semantic_traversal(connection=connection, config=self.config, semantic_compiler_packet=packet, prior_thread_state={}, embedding_backend=_UnavailableEmbedding(), resource_inventory_summary={})
+        finally:
+            connection.close()
+        grounding = manifest["semantic_grounding"]
+        self.assertEqual(grounding["identity_authorized_graph_seed_count"], 2)
+        self.assertEqual(grounding["graph_hops_with_subject_authority"], 2)
+        self.assertEqual(manifest["layer_manifests"]["temporal"]["diagnostics"]["satisfied_subject_count"], 2)
+        selected = {item["chunk_id"] for item in packet["selected_chunks"]}
+        self.assertIn("c-alpha-event", selected)
+        self.assertIn("c-beta-event", selected)
+        self.assertNotIn("c-noise", manifest["layer_manifests"]["temporal"]["selected_chunk_ids"])
+        selected_by_id = {item["chunk_id"]: item for item in packet["selected_chunks"]}
+        self.assertTrue(selected_by_id["c-alpha-event"].get("grounding"))
+        self.assertTrue(selected_by_id["c-beta-event"].get("grounding"))
