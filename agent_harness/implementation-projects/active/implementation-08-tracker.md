@@ -198,6 +198,36 @@ v3, evaluator 5, report 6, fixture 2, and grounding specification version 1
 remain unchanged. Because persisted graph metadata changed, a complete
 reingest is required; note and chunk identities remain stable. The fresh
 private rerun remains operator-pending and Seam 1 has not begun.
+
+## Subtractive grounding admission and exact-contract fidelity correction
+
+The first post-PR-23 private run is the first planner-quality baseline made
+under a substantially complete compiler prompt. It is therefore authoritative
+for the four defects corrected here; older truncated runs remain runtime
+evidence only. The correction removes the named-subject requirement from
+query-level propositions, narrows subject-and-predicate atoms to their stated
+subjects, and recomputes merged proposition eligibility from per-subject
+evidence rather than global booleans.
+
+Existing resolved admitted-frontmatter wikilink, canonical target, authored
+graph-edge, and subject-propagation provenance is consumed as typed relational
+evidence when prose does not repeat a predicate. No field meaning is inferred.
+Bare literals under an exhaustive/required exact contract remain visibly
+incomplete and enter the existing one-shot repair path; unsupported literal or
+exact-layer modes are rejected rather than silently normalized. Automatic exact
+support remains separate from explicit required exact adequacy.
+
+Grounding diagnostics now expose query-level admission, per-subject evidence /
+predicate / proposition counts, typed-relation admission, and contract
+completeness without exposing literal values. Inventory schema 4, manifest 2,
+projection 3, grounding 1, evaluator 5, report 6, and fixture 2 remain fixed.
+No persisted substrate or reingest is required. The fresh operator suite is:
+
+```text
+implementation-08-private-before-v2-post-subtractive-grounding-contract-correction
+```
+
+Seam 1 has not begun. Private UAT is not run by this PR.
 # Implementation 08 — pre-Seam-1 kernel correction
 
 ## Canonical retrieval-surface completeness
