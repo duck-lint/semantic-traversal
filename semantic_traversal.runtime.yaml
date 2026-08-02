@@ -108,7 +108,7 @@ semantic_compiler:
   base_url: "http://localhost:11434"
   request_timeout_seconds: 120
   inventory_projection:
-    max_chars: 12000
+    max_chars: 24000
     low_cardinality_max_unique: 24
     max_values_per_field: 12
     max_path_values: 48
