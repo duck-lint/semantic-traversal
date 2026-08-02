@@ -21,12 +21,16 @@ from tools.implementation08_private_uat import (
     _compare_required,
     _final_response_attempt,
     _plan_source_attempt,
+    _preflight_pending_threads,
+    _thread_id_for_case,
     _validate_attempt_topology,
     _turn_metrics,
     evaluate_compiler_contract,
     export_redacted,
     validate_fixture,
 )
+from semantic_traversal.config import load_runtime_config
+from semantic_traversal.storage import ThreadPaths, write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "agent_harness/implementation-projects/active/implementation-08-private-uat.example.yaml"
@@ -293,6 +297,62 @@ class Implementation08PrivateUATTests(unittest.TestCase):
             (output / "run.json").write_text(json.dumps({"fixture_sha256": "different"}), encoding="utf-8")
             with self.assertRaises(PrivateUATUnavailable):
                 run_private_uat(fixture_path=fixture, repo_root=root, output_dir=output)
+
+    def test_fresh_suite_preflight_is_read_only_and_case_ids_are_isolated(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            fixture = {"suite_id": "fresh-suite", "cases": [{"id": "alpha"}, {"id": "beta"}]}
+            clean = _preflight_pending_threads(fixture=fixture, completed=set(), data_root=data_root, config=config)
+            self.assertEqual(clean["status"], "clean")
+            self.assertEqual(clean["clean_thread_count"], 2)
+            self.assertNotEqual(_thread_id_for_case(suite_id="fresh-suite", case_id="alpha"), _thread_id_for_case(suite_id="fresh-suite", case_id="beta"))
+            self.assertNotEqual(_thread_id_for_case(suite_id="fresh-suite", case_id="alpha"), _thread_id_for_case(suite_id="new-suite", case_id="alpha"))
+            self.assertFalse((data_root / config.storage_threads_root).exists())
+
+    def test_reused_suite_preflight_fails_without_exposing_thread_state(self) -> None:
+        config = load_runtime_config(repo_root=REPO_ROOT)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir)
+            thread_id = _thread_id_for_case(suite_id="reused-suite", case_id="alpha")
+            paths = ThreadPaths(data_root=data_root, thread_id=thread_id, config=config)
+            paths.thread_root.mkdir(parents=True)
+            write_json(paths.thread_state_path, {"thread_id": thread_id, "latest_turn_id": 1, "recent_messages": [{"content": "private"}]})
+            fixture = {"suite_id": "reused-suite", "cases": [{"id": "alpha"}, {"id": "beta"}]}
+            with self.assertRaisesRegex(PrivateUATUnavailable, "pending deterministic threads are not clean") as raised:
+                _preflight_pending_threads(fixture=fixture, completed=set(), data_root=data_root, config=config)
+            self.assertNotIn("content", str(raised.exception))
+
+    def test_replace_does_not_reset_a_contaminated_deterministic_thread(self) -> None:
+        from tools import implementation08_private_uat as evaluator
+        fixture = copy.deepcopy(self.fixture)
+        fixture["suite_id"] = "replace-suite"
+        fixture["cases"] = fixture["cases"][:1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture_path = root / "agent_harness/private/fixture.yaml"
+            fixture_path.parent.mkdir(parents=True)
+            fixture_path.write_text(yaml.safe_dump(fixture), encoding="utf-8")
+            output = root / "agent_harness/private/run"
+            output.mkdir(parents=True)
+            (output / "run.json").write_text(json.dumps({"fixture_sha256": __import__("hashlib").sha256(fixture_path.read_bytes()).hexdigest(), "report_schema_version": 6, "evaluator_contract_version": 5}), encoding="utf-8")
+            data_root = root / "data"
+            config = SimpleNamespace(
+                data_root=data_root, storage_ingestion_root=Path("."), storage_ingestion_database_filename="ingestion.db", vault_root=root,
+                storage_threads_root=Path("threads"), storage_turns_root=Path("turns"), storage_conversation_thread_filename="conversation.json",
+                storage_thread_state_filename="state.json", storage_thread_ledger_filename="ledger.jsonl", storage_turn_directory_prefix="turn-",
+            )
+            database = data_root / "ingestion.db"
+            database.parent.mkdir(parents=True)
+            database.write_text("", encoding="utf-8")
+            paths = ThreadPaths(data_root=data_root, thread_id=_thread_id_for_case(suite_id=fixture["suite_id"], case_id=fixture["cases"][0]["id"]), config=config)
+            paths.thread_root.mkdir(parents=True)
+            write_json(paths.thread_state_path, {"latest_turn_id": 1, "recent_messages": [{"content": "private"}]})
+            summary = {"retrieval_surface_manifest": {"manifest_version": 2}, "inventory_diagnostics": {"status": "valid"}, "capabilities": {"exact_fts": {"projection_status": "valid"}, "vector": {"validation_status": "valid"}, "graph": {"nodes": {"table_present": True}, "edges": {"table_present": True}}, "temporal": {"table_present": True}}}
+            with patch.object(evaluator, "load_runtime_config", return_value=config), patch.object(evaluator, "validate_inventory_snapshot", return_value={"status": "valid"}), patch.object(evaluator, "load_persisted_inventory", return_value=(summary, {"source": "persisted", "status": "valid"})), patch.object(evaluator, "build_compiler_inventory_projection", return_value=({"projection_version": 3}, {})), patch.object(evaluator, "resolve_llm_backend") as resolve_llm:
+                with self.assertRaises(PrivateUATUnavailable):
+                    evaluator.run_private_uat(fixture_path=fixture_path, repo_root=root, output_dir=output, replace=True)
+                resolve_llm.assert_not_called()
 
     @staticmethod
     def _observation(*, repair: bool = False, raw: str | None = None, status: str = "parsed") -> dict:

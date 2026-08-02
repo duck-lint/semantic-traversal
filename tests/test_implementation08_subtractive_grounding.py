@@ -59,7 +59,7 @@ class SubtractiveGroundingProductionSeamTests(unittest.TestCase):
                 "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
                 "literal_terms": ["target phrase"], "evidence_requirements": ["literal_exhaustive"],
                 "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
-                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "return_total_count": True}],
             },
         }
         repaired_payload = json.loads(json.dumps(initial_payload))

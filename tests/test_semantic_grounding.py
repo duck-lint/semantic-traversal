@@ -44,6 +44,23 @@ class SemanticGroundingTests(unittest.TestCase):
         spec = build_grounding_spec(self.plan(resolved_referents=["Alpha"]))
         self.assertEqual([atom.value for atom in spec.bundles[0].supporting_context_atoms], ["reading activity"] * 3)
 
+    def test_single_descriptive_subject_uses_associated_context_without_exact_referent(self):
+        spec = build_grounding_spec(self.plan(
+            resolved_referents=["my transition to X"],
+            concepts=["transition to X"],
+            semantic_queries=["transition to X"],
+            lexical_queries=["transition to X"],
+        ))
+        assessment = classify_candidate(
+            self.candidate(note_title="Unrelated", paragraph_text="transition to X began today"), spec,
+        )
+        self.assertEqual(assessment["object_identity"]["subjects"], [])
+        self.assertTrue(assessment["relation_proposition"]["eligible"])
+        self.assertEqual(assessment["relation_proposition"]["subjects"], ["subject-0"])
+        self.assertTrue(assessment["descriptive_subject_bypass"])
+        self.assertTrue(assessment["graph_authority"]["may_seed_subject_graph"] is False)
+        self.assertEqual(assessment["subject_evidence"]["subject-0"][0]["source"], "supporting_context")
+
     def test_subject_spans_are_decomposed_without_shared_literal_predicate(self):
         spec = build_grounding_spec(self.plan(
             concepts=["reading order"],
@@ -120,6 +137,22 @@ class SemanticGroundingTests(unittest.TestCase):
         assessment = classify_candidate(candidate, spec)
         self.assertIn("subject-0", assessment["relation_proposition"]["subjects"])
         self.assertNotIn("subject-1", assessment["relation_proposition"]["subjects"])
+
+    def test_alpha_beta_descriptive_chronology_stays_subject_scoped(self):
+        spec = build_grounding_spec(self.plan(
+            semantic_queries=["reading activity of Alpha", "reading activity of Beta"],
+            lexical_queries=[],
+        ))
+        alpha = classify_candidate(self.candidate(
+            note_title="Alpha", relative_path="alpha.md",
+        ), spec)
+        beta = classify_candidate(self.candidate(
+            note_id="note-2", note_title="Beta", relative_path="beta.md",
+        ), spec)
+        self.assertEqual(alpha["relation_proposition"]["subjects"], ["subject-0"])
+        self.assertEqual(beta["relation_proposition"]["subjects"], ["subject-1"])
+        self.assertNotIn("subject-1", alpha["subject_evidence"])
+        self.assertNotIn("subject-0", beta["subject_evidence"])
 
     def test_merged_subject_evidence_cannot_pair_alpha_with_beta_predicate(self):
         spec = build_grounding_spec(self.plan())

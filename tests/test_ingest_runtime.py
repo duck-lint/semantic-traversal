@@ -2847,6 +2847,78 @@ class ThesisRuntimeTests(unittest.TestCase):
         self.assertIn("frontmatter_facet_details", result.semantic_traversal_manifest["resource_inventory_summary"])
         self.assertIn("inventory_projection", result.semantic_compiler_diagnostic)
 
+    def test_repaired_exhaustive_exact_contract_executes_and_keeps_final_diagnostics_authoritative(self) -> None:
+        data_root = _prepare_data_root()
+        base = {
+            "raw_user_input": "find candy",
+            "intent": "exact search",
+            "query": "candy",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+        }
+        initial = {
+            **base,
+            "planner_retrieval_plan": {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": ["candy"], "evidence_requirements": ["literal_exhaustive"],
+                "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "mode": "exact_phrase"}],
+            },
+        }
+        repaired = {
+            **base,
+            "planner_retrieval_plan": {
+                **initial["planner_retrieval_plan"],
+                "literal_terms": [{"term": "candy", "match": "case_insensitive_substring", "required": True}],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "mode": "exact_phrase", "return_total_count": True}],
+            },
+        }
+        compiler = SequenceCompilerBackend([initial, repaired])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input=base["raw_user_input"],
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertEqual(result.runtime_outcome, "completed")
+        self.assertIn("exact_chunk_search", result.semantic_traversal_manifest["execution"]["layers_executed"])
+        self.assertEqual(result.semantic_traversal_manifest["layer_manifests"]["exact"]["status"], "completed_with_matches")
+        self.assertGreater(result.semantic_traversal_manifest["coverage"]["total_exact_matches"], 0)
+        final_records = [
+            result.semantic_compiler_packet["planner_diagnostics"]["plan_completeness"],
+            result.semantic_compiler_diagnostic["plan_completeness"],
+            result.semantic_traversal_manifest["plan_completeness"],
+            result.coverage_report["plan_completeness"],
+        ]
+        self.assertTrue(all(record == final_records[0] for record in final_records))
+        self.assertTrue(final_records[0]["repair_attempted"])
+        self.assertEqual(final_records[0]["repair_result"], "complete")
+        self.assertTrue(final_records[0]["literal_contract"]["repair_triggered"])
+
+    def test_incomplete_exact_repair_blocks_without_no_match_language(self) -> None:
+        data_root = _prepare_data_root()
+        payload = {
+            "raw_user_input": "find candy",
+            "intent": "exact search", "query": "candy",
+            "entities": [], "relations": [], "resolved_referents": [], "limitations": [],
+            "planner_retrieval_plan": {
+                "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
+                "literal_terms": ["candy"], "evidence_requirements": ["literal_exhaustive"],
+                "semantic_queries": [], "lexical_queries": [], "graph_seeds": [],
+                "retrieval_layers": [{"operator": "exact_chunk_search", "required": True}],
+            },
+        }
+        compiler = SequenceCompilerBackend([payload, payload])
+        result = run_thread_turn(
+            repo_root=REPO_ROOT, data_root=data_root, user_input=payload["raw_user_input"],
+            llm_backend=RecordingLLMBackend(), semantic_compiler_backend=compiler,
+            embedding_backend=UnavailableEmbeddingBackend(),
+        )
+        self.assertEqual(len(compiler.calls), 2)
+        self.assertEqual(result.runtime_outcome, "blocked")
+        self.assertEqual(result.semantic_traversal_manifest["execution"]["layers_executed"], [])
+        self.assertIn("structurally incomplete", result.assistant_response.lower())
+        self.assertNotIn("no matches were found", result.assistant_response.lower())
+
     def test_failed_plan_repair_blocks_without_executing_retrieval(self) -> None:
         data_root = _prepare_data_root()
         payload = {

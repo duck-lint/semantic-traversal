@@ -731,7 +731,7 @@ class RetrievalContractTests(unittest.TestCase):
             raw_user_input='find "target phrase"', query="target phrase", concepts=["target phrase"],
             graph_seeds=[], planner_defaults=self.config.retrieval_planner_defaults,
         )
-        plan, _ = canonicalize_retrieval_plan(
+        plan, diagnostics = canonicalize_retrieval_plan(
             {
                 "intent_type": "exact_search", "concepts": [], "resolved_referents": [],
                 "literal_terms": [{"term": "target phrase", "match": "exact_phrase", "required": True}],
@@ -746,7 +746,29 @@ class RetrievalContractTests(unittest.TestCase):
         result = validate_plan_completeness(planner_retrieval_plan=plan, config=self.config)
         self.assertEqual(result["status"], "incomplete")
         self.assertIn("unsupported_literal_match_mode", result["blocking_reasons"])
-        self.assertIn("unsupported_exact_layer_mode", result["blocking_reasons"])
+        self.assertNotIn("unsupported_exact_layer_mode", result["blocking_reasons"])
+        self.assertNotIn("mode", plan["retrieval_layers"][0])
+        self.assertEqual(diagnostics["ignored_redundant_exact_layer_mode_count"], 1)
+        self.assertEqual(diagnostics["redundant_exact_layer_modes_ignored"], ["exact_phrase"])
+
+    def test_exhaustive_exact_requires_the_existing_complete_contract(self) -> None:
+        base = {
+            "evidence_requirements": ["literal_exhaustive"],
+            "literal_terms": [{"term": "target", "match": "case_insensitive_substring", "required": True}],
+            "retrieval_layers": [{"operator": "exact_chunk_search", "required": True, "return_total_count": True}],
+        }
+        self.assertEqual(validate_plan_completeness(planner_retrieval_plan=base, config=self.config)["status"], "complete")
+        for mutation, reason in (
+            ({"retrieval_layers": []}, "missing_exact_layer"),
+            ({"retrieval_layers": [{"operator": "exact_chunk_search", "required": False, "return_total_count": True}]}, "exact_layer_not_required"),
+            ({"literal_terms": [{"term": "target", "match": "case_insensitive_substring", "required": False}]}, "required_literal_not_required"),
+            ({"retrieval_layers": [{"operator": "exact_chunk_search", "required": True}]}, "return_total_count_not_requested"),
+        ):
+            with self.subTest(reason=reason):
+                plan = {**base, **mutation}
+                result = validate_plan_completeness(planner_retrieval_plan=plan, config=self.config)
+                self.assertEqual(result["status"], "incomplete")
+                self.assertIn(reason, result["blocking_reasons"])
 
     def test_required_exact_layer_blocks_when_terms_were_skipped(self) -> None:
         packet = {
