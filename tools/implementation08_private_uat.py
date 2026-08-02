@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,14 @@ if str(REPO_ROOT) not in sys.path:
 from semantic_traversal.config import load_runtime_config
 from semantic_traversal.hashing import sha256_text
 from semantic_traversal.llm import resolve_llm_backend
+from semantic_traversal.resource_inventory import (
+    COMPILER_INVENTORY_PROJECTION_VERSION,
+    RETRIEVAL_SURFACE_MANIFEST_VERSION,
+    INVENTORY_SCHEMA_VERSION,
+    validate_inventory_snapshot,
+    load_persisted_inventory,
+    build_compiler_inventory_projection,
+)
 from semantic_traversal.runtime import run_thread_turn
 from semantic_traversal.semantic_compiler import SemanticCompilerResponse, resolve_semantic_compiler_backend
 
@@ -687,6 +696,31 @@ def run_private_uat(*, fixture_path: Path, repo_root: Path, output_dir: Path | N
         raise PrivateUATUnavailable(f"configured vault is unavailable: {config.vault_root}")
     if not database_path.exists():
         raise PrivateUATUnavailable(f"persisted ingestion database is unavailable: {database_path}")
+    # Refuse to begin model calls against stale or reconstructed substrate.
+    # This is intentionally a safe preflight: it exposes only statuses,
+    # versions, and hashes, never corpus content.
+    with sqlite3.connect(database_path) as connection:
+        validation = validate_inventory_snapshot(connection=connection, config=config)
+        if validation.get("status") != "valid":
+            raise PrivateUATUnavailable("persisted inventory preflight failed: inventory status is not valid")
+        summary, diagnostics = load_persisted_inventory(connection=connection, config=config)
+        manifest = summary.get("retrieval_surface_manifest") if isinstance(summary.get("retrieval_surface_manifest"), dict) else {}
+        projection, projection_diagnostics = build_compiler_inventory_projection(inventory_summary=summary, config=config)
+        if diagnostics.get("source") != "persisted" or diagnostics.get("status") != "valid":
+            raise PrivateUATUnavailable("persisted inventory preflight failed: inventory source is not persisted")
+        if int(summary.get("inventory_diagnostics", {}).get("status", 0) == "valid") != 1:
+            raise PrivateUATUnavailable("persisted inventory preflight failed: inventory status is not valid")
+        if int(manifest.get("manifest_version", 0)) != RETRIEVAL_SURFACE_MANIFEST_VERSION:
+            raise PrivateUATUnavailable("persisted inventory preflight failed: retrieval manifest version mismatch")
+        if int(projection.get("projection_version", 0)) != COMPILER_INVENTORY_PROJECTION_VERSION:
+            raise PrivateUATUnavailable("persisted inventory preflight failed: compiler projection version mismatch")
+        capabilities = summary.get("capabilities") if isinstance(summary.get("capabilities"), dict) else {}
+        exact_ok = capabilities.get("exact_fts", {}).get("projection_status") == "valid"
+        vector_ok = capabilities.get("vector", {}).get("validation_status") == "valid"
+        graph_ok = all(capabilities.get("graph", {}).get(key, {}).get("table_present") for key in ("nodes", "edges"))
+        temporal_ok = bool(capabilities.get("temporal", {}).get("table_present"))
+        if not all((exact_ok, vector_ok, graph_ok, temporal_ok)):
+            raise PrivateUATUnavailable("persisted inventory preflight failed: required index is invalid")
     llm_backend = resolve_llm_backend(repo_root=repo_root, config=config, llm_mode="auto")
     if getattr(llm_backend, "unavailable_reason", None):
         raise PrivateUATUnavailable(str(llm_backend.unavailable_reason))

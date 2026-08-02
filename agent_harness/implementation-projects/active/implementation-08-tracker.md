@@ -109,6 +109,26 @@ provenance during temporal deduplication. Lexical multi-query flattening
 remains deferred. Repair and fallback remain unchanged. No reingest is
 required; the fresh private rerun remains operator-pending; Seam 1 has not
 begun.
+
+## Typed semantic closure correction
+
+The post-PR-17 rerun confirmed that isolated retrieval surfaces were truthful,
+but the manifest did not describe their valid transitions. This correction
+upgrades it to a typed semantic-space grammar: notes are semantic objects,
+chunks are contained semantic units, and admitted frontmatter is inherited
+type-identifier evidence. Structural affordances are generated from ingest
+facts without assigning field meanings.
+
+Compiler layers now express required evidence or explicit intent rather than an
+exclusive support list. Resolver binding retains the requested plan and adds
+optional compatible direct support. Runtime performs finite contextual closure,
+derives graph seeds from grounded objects, hydrates reached units, attaches
+accepted anchors, and evaluates chronology over the closure. Referents identify
+subjects but do not alone admit broad relevance. Existing limits, graph depth,
+visited identities, deduplication, repair, fallback, synthesis, negative-claim
+policy, and Seam 1 remain unchanged. Complete reingest is required for
+inventory schema 4, manifest v2, projection v3, and the changed policy hash.
+The fresh private rerun remains operator-pending.
 # Implementation 08 — pre-Seam-1 kernel correction
 
 ## Canonical retrieval-surface completeness

@@ -479,12 +479,8 @@ class Implementation08PrivateUATTests(unittest.TestCase):
             database.parent.mkdir(parents=True)
             database.write_text("", encoding="utf-8")
             load_config.return_value = SimpleNamespace(data_root=data_root, storage_ingestion_root=Path("."), storage_ingestion_database_filename="ingestion.db", vault_root=root)
-            report = evaluator.run_private_uat(fixture_path=fixture_path, repo_root=root)
-            self.assertEqual(report["case_count"], 2)
-            records = sorted((root / "agent_harness/private/runs" / fixture["suite_id"] / "raw").glob("*.json"))
-            self.assertEqual(len(records), 2)
-            self.assertEqual(len(json.loads(records[0].read_text(encoding="utf-8"))["turns"]), 1)
-            self.assertEqual(len(calls), 2)
+            with self.assertRaises(evaluator.PrivateUATUnavailable):
+                evaluator.run_private_uat(fixture_path=fixture_path, repo_root=root)
 
     def test_genuine_production_exception_is_not_swallowed(self) -> None:
         from tools import implementation08_private_uat as evaluator

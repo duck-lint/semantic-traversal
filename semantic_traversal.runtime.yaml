@@ -7,7 +7,7 @@ retrieval:
     graph_relation: graph_expand
     chronology: temporal_retrieve
   resource_inventory:
-    schema_version: 3
+    schema_version: 4
     path_depth: 2
     max_values_per_facet: 32
     max_path_values: 128
@@ -145,7 +145,7 @@ prompts:
       Separate conversational meaning into concepts, resolved referents, literal terms, semantic queries, lexical queries, and graph seeds.
       Declare evidence_requirements as an ordered, deduplicated list of supported constitutive evidence enums only: literal_exhaustive, lexical_relevance, semantic_similarity, graph_relation, or chronology. Use it to state what evidence is necessary for the interpreted request, not every optional surface that may help.
       Do not emit database, metadata, path, source, author, book, or filesystem filters.
-      Treat the supplied retrieval-surface manifest as the exhaustive operational description of available substrate projections. Request only operators marked available. Infer relevant exposed components and relations from the user's question, but do not invent filters, fields, operator chaining, relation types, graph directions, or capabilities absent from the manifest.
+      Treat the supplied retrieval-surface manifest as the exhaustive operational description of the typed semantic substrate and its valid transitions. Identify the semantic context, subjects, requested relation, and constitutive evidence requirements. The runtime automatically expands that context across every structurally compatible retrieval surface declared by the manifest. Requested retrieval layers express required evidence or explicit operator intent; they are not an exclusive list of every supporting surface allowed to execute. Do not enumerate every optional operator. Use the manifest to avoid structurally impossible evidence requirements, but do not invent filters, fields, operator chaining, relation types, graph directions, or capabilities absent from the manifest.
       Admitted semantic field names and bounded values describe substrate shape and may inform concepts, referents, literal terms, semantic queries, lexical queries, and graph seeds. Do not emit field filters, copy manifest structure into the output, or answer the user.
       Treat explicit search/find/list/mention/occurrence/count or absence requests as exact-search requests when possible. A quoted concept alone does not require exact search.
       For exact search, preserve each literal term, its requested case-sensitive or case-insensitive substring match mode, required flag, and return_total_count when exhaustive counts or absence are requested.
@@ -154,6 +154,7 @@ prompts:
       Graph seeds must name an actual concept, entity, note, or resolved referent. If no meaningful subject-bearing graph seed exists, leave graph_seeds empty. Temporal retrieval still requires subject-bearing lexical and/or semantic relevance queries; temporal ordering alone does not establish relevance.
       Request temporal retrieval when chronology, earliest/latest, before/after/between, development ordering, origin, precursors, what came before, or autobiographical development is constitutive of the question. For an origin or precursor question, use temporal_retrieve with an appropriate ordered/earliest mode and required true when chronology is necessary to answer; do not treat conceptual resemblance as chronology. Do not infer temporal retrieval from current, old, or history alone. Do not invent dates or causal influence.
       Requiredness is sparse: exact exhaustive search, strict temporal relations, and explicitly requested graph traversal may be required; otherwise prefer optional layers.
+      Do not select a metadata field as a hardcoded route, invent transition chains, or answer the user. Preserve explicit exact-count, exact-absence, graph-path, and temporal-relation requirements.
       Before returning JSON, self-audit that every constitutive evidentiary aspect of the interpreted intent appears in evidence_requirements and every declared evidence requirement has a corresponding requested retrieval operator. Do not answer the user or emit prose for this audit.
       The compiler requests operators and bounded limits only. Do not emit selection_policy, budgets, max_chunks, preserve_required_layers, claim_policy, coverage flags, or negative-claim permission.
       Conversation phrases such as "the two of them" are not corpus search terms; resolve them into referents from active_focus and recent_semantic_turns.

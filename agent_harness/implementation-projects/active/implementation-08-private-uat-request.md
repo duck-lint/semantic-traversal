@@ -222,3 +222,35 @@ Expected directory:
 `agent_harness/private/runs/implementation-08-private-before-v2-post-resolved-referent-propagation/`.
 The corrected private rerun remains operator-pending. Do not edit or replace
 the ignored fixture automatically. Seam 1 has not begun.
+
+# Post-PR-17 typed semantic closure correction
+
+PR #17 made isolated retrieval surfaces truthful and complete. The subsequent
+private rerun showed that the manifest still enumerated surfaces without their
+valid cross-surface transitions. This correction models notes as semantic
+objects and chunks as contained units; admitted fields remain human-authored
+type identifiers whose structural affordances are generated from ingest facts.
+
+The compiler schema and model remain unchanged. Compiler layers express
+required evidence or explicit operator intent, while resolver binding expands
+context across every compatible direct surface. Runtime performs bounded
+contextual closure, derives graph seeds from grounded objects, hydrates reached
+units, and evaluates temporal relations over the closure rather than restarting
+from a broad temporal projection. Referents identify subjects but do not alone
+authorize broad relevance. No field ontology, alias, query recipe, filter
+language, reverse graph edge, new operator, or model-directed recursion was
+introduced. Repair, fallback, synthesis, negative-claim policy, and evaluator
+contracts remain unchanged.
+
+Complete reingest is required for inventory schema 4, manifest v2, projection
+v3, and the changed inventory policy hash. The UAT runner now refuses stale or
+invalid persisted substrate before model calls. Use:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-typed-semantic-closure
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-typed-semantic-closure/`.
+
+Seam 1 has not begun.

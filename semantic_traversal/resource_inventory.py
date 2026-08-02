@@ -10,9 +10,9 @@ from .config import RuntimeConfig
 from .hashing import sha256_json, sha256_text
 
 
-INVENTORY_SCHEMA_VERSION = 3
-COMPILER_INVENTORY_PROJECTION_VERSION = 2
-RETRIEVAL_SURFACE_MANIFEST_VERSION = 1
+INVENTORY_SCHEMA_VERSION = 4
+COMPILER_INVENTORY_PROJECTION_VERSION = 3
+RETRIEVAL_SURFACE_MANIFEST_VERSION = 2
 _CURRENT_SNAPSHOT_KEY = "current"
 
 
@@ -94,6 +94,157 @@ def _facet_value_counter(counter: Counter[str], value: Any) -> None:
                 counter[item.strip()] += 1
 
 
+def _structural_shapes(value: Any) -> set[str]:
+    """Describe observed value structure without assigning semantic meaning."""
+    if isinstance(value, dict):
+        shapes = {"mapping"}
+        for child in value.values():
+            shapes.update(_structural_shapes(child))
+        return shapes
+    if isinstance(value, list):
+        shapes = {"list"}
+        for child in value:
+            shapes.update(_structural_shapes(child))
+        return shapes
+    if value is None:
+        return {"null"}
+    return {"scalar"}
+
+
+def _scalar_types(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        result: set[str] = set()
+        for child in value.values():
+            result.update(_scalar_types(child))
+        return result
+    if isinstance(value, list):
+        result: set[str] = set()
+        for child in value:
+            result.update(_scalar_types(child))
+        return result
+    if value is None:
+        return {"null"}
+    if isinstance(value, bool):
+        return {"boolean"}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"integer"}
+    if isinstance(value, float):
+        return {"number"}
+    return {"string"}
+
+
+def _contains_wikilink(value: Any) -> bool:
+    if isinstance(value, str):
+        return "[[" in value and "]]" in value
+    if isinstance(value, dict):
+        return any(_contains_wikilink(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_wikilink(child) for child in value)
+    return False
+
+
+def _type_identifier_descriptors(
+    *, connection: sqlite3.Connection, config: RuntimeConfig, controls: dict[str, int]
+) -> dict[str, dict[str, Any]]:
+    """Build field descriptors from stored ingest facts, never field meaning."""
+    rows = _load_rows(connection, "notes", "frontmatter_semantics_json")
+    observed: dict[str, list[Any]] = {field: [] for field in config.chunking_semantic_frontmatter_fields}
+    for row in rows:
+        semantics = _parse_semantics(row[0])
+        for field in observed:
+            if field in semantics:
+                observed[field].append(semantics[field])
+
+    edge_counts: Counter[str] = Counter()
+    if _table_exists(connection, config.graph_edges_table):
+        for row in connection.execute(f"SELECT metadata_json FROM {config.graph_edges_table} WHERE edge_type = 'note_links_note'"):
+            try:
+                metadata = json.loads(str(row[0] or "{}"))
+            except json.JSONDecodeError:
+                metadata = {}
+            field_path = str(metadata.get("frontmatter_field_path") or "")
+            if field_path:
+                edge_counts[field_path.split(".", 1)[0]] += 1
+
+    temporal_fields = config.retrieval_temporal_field_mappings
+    descriptors: dict[str, dict[str, Any]] = {}
+    for field in sorted(observed):
+        values = observed[field]
+        shapes = {shape for value in values for shape in _structural_shapes(value)} or {"unknown"}
+        scalar_types = {kind for value in values for kind in _scalar_types(value)} or {"unknown"}
+        textual = "string" in scalar_types or "scalar" in shapes
+        descriptors[field] = {
+            "field_name": field,
+            "inherited_by_semantic_units": True,
+            "observed_shapes": sorted(shapes),
+            "observed_scalar_types": sorted(scalar_types),
+            "textual_atoms_possible": textual,
+            "retrieval_visibility": {
+                "exact_chunk_search": True,
+                "lexical_chunk_search": True,
+                "vector_search": True,
+            },
+            "relation_affordances": {
+                "may_contain_wikilinks": any(_contains_wikilink(value) for value in values),
+                "observed_resolved_link_count": int(edge_counts.get(field, 0)),
+                "temporal_anchor_source": field in temporal_fields,
+            },
+            "bounded_observed_values": _bounded_counter(
+                Counter(str(value) for value in values if isinstance(value, (str, int, float, bool))),
+                controls["max_values_per_facet"],
+            ),
+        }
+    return descriptors
+
+
+def _semantic_space_grammar(
+    *, connection: sqlite3.Connection, config: RuntimeConfig, capabilities: dict[str, Any],
+    bounded_values: dict[str, Any],
+) -> dict[str, Any]:
+    operators = {
+        "exact_chunk_search": capabilities.get("exact_fts", {}).get("projection_status") == "valid",
+        "lexical_chunk_search": capabilities.get("exact_fts", {}).get("projection_status") == "valid",
+        "vector_search": capabilities.get("vector", {}).get("validation_status") == "valid",
+        "graph_expand": all(isinstance(capabilities.get("graph", {}).get(key), dict) and capabilities["graph"][key].get("table_present") for key in ("nodes", "edges")),
+        "temporal_retrieve": bool(capabilities.get("temporal", {}).get("table_present")) and config.retrieval_temporal_enabled,
+    }
+    transitions = [
+        {"from": "resolved_context", "to": "exact_chunk_search", "when": "operator_available"},
+        {"from": "resolved_context", "to": "lexical_chunk_search", "when": "operator_available"},
+        {"from": "resolved_context", "to": "vector_search", "when": "operator_available"},
+        {"from": "exact_result", "to": "semantic_unit", "when": "canonical_chunk_id"},
+        {"from": "lexical_result", "to": "semantic_unit", "when": "canonical_chunk_id"},
+        {"from": "vector_result", "to": "semantic_unit", "when": "canonical_chunk_id"},
+        {"from": "semantic_unit", "to": "parent_note", "when": "note_id"},
+        {"from": "parent_note", "to": "contained_semantic_units", "when": "canonical_note_id"},
+        {"from": "grounded_note", "to": "graph_expand", "when": "graph_relation_available"},
+        {"from": "graph_result", "to": "semantic_unit", "when": "canonical_chunk_id"},
+        {"from": "semantic_unit_or_note", "to": "accepted_temporal_anchor", "when": "anchor_materialized"},
+        {"from": "anchored_contextual_unit", "to": "temporal_retrieve", "when": "relation_evaluator_available"},
+        {"from": "all_candidates", "to": "provenance_preserving_deduplication", "when": "canonical_identity"},
+        {"from": "deduplicated_candidates", "to": "ordinal_fusion_and_selection", "when": "runtime_bounds"},
+    ]
+    return {
+        "manifest_version": RETRIEVAL_SURFACE_MANIFEST_VERSION,
+        "closed_world": True,
+        "execution_model": "contextual_surface_closure_then_relation_evaluation",
+        "semantic_objects": {"note": {"identity_components": ["source_uuid", "note_id", "note_title", "relative_path"], "contains": ["semantic_unit"], "inherited_to_units": ["note_identity", "note_topology", "admitted_frontmatter"]}},
+        "semantic_units": {"chunk": {"identity_components": ["chunk_id", "note_id", "section_path", "paragraph_ordinal", "split_ordinal"], "parent_object": "note", "ordinal_components": ["paragraph_ordinal", "split_ordinal"], "inherited_components": ["note_identity", "note_topology", "admitted_frontmatter"]}},
+        "type_identifiers": _type_identifier_descriptors(connection=connection, config=config, controls=config.retrieval_resource_inventory),
+        "retrieval_surfaces": {name: {"available": bool(available)} for name, available in operators.items()},
+        "relations": {
+            "contains": {"source": "note", "target": "semantic_unit"},
+            "belongs_to": {"source": "semantic_unit", "target": "note"},
+            "inherits": {"source": "note", "target": "semantic_unit"},
+            "note_links_note": {"source": "note", "target": "note", "authored": True, "stored_reverse_edges": False},
+            "has_temporal_anchor": {"source": "semantic_unit_or_note", "target": "accepted_temporal_anchor"},
+        },
+        "transitions": transitions,
+        "relation_evaluators": {"chronology": bool(operators["temporal_retrieve"]), "graph_relation": bool(operators["graph_expand"]), "literal_exhaustive": bool(operators["exact_chunk_search"]), "synthesis": True},
+        "bounds": {"graph_depth": config.retrieval_graph_max_depth, "candidate_caps": {"exact": config.retrieval_exact_max_matches, "lexical": config.retrieval_lexical_max_candidates, "vector": config.retrieval_vector_max_candidates, "graph": config.retrieval_graph_max_candidates, "temporal": config.retrieval_temporal_max_candidates}, "visited_identity_sets": ["chunk_id", "note_id", "graph_node_id", "graph_edge_id", "temporal_anchor_id", "subject_route"]},
+    }
+
+
 def _capability_inventory(connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
     connection.row_factory = sqlite3.Row
     chunk_count = _safe_int(connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
@@ -145,10 +296,10 @@ def _retrieval_surface_manifest(connection: sqlite3.Connection, config: RuntimeC
     graph = capabilities.get("graph", {})
     graph_valid = all(isinstance(graph.get(key), dict) and graph[key].get("table_present") for key in ("nodes", "edges"))
     temporal_valid = capabilities.get("temporal", {}).get("table_present", False)
-    return {
+    manifest = {
         "manifest_version": RETRIEVAL_SURFACE_MANIFEST_VERSION,
         "closed_world": True,
-        "execution_model": "independent_operator_execution_then_fusion",
+        "execution_model": "contextual_surface_closure_then_relation_evaluation",
         "canonical_chunk_components": ["note_title", "relative_path", "section_path", "admitted_frontmatter", "semantic_unit_text"],
         "operators": {
             "exact_chunk_search": {
@@ -181,16 +332,21 @@ def _retrieval_surface_manifest(connection: sqlite3.Connection, config: RuntimeC
             },
             "temporal_retrieve": {
                 "available": temporal_valid and config.retrieval_temporal_enabled,
-                "relevance_surfaces": ["lexical_chunk_search", "vector_search"],
+                "relevance_surfaces": ["exact_chunk_search", "lexical_chunk_search", "vector_search", "graph_expand"],
                 "anchor_types": list(config.retrieval_temporal_default_anchor_types),
                 "authorities": list(config.retrieval_temporal_allowed_authorities),
                 "modes": list(config.retrieval_temporal_allowed_modes),
                 "include_conflicts": config.retrieval_temporal_include_conflicted_by_default,
                 "hydration": "canonical_chunks",
-                "graph_chaining": False,
+                "graph_chaining": True,
             },
         },
     }
+    grammar = _semantic_space_grammar(connection=connection, config=config, capabilities=capabilities, bounded_values={})
+    # Keep the existing operator map as a compatibility surface while making
+    # the grammar the authoritative description of valid transitions.
+    manifest.update({key: grammar[key] for key in ("semantic_objects", "semantic_units", "type_identifiers", "relations", "transitions", "relation_evaluators", "bounds")})
+    return manifest
 
 
 def _build_observed_inventory(connection: sqlite3.Connection, config: RuntimeConfig) -> dict[str, Any]:
@@ -320,16 +476,55 @@ def build_compiler_inventory_projection(
     retrieval_manifest = inventory_summary.get("retrieval_surface_manifest")
     if not isinstance(retrieval_manifest, dict):
         retrieval_manifest = {"manifest_version": RETRIEVAL_SURFACE_MANIFEST_VERSION, "closed_world": True, "operators": {}}
+    projection_manifest = {
+        "manifest_version": retrieval_manifest.get("manifest_version"),
+        "closed_world": retrieval_manifest.get("closed_world"),
+        "execution_model": retrieval_manifest.get("execution_model"),
+        "operators": {
+            name: bool(value.get("available"))
+            for name, value in sorted((retrieval_manifest.get("operators") or {}).items())
+            if isinstance(value, dict)
+        },
+    }
     projection: dict[str, Any] = {
         "projection_version": COMPILER_INVENTORY_PROJECTION_VERSION,
         "inventory_status": str(inventory_summary.get("inventory_diagnostics", {}).get("status") or "unavailable"),
         "semantic_chunk": semantic_chunk,
         "available_retrieval_operators": operators,
         "capability_status": capability_status,
-        "retrieval_surface_manifest": retrieval_manifest,
+        "retrieval_surface_manifest": projection_manifest,
         "execution_model": retrieval_manifest.get("execution_model"),
         "low_cardinality_values": low_values,
         "value_enumeration_omitted_for": omitted_fields,
+        "semantic_objects": {"note": {"identity_components": ["source_uuid", "note_id", "note_title", "relative_path"], "contains": ["semantic_unit"], "inherited_to_units": ["note_identity", "note_topology", "admitted_frontmatter"]}},
+        "semantic_units": {"chunk": {"identity_components": ["chunk_id", "note_id", "section_path", "paragraph_ordinal", "split_ordinal"], "parent_object": "note", "ordinal_components": ["paragraph_ordinal", "split_ordinal"], "inherited_components": ["note_identity", "note_topology", "admitted_frontmatter"]}},
+        # The full manifest carries named descriptors. The compiler projection
+        # uses a deterministic tuple encoding so all admitted fields and their
+        # affordances fit the existing prompt budget.
+        "type_identifiers": {
+            "format": "[field_name, observed_shapes, observed_scalar_types, may_contain_wikilinks, observed_resolved_link_count, temporal_anchor_source]",
+            "inherited_by_semantic_units": True,
+            "retrieval_visibility": ["exact_chunk_search", "lexical_chunk_search", "vector_search"],
+            "descriptors": [
+                [
+                    field,
+                    descriptor.get("observed_shapes", []),
+                    descriptor.get("observed_scalar_types", []),
+                    bool((descriptor.get("relation_affordances") or {}).get("may_contain_wikilinks")),
+                    int((descriptor.get("relation_affordances") or {}).get("observed_resolved_link_count") or 0),
+                    bool((descriptor.get("relation_affordances") or {}).get("temporal_anchor_source")),
+                ]
+                for field, descriptor in sorted((retrieval_manifest.get("type_identifiers", {}) or {}).items())
+                if isinstance(descriptor, dict)
+            ],
+        },
+        "relations": retrieval_manifest.get("relations", {}),
+        "transitions": {
+            "format": "[from, to, condition]",
+            "items": [[item.get("from"), item.get("to"), item.get("when")] for item in retrieval_manifest.get("transitions", []) if isinstance(item, dict)],
+        },
+        "relation_evaluators": retrieval_manifest.get("relation_evaluators", {}),
+        "bounds": retrieval_manifest.get("bounds", {}),
     }
     source_labels = inventory_summary.get("observed_source_labels")
     if isinstance(source_labels, list):
@@ -351,7 +546,7 @@ def build_compiler_inventory_projection(
                 if isinstance(level_data, dict)
             }
 
-    mandatory_keys = {"projection_version", "inventory_status", "semantic_chunk", "available_retrieval_operators", "capability_status", "retrieval_surface_manifest", "execution_model"}
+    mandatory_keys = {"projection_version", "inventory_status", "semantic_chunk", "available_retrieval_operators", "capability_status", "retrieval_surface_manifest", "execution_model", "semantic_objects", "semantic_units", "type_identifiers", "relations", "transitions", "relation_evaluators", "bounds"}
     diagnostics: dict[str, Any] = {
         "projection_version": COMPILER_INVENTORY_PROJECTION_VERSION,
         "full_inventory_chars": len(_deterministic_json(inventory_summary, indent=2)),
@@ -486,6 +681,17 @@ def validate_inventory_snapshot(*, connection: sqlite3.Connection, config: Runti
                 errors.append("retrieval surface manifest graph direction mismatch")
             if graph_manifest.get("authored_link_sources") != ["body", "admitted_frontmatter"]:
                 errors.append("retrieval surface manifest graph link-source mismatch")
+            required_grammar = {"semantic_objects", "semantic_units", "type_identifiers", "relations", "transitions", "relation_evaluators", "bounds"}
+            if not required_grammar.issubset(manifest):
+                errors.append("retrieval surface manifest omits semantic-space grammar")
+            transition_pairs = {(str(item.get("from")), str(item.get("to"))) for item in manifest.get("transitions", []) if isinstance(item, dict)}
+            required_transitions = {
+                ("resolved_context", "exact_chunk_search"), ("resolved_context", "lexical_chunk_search"),
+                ("resolved_context", "vector_search"), ("semantic_unit", "parent_note"),
+                ("grounded_note", "graph_expand"), ("semantic_unit_or_note", "accepted_temporal_anchor"),
+            }
+            if not required_transitions.issubset(transition_pairs):
+                errors.append("retrieval surface manifest transition grammar is incomplete")
         if not connection.execute("SELECT 1 FROM ingest_runs WHERE run_id = ?", (row["source_ingest_run_id"],)).fetchone():
             errors.append("source ingest run is missing")
         else:
