@@ -919,6 +919,33 @@ def _count_selected_by_layer(selected_candidates: list[dict[str, Any]]) -> dict[
     return counts
 
 
+def _annotate_context_candidates(
+    candidates: list[dict[str, Any]], *, plan: dict[str, Any], config: RuntimeConfig,
+) -> list[dict[str, Any]]:
+    """Attach subject/route provenance without turning referents into filters."""
+    referents = _coerce_string_list(plan.get("resolved_referents"))
+    concepts = _coerce_string_list(plan.get("concepts"))
+    probes = [*_coerce_string_list(plan.get("semantic_queries")), *_coerce_string_list(plan.get("lexical_queries")), *concepts, *[str(item.get("term") or "") for item in plan.get("literal_terms", []) if isinstance(item, dict)]]
+    annotated: list[dict[str, Any]] = []
+    for candidate in candidates:
+        next_candidate = dict(candidate)
+        haystack = " ".join(str(next_candidate.get(field) or "") for field in ("note_title", "relative_path", "section_label", "paragraph_text", "frontmatter_semantics_json")).casefold()
+        matched_subjects = [subject for subject in referents if subject.casefold() in haystack]
+        matched_probes = [probe for probe in probes if probe.casefold() in haystack]
+        # A query carrying a subject transfers that subject's provenance to
+        # the grounded candidate even when the subject text is not repeated
+        # in the stored prose.
+        for subject in referents:
+            if subject not in matched_subjects and any(subject.casefold() in probe.casefold() for probe in probes) and any(probe.casefold() in haystack for probe in probes if subject.casefold() in probe.casefold()):
+                matched_subjects.append(subject)
+        next_candidate["context_subjects"] = list(dict.fromkeys([*_coerce_string_list(candidate.get("context_subjects")), *matched_subjects]))
+        next_candidate["context_probe_provenance"] = list(dict.fromkeys(matched_probes))
+        next_candidate["context_grounded"] = bool(candidate.get("context_grounded")) or bool(matched_probes) or bool(matched_subjects and str(candidate.get("selection_source")) in {"exact", "graph"})
+        next_candidate["context_route"] = str(candidate.get("selection_source") or "unknown")
+        annotated.append(next_candidate)
+    return annotated
+
+
 def _exact_candidates(
     chunk_rows: list[dict[str, Any]],
     literal_terms: list[dict[str, Any]],
@@ -1537,6 +1564,7 @@ def _graph_candidates(
     graph_depth: dict[str, Any] | None = None,
     scope_filters: dict[str, Any] | None = None,
     limit: int | None = None,
+    context_candidates: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     notes: list[str] = []
     if not config.graph_traversal_enabled:
@@ -1594,6 +1622,14 @@ def _graph_candidates(
         planner_retrieval_plan=planner_retrieval_plan,
         config=config,
     )
+    # Every canonically grounded note is a graph seed. This is a structural
+    # transition, not a compiler-generated semantic field or filter.
+    grounded_context_candidates = [candidate for candidate in (context_candidates or []) if candidate.get("context_grounded")]
+    for candidate in grounded_context_candidates:
+        for value in (candidate.get("note_title"), candidate.get("relative_path")):
+            text = str(value or "").strip()
+            if text and ("contextual_result", text) not in seed_values:
+                seed_values.append(("contextual_result", text))
     if not seed_values:
         return [], ["graph search skipped: no graph seeds"], {
             "status": "skipped_no_input",
@@ -1764,6 +1800,10 @@ def _graph_candidates(
             break
         round_index += 1
 
+    context_subjects_by_note: dict[str, list[str]] = {}
+    for candidate in grounded_context_candidates:
+        note_id = str(candidate.get("note_id") or "")
+        context_subjects_by_note[note_id] = list(dict.fromkeys([*context_subjects_by_note.get(note_id, []), *_coerce_string_list(candidate.get("context_subjects"))]))
     candidates = []
     for chunk_id in selected_chunk_ids:
         chunk_row = chunk_rows.get(chunk_id)
@@ -1780,6 +1820,8 @@ def _graph_candidates(
                 "graph_direction": config.graph_traversal_direction,
                 "graph_provenance": note_reasons.get(str(chunk_row["note_id"]), []),
                 "graph_hop_provenance": note_hops.get(str(chunk_row["note_id"]), []),
+                "context_subjects": context_subjects_by_note.get(str(chunk_row["note_id"]), []),
+                "context_grounded": bool(context_subjects_by_note.get(str(chunk_row["note_id"]))) or str(chunk_row["note_id"]) in selected_note_ids,
             }
         )
     if candidates:
@@ -2113,14 +2155,106 @@ def _temporal_candidates_global_legacy(
     return temporal, [*lexical_notes, *vector_notes], diagnostics
 
 
+def _temporal_candidates_from_closure(
+    *, connection: sqlite3.Connection, config: RuntimeConfig, chunk_rows: list[dict[str, Any]],
+    layer: dict[str, Any], closure_candidates: list[dict[str, Any]], resolved_referents: list[str],
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    """Evaluate chronology over already-grounded closure candidates."""
+    mode = str(layer.get("mode") or config.retrieval_temporal_default_mode)
+    subjects = list(dict.fromkeys(str(value).strip() for value in resolved_referents if str(value).strip()))
+    anchor_rows = connection.execute(
+        "SELECT anchor_id, note_id, chunk_id, anchor_type, canonical_start, canonical_end, precision, source_field, original_source_value, authority, parsing_status, conflict_group, unresolved, diagnostic_reason FROM temporal_anchors ORDER BY canonical_start, anchor_id"
+    ).fetchall()
+    try:
+        boundary_start = parse_temporal_value(layer["before"])[0] if layer.get("before") is not None else parse_temporal_value(layer["start"])[0] if layer.get("start") is not None else None
+        boundary_end = parse_temporal_value(layer["after"])[1] if layer.get("after") is not None else parse_temporal_value(layer["end"])[1] if layer.get("end") is not None else None
+    except (TypeError, ValueError) as exc:
+        return [], [f"temporal boundary failure: {exc}"], {"operator": "temporal_retrieve", "status": "failed", "candidate_count": 0, "failure_reason": str(exc)}
+    allowed_types = set(layer.get("anchor_types") or config.retrieval_temporal_default_anchor_types)
+    allowed_authorities = set(layer.get("authorities") or config.retrieval_temporal_allowed_authorities)
+    anchors_by_note: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in anchor_rows:
+        anchor = dict(row)
+        if anchor["anchor_type"] not in allowed_types or anchor["authority"] not in allowed_authorities:
+            continue
+        relation = relation_for_anchor(anchor, mode=mode, boundary_start=boundary_start, boundary_end=boundary_end, include_unresolved=bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default)))
+        if relation is not None:
+            anchor["relation_certainty"] = relation
+            anchors_by_note[str(anchor["note_id"])].append(anchor)
+    rows_by_id = {str(row["chunk_id"]): row for row in chunk_rows}
+    by_subject: list[list[dict[str, Any]]] = []
+    diagnostics: dict[str, Any] = {
+        "operator": "temporal_retrieve", "status": "not_requested", "mode": mode,
+        "searches_full_temporal_projection": False, "context_source": "semantic_closure",
+        "subject_count": len(subjects), "query_context_count": 0 if subjects else 1,
+        "context_mode": "named_subjects" if subjects else "query", "per_subject": [],
+    }
+    for subject in subjects or [""]:
+        relevant: list[dict[str, Any]] = []
+        for candidate in closure_candidates:
+            chunk_id = str(candidate.get("chunk_id") or "")
+            row = rows_by_id.get(chunk_id)
+            if row is None or str(row.get("note_id") or "") not in anchors_by_note:
+                continue
+            candidate_subjects = _coerce_string_list(candidate.get("context_subjects"))
+            if subjects:
+                if subject not in candidate_subjects or not candidate.get("context_grounded"):
+                    continue
+            elif not candidate.get("context_grounded"):
+                continue
+            relevant.append(candidate)
+        # Preserve convergence while preventing one route from multiplying
+        # the same semantic unit in the selected packet.
+        unique: dict[str, dict[str, Any]] = {}
+        for candidate in relevant:
+            unique.setdefault(str(candidate.get("chunk_id") or ""), candidate)
+        temporal: list[dict[str, Any]] = []
+        for chunk_id, candidate in sorted(unique.items()):
+            row = rows_by_id[chunk_id]
+            anchors = anchors_by_note[str(row["note_id"])]
+            governing = _choose_temporal_governing_anchor(anchors, mode=mode, direction=str(layer.get("direction") or "ascending"))
+            temporal.append({
+                **row, **candidate, "selection_source": "temporal", "source_layers": [*candidate.get("source_layers", []), "temporal"],
+                "temporal_subject": subject, "temporal_subjects": [subject] if subject else [],
+                "temporal_mode": mode, "temporal_governing_anchor_id": governing["anchor_id"],
+                "temporal_governing_anchor_type": governing["anchor_type"],
+                "temporal_governing_canonical_start": governing["canonical_start"],
+                "temporal_governing_canonical_end": governing["canonical_end"],
+                "temporal_anchor_ids": [item["anchor_id"] for item in sorted(anchors, key=_temporal_anchor_order_key)],
+                "temporal_provenance": [{"anchor_id": item["anchor_id"], "canonical_start": item["canonical_start"], "canonical_end": item["canonical_end"], "authority": item["authority"], "subject": subject or None, "relation": mode, "relation_certainty": item["relation_certainty"]} for item in sorted(anchors, key=_temporal_anchor_order_key)],
+                "relation_status": governing["relation_certainty"],
+                "selection_reason": f"temporal {mode} evaluation over contextual closure",
+                "match_reason": f"temporal {mode} relation over grounded semantic unit",
+            })
+        ordered = _order_temporal_candidates(temporal, mode=mode, direction=str(layer.get("direction") or "ascending"))
+        by_subject.append(ordered)
+        diagnostics["per_subject"].append({"subject": subject or None, "context_type": "subject" if subject else "query", "closure_candidate_count": len(relevant), "temporal_candidate_count": len(ordered), "governing_anchor_count": len(ordered)})
+    requested_limit = max(0, int(layer.get("effective_limit", layer.get("limit", config.retrieval_temporal_default_limit))))
+    effective_limit = min(config.retrieval_temporal_max_candidates, max(requested_limit, len(subjects)))
+    temporal: list[dict[str, Any]] = []
+    for index in range(max((len(items) for items in by_subject), default=0)):
+        for items in by_subject:
+            if index < len(items) and len(temporal) < effective_limit:
+                temporal.append(items[index])
+    satisfied = {str(item.get("temporal_subject") or "") for item in temporal if str(item.get("temporal_subject") or "") in subjects}
+    diagnostics.update({"status": "completed_with_candidates" if temporal else "completed_no_candidates", "candidate_count": len(temporal), "effective_limit": effective_limit, "requested_limit": requested_limit, "limit_adjustment": "raised_to_subject_count" if effective_limit != requested_limit else "none", "satisfied_subject_count": len(satisfied), "missing_subject_count": len(set(subjects) - satisfied), "one_per_subject_reservation_satisfied": bool(subjects) and all(subject in satisfied for subject in subjects)})
+    return temporal, ["temporal relation evaluated over contextual semantic closure"], diagnostics
+
+
 def _temporal_candidates(
     *, connection: sqlite3.Connection, config: RuntimeConfig, chunk_rows: list[dict[str, Any]],
     layer: dict[str, Any], lexical_queries: list[str], semantic_queries: list[str],
     literal_terms: list[dict[str, Any]], scope_filters: dict[str, Any],
     embedding_backend: EmbeddingBackend, resolved_referents: list[str] | None = None,
+    closure_candidates: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     """Admit relevance separately for each existing subject, then apply chronology."""
     named_subjects = list(dict.fromkeys(str(value).strip() for value in (resolved_referents or []) if str(value).strip()))
+    if closure_candidates is not None:
+        return _temporal_candidates_from_closure(
+            connection=connection, config=config, chunk_rows=chunk_rows, layer=layer,
+            closure_candidates=closure_candidates, resolved_referents=named_subjects,
+        )
     # An empty referent list is a genuine query-level context. Keep it
     # distinct from named-subject coverage so an anonymous execution cannot
     # satisfy a semantic subject reservation.
@@ -2343,6 +2477,8 @@ def _merge_candidates(
         merge_vector_provenance(existing, candidate)
         existing["sources"] = list(dict.fromkeys(existing.get("sources", []) + candidate_layers))
         existing["source_layers"] = list(dict.fromkeys(existing.get("source_layers", []) + candidate_layers))
+        merge_list(existing, candidate, "context_subjects")
+        merge_list(existing, candidate, "temporal_subjects")
         merge_list(existing, candidate, "exact_term_provenance")
         merge_list(existing, candidate, "exact_match_evidence")
         merge_list(existing, candidate, "graph_hop_provenance")
@@ -2402,6 +2538,7 @@ def _merge_candidates(
             "vector_similarity",
             "temporal_provenance",
             "temporal_subjects",
+            "context_subjects",
             "temporal_anchor_ids",
             "temporal_governing_anchor_id",
             "temporal_governing_anchor_type",
@@ -2679,6 +2816,12 @@ def _semantic_traversal(
         config=config,
         raw_user_input=str(semantic_compiler_packet.get("raw_user_input") or ""),
     )
+    # Execute the deterministic runtime closure while retaining the compiler's
+    # requested layer list separately for diagnostics and requiredness.
+    requested_layers = list(bound_retrieval_plan.get("retrieval_layers") or [])
+    expanded_layers = list(bound_retrieval_plan.get("runtime_expanded_layers") or requested_layers)
+    bound_retrieval_plan["requested_retrieval_layers"] = requested_layers
+    bound_retrieval_plan["retrieval_layers"] = expanded_layers
     planner_resolved_referents = coerce_string_list(planner_retrieval_plan.get("resolved_referents"))
     bound_resolved_referents = coerce_string_list(bound_retrieval_plan.get("resolved_referents"))
     referent_propagation = {
@@ -2802,6 +2945,13 @@ def _semantic_traversal(
     graph_candidates: list[dict[str, Any]] = []
     graph_notes: list[str] = []
     graph_traversal_info: dict[str, Any]
+    # Contextual support surfaces are allowed to ground graph traversal even
+    # when graph_expand was omitted from the compiler's requested list.
+    direct_context_candidates = _annotate_context_candidates(
+        [*exact_candidates, *lexical_candidates, *vector_candidates],
+        plan={**bound_retrieval_plan, "concepts": semantic_compiler_packet.get("concepts", [])},
+        config=config,
+    )
     if graph_layer is not None:
         execution["layers_executed"].append(str(graph_layer.get("operator") or "graph_expand"))
         graph_candidates, graph_notes, graph_traversal_info = _graph_candidates(
@@ -2811,6 +2961,7 @@ def _semantic_traversal(
             graph_depth=graph_layer,
             scope_filters=scope_filters,
             limit=_layer_limit(graph_layer, config.retrieval_graph_max_candidates),
+            context_candidates=direct_context_candidates,
         )
     else:
         execution["layers_skipped"].append({"layer": "graph_expand", "reason": "not requested by bound retrieval plan"})
@@ -2830,6 +2981,11 @@ def _semantic_traversal(
             "candidate_unique_note_ids": [],
             "traversal_hops": [],
         }
+    graph_candidates = _annotate_context_candidates(
+        graph_candidates,
+        plan={**bound_retrieval_plan, "concepts": semantic_compiler_packet.get("concepts", [])},
+        config=config,
+    )
 
     temporal_candidates: list[dict[str, Any]] = []
     temporal_notes: list[str] = []
@@ -2855,6 +3011,7 @@ def _semantic_traversal(
                     semantic_queries=semantic_queries, literal_terms=literal_terms,
                     scope_filters=scope_filters, embedding_backend=embedding_backend,
                     resolved_referents=bound_resolved_referents,
+                    closure_candidates=[*direct_context_candidates, *graph_candidates],
                 )
         except sqlite3.OperationalError as exc:
             temporal_info = {"operator": "temporal_retrieve", "status": "unavailable", "candidate_count": 0, "failure_reason": str(exc)}
@@ -3112,6 +3269,19 @@ def _semantic_traversal(
         "limits": limits,
         "graph_traversal": graph_traversal_info,
         "selection_notes": [*exact_notes, *lexical_notes, *vector_notes, *graph_notes, *temporal_notes],
+        "semantic_closure": {
+            "execution_model": "contextual_surface_closure_then_relation_evaluation",
+            "requested_surfaces": [str(layer.get("operator") or "") for layer in requested_layers if isinstance(layer, dict)],
+            "expanded_support_surfaces": [str(layer.get("operator") or "") for layer in bound_retrieval_plan.get("expanded_support_surfaces", []) if isinstance(layer, dict)],
+            "direct_surface_attempt_counts": {"exact": 1 if exact_layer is not None else 0, "lexical": 1 if lexical_layer is not None else 0, "vector": 1 if vector_layer is not None else 0, "graph": 1 if graph_layer is not None else 0},
+            "semantic_units_discovered": len({str(candidate.get("chunk_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates] if candidate.get("chunk_id")}),
+            "semantic_objects_discovered": len({str(candidate.get("note_id") or "") for candidate in [*exact_candidates, *lexical_candidates, *vector_candidates, *graph_candidates] if candidate.get("note_id")}),
+            "graph_seeds_derived_from_grounded_objects": list(graph_traversal_info.get("submitted_seeds", [])),
+            "temporal_anchors_attached": len({str(anchor_id) for candidate in temporal_candidates for anchor_id in candidate.get("temporal_anchor_ids", [])}),
+            "termination_reason": "finite_transition_stages_completed",
+            "manifest_version": (resource_inventory_summary.get("retrieval_surface_manifest") or {}).get("manifest_version"),
+            "manifest_hash": sha256_json(resource_inventory_summary.get("retrieval_surface_manifest") or {}),
+        },
     }
 
     retrieval_packet = {

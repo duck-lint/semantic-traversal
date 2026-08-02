@@ -272,6 +272,28 @@ def bind_retrieval_plan(
             layer["include_unresolved"] = bool(layer.get("include_unresolved", config.retrieval_temporal_include_conflicted_by_default))
         canonical_layers.append(layer)
     retrieval_layers = canonical_layers
+    requested_operators = {str(layer.get("operator") or "") for layer in retrieval_layers}
+    expanded_support_surfaces: list[dict[str, Any]] = []
+
+    def add_support(operator: str, *, reason: str, limit: int | None = None) -> None:
+        if operator in requested_operators or any(item.get("operator") == operator for item in expanded_support_surfaces):
+            return
+        layer: dict[str, Any] = {"operator": operator, "required": False, "automatic": True, "support_reason": reason}
+        if limit is not None:
+            layer.update({"limit": int(limit), "effective_limit": int(limit)})
+        expanded_support_surfaces.append(layer)
+
+    # Compiler layers express required evidence/explicit intent.  They do not
+    # suppress structurally compatible grounding surfaces.
+    if literal_terms:
+        add_support("exact_chunk_search", reason="contextual exact grounding")
+    if semantic_queries or coerce_string_list(planner_retrieval_plan.get("lexical_queries")) or concepts:
+        add_support("lexical_chunk_search", reason="contextual lexical grounding", limit=config.retrieval_lexical_max_candidates)
+    if semantic_queries or concepts:
+        add_support("vector_search", reason="contextual semantic grounding", limit=config.retrieval_vector_max_candidates)
+    if config.graph_traversal_enabled and (semantic_queries or concepts or resolved_referents or coerce_string_list(planner_retrieval_plan.get("graph_seeds"))):
+        add_support("graph_expand", reason="graph propagation from grounded semantic objects", limit=config.retrieval_graph_max_candidates)
+    expanded_layers = [*retrieval_layers, *expanded_support_surfaces]
     requested_selection_policy = dict(planner_retrieval_plan.get("selection_policy") or {})
     runtime_selection_policy = config.retrieval_planner_defaults["selection_policy"]
     runtime_max_chunks = min(
@@ -327,6 +349,10 @@ def bind_retrieval_plan(
         "lexical_queries": coerce_string_list(planner_retrieval_plan.get("lexical_queries")) or concepts,
         "graph_seeds": coerce_string_list(planner_retrieval_plan.get("graph_seeds")),
         "retrieval_layers": retrieval_layers,
+        "requested_retrieval_layers": retrieval_layers,
+        "runtime_expanded_layers": expanded_layers,
+        "expanded_support_surfaces": expanded_support_surfaces,
+        "execution_model": "contextual_surface_closure_then_relation_evaluation",
         "selection_policy": selection_policy,
         "claim_policy": claim_policy,
     }
