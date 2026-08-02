@@ -113,7 +113,7 @@ class CompilerInventoryProjectionTests(unittest.TestCase):
         text = (REPO_ROOT / "semantic_traversal.runtime.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "semantic_traversal.runtime.yaml"
-            path.write_text(text.replace("    max_chars: 12000", "    max_chars: 0"), encoding="utf-8")
+            path.write_text(text.replace("    max_chars: 24000", "    max_chars: 0"), encoding="utf-8")
             with self.assertRaises(ConfigError):
                 load_runtime_config(repo_root=REPO_ROOT, config_path=str(path))
 
