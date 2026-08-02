@@ -12,6 +12,8 @@ from semantic_traversal.semantic_compiler import resolve_semantic_compiler_backe
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CHECKED_IN_CONTEXT_WINDOW_TOKENS = 40960
+CHECKED_IN_CONTEXT_WINDOW_LINE = f"  context_window_tokens: {CHECKED_IN_CONTEXT_WINDOW_TOKENS}"
 
 
 class _MockOllamaResponse:
@@ -41,26 +43,26 @@ class SemanticCompilerContextWindowTests(unittest.TestCase):
 
     def test_checked_in_context_window_is_yaml_owned(self) -> None:
         config = load_runtime_config(repo_root=REPO_ROOT)
-        self.assertEqual(config.semantic_compiler_context_window_tokens, 16384)
+        self.assertEqual(config.semantic_compiler_context_window_tokens, CHECKED_IN_CONTEXT_WINDOW_TOKENS)
 
     def test_mutated_context_window_reaches_runtime_property(self) -> None:
-        config = self._load_mutated(self.source.replace("  context_window_tokens: 16384", "  context_window_tokens: 12288", 1))
-        self.assertEqual(config.semantic_compiler_context_window_tokens, 12288)
+        config = self._load_mutated(self.source.replace(CHECKED_IN_CONTEXT_WINDOW_LINE, "  context_window_tokens: 32768", 1))
+        self.assertEqual(config.semantic_compiler_context_window_tokens, 32768)
 
     def test_context_window_must_be_positive_and_exact_integer(self) -> None:
         for value in ("0", "-1"):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ConfigError, "context_window_tokens must be greater than zero"):
-                    self._load_mutated(self.source.replace("  context_window_tokens: 16384", f"  context_window_tokens: {value}", 1))
+                    self._load_mutated(self.source.replace(CHECKED_IN_CONTEXT_WINDOW_LINE, f"  context_window_tokens: {value}", 1))
         with self.assertRaisesRegex(ConfigError, "context_window_tokens.*expected int"):
-            self._load_mutated(self.source.replace("  context_window_tokens: 16384", '  context_window_tokens: "16384"', 1))
+            self._load_mutated(self.source.replace(CHECKED_IN_CONTEXT_WINDOW_LINE, f'  context_window_tokens: "{CHECKED_IN_CONTEXT_WINDOW_TOKENS}"', 1))
 
     def test_context_window_is_required(self) -> None:
         with self.assertRaisesRegex(ConfigError, "Missing required runtime config field: root.semantic_compiler.context_window_tokens"):
-            self._load_mutated(self.source.replace("  context_window_tokens: 16384\n", "", 1))
+            self._load_mutated(self.source.replace(CHECKED_IN_CONTEXT_WINDOW_LINE + "\n", "", 1))
 
     def test_resolver_propagates_mutated_yaml_value_into_exact_request(self) -> None:
-        source = self.source.replace("  context_window_tokens: 16384", "  context_window_tokens: 12288", 1)
+        source = self.source.replace(CHECKED_IN_CONTEXT_WINDOW_LINE, "  context_window_tokens: 32768", 1)
         config = self._load_mutated(source)
         captured: dict[str, object] = {}
 
@@ -74,7 +76,7 @@ class SemanticCompilerContextWindowTests(unittest.TestCase):
 
         request = captured["request"]
         request_payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(request_payload["options"], {"num_ctx": 12288})
+        self.assertEqual(request_payload["options"], {"num_ctx": 32768})
         self.assertEqual(request_payload["model"], "qwen3:8b")
         self.assertFalse(request_payload["stream"])
         self.assertNotIn("num_predict", request_payload["options"])
@@ -83,7 +85,7 @@ class SemanticCompilerContextWindowTests(unittest.TestCase):
         self.assertNotIn("top_p", request_payload["options"])
         self.assertNotIn("seed", request_payload["options"])
         self.assertNotIn("keep_alive", request_payload["options"])
-        self.assertEqual(response.metadata["semantic_compiler_context_window_tokens"], 12288)
+        self.assertEqual(response.metadata["semantic_compiler_context_window_tokens"], 32768)
         self.assertEqual(response.metadata["ollama_prompt_eval_count"], 6173)
 
     def test_request_failure_preserves_context_provenance(self) -> None:
@@ -91,14 +93,14 @@ class SemanticCompilerContextWindowTests(unittest.TestCase):
         with patch("semantic_traversal.semantic_compiler.request.urlopen", side_effect=URLError("offline")):
             response = resolve_semantic_compiler_backend(config=config).compile_turn({"raw_user_input": "probe"})
         self.assertEqual(response.status, "unavailable")
-        self.assertEqual(response.metadata["semantic_compiler_context_window_tokens"], 16384)
+        self.assertEqual(response.metadata["semantic_compiler_context_window_tokens"], CHECKED_IN_CONTEXT_WINDOW_TOKENS)
         self.assertNotIn("ollama_prompt_eval_count", response.metadata)
 
     def test_no_model_outcome_preserves_context_provenance(self) -> None:
         config = self._load_mutated(self.source.replace("  model: qwen3:8b", "  model: null", 1))
         response = resolve_semantic_compiler_backend(config=config).compile_turn({"raw_user_input": "probe"})
         self.assertEqual(response.status, "unavailable")
-        self.assertEqual(response.metadata["semantic_compiler_context_window_tokens"], 16384)
+        self.assertEqual(response.metadata["semantic_compiler_context_window_tokens"], CHECKED_IN_CONTEXT_WINDOW_TOKENS)
         self.assertNotIn("ollama_prompt_eval_count", response.metadata)
 
 
