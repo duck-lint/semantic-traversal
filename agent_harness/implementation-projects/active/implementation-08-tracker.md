@@ -254,3 +254,28 @@ Seam 1 has not begun.
 The post-PR-14 private rerun completed five cases and six turns: all six compiler contracts were valid, with no repair or fallback. Exact-absence coverage and canonical metadata propagation remained healthy. A valid multi-subject temporal plan nevertheless admitted globally earliest unrelated evidence; compiler-emitted substrate terms were rejected by the positive alias gate.
 
 This correction excises the scope-alias subsystem and establishes temporal relevance independently per existing subject before temporal ordering. Missing required subject evidence blocks a complete comparison. No replacement positive ontology, filter language, attachment protocol, or speculative database-safety layer was added. Future UI attachments and the model bakeoff remain separate work. Seam 1 has not begun.
+
+# Post-PR-24 descriptive grounding, exact repair, and thread-isolation correction
+
+The exact base for this bounded correction is `a85f1b1838fb40f126bcef4142d14eab6917f818`.
+It preserves PR #24's typed grounding, exact-contract repair, and 40960-token
+compiler context. The correction removes the remaining over-strict descriptive
+subject gate, treats exact-layer mode as non-authoritative, requires the
+existing complete exhaustive-exact contract, and proves a real one-shot repair
+can execute. Final plan-completeness diagnostics are copied into the compiler
+diagnostic, traversal manifest, and coverage report. Blocked-plan wording now
+distinguishes structural non-execution from retrieval that returned insufficient
+evidence.
+
+The private UAT runner now performs a read-only clean-thread preflight before
+model calls. A reused deterministic suite fails with safe status/count
+diagnostics; `--replace` does not reset contaminated thread state. Fresh suite:
+
+```text
+implementation-08-private-before-v2-post-descriptive-grounding-exact-repair-isolation
+```
+
+No persisted substrate, ingest, chunk, embedding, graph, temporal, prompt,
+model, provider, routing, or private fixture changes were made. No reingest is
+required. No historical truncation compensation was added, private data was
+not accessed, and Seam 1 has not begun. Private UAT remains operator-pending.

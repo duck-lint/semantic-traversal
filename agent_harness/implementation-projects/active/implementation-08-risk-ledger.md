@@ -141,3 +141,18 @@ Mitigation for model-generated filters: the compiler schema contains semantic qu
 | Compatibility authority drift | Legacy booleans create a second grounding model | Use structured per-subject records for all authority decisions; retain booleans only as derived diagnostics |
 | Gate-removal overgrowth | New ontology, matcher, or field map is added where information already exists | Record provenance audit and stop if a generic bridge cannot be justified |
 | Proposition/evidence contradiction | Proposition count exceeds evidence-unit count | Deterministic invariant diagnostic and required-evidence rejection |
+
+## Descriptive grounding, exact repair, and thread-isolation risks
+
+| Risk | Failure mode | Mitigation |
+| --- | --- | --- |
+| Descriptive subject over-gating | A single descriptive subject is rejected because its exact phrase is absent from the candidate | Admit associated predicate/context evidence while retaining no-object-identity and no-graph-seed safeguards |
+| Exact-layer mode authority drift | A mode label blocks an otherwise executable exact retrieval contract | Preserve the raw mode only as diagnostic metadata; do not treat it as an execution requirement |
+| Incomplete exhaustive exactness | Optional literals, automatic probes, missing totals, or scoped searches are reported as exhaustive | Require the existing explicit literal, required status, executable matching, unrestricted scope, and total-count contract |
+| Repair success unproven | A repair response is accepted without proving the repaired exact plan executes | Production-shaped regression runs the initial malformed plan, one repair, and the repaired exact retrieval |
+| Repair diagnostic split-brain | Initial-plan diagnostics overwrite the repaired final plan | Preserve final completeness and literal-contract diagnostics consistently across packet, compiler, manifest, and coverage artifacts |
+| False retrieval implication | A structurally blocked plan is described as having found no matches | Use explicit non-execution wording; reserve insufficient-evidence wording for retrieval that actually ran |
+| Contaminated deterministic thread | Reused private suite state changes later model calls or outcomes | Read-only preflight all pending deterministic threads before backend resolution; require a fresh suite ID |
+| Destructive replace | `--replace` silently clears conversational state | Replace only run artifacts; never reset or delete thread state |
+| Private-state disclosure | Preflight diagnostics expose message or turn content | Emit only clean/contaminated status and counts; never serialize thread payloads |
+| Historical truncation compensation | Prior under-context behavior drives new planner heuristics | Keep compiler prompt/model/provider/context frozen and make no historical-UAT-derived compensation |

@@ -373,3 +373,28 @@ Expected directory:
 Do not access or reproduce private case content, and do not run the private
 UAT in the repository environment. The rerun remains operator-pending; model
 bakeoff remains pending; Seam 1 has not begun.
+
+# Post-PR-24 descriptive grounding, exact repair, and clean-thread isolation
+
+This correction must be rerun only with a fresh suite ID after merge:
+
+```yaml
+suite_id: implementation-08-private-before-v2-post-descriptive-grounding-exact-repair-isolation
+```
+
+Expected directory:
+`agent_harness/private/runs/implementation-08-private-before-v2-post-descriptive-grounding-exact-repair-isolation/`.
+
+Before resolving a model backend or making any model call, the runner must
+read-only inspect every pending deterministic case thread. A fresh suite must
+report all pending threads clean. A reused suite with any nonempty thread must
+fail before model calls and report only safe status/count diagnostics; it must
+direct the operator to choose a new suite ID. `--replace` may replace run
+artifacts but must not reset, delete, or overwrite thread state.
+
+The rerun should verify descriptive-subject evidence, executable exhaustive
+exact retrieval, one-shot repair success, final plan-completeness provenance,
+and the distinction between blocked retrieval and insufficient returned
+evidence. Do not run it in the repository environment, inspect private content,
+modify the fixture, or compensate for historical compiler truncation. Operator
+verification remains pending; the model bakeoff and Seam 1 remain separate.
