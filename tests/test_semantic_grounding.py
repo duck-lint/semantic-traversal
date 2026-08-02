@@ -51,13 +51,14 @@ class SemanticGroundingTests(unittest.TestCase):
             lexical_queries=["Alpha"],
             literal_terms=[{"term": "Beta", "required": True}],
         ))
-        atom = next(atom for atom in spec.shared_context_atoms if atom.kind == "semantic_query")
+        atom = next(atom for atom in spec.bundles[0].subject_predicate_atoms if atom.kind == "semantic_query")
         self.assertEqual(atom.role, "subject_and_predicate")
         self.assertEqual(atom.subject_spans, ("Alpha", "Beta"))
         self.assertEqual(atom.subject_ids, ("subject-0", "subject-1"))
         self.assertEqual(atom.predicate_residual, "reading order regarding")
         self.assertFalse(any(atom.role == "subject_only" for atom in spec.shared_context_atoms))
-        self.assertEqual(next(atom for atom in spec.bundles[0].shared_predicate_atoms if atom.kind == "semantic_query").predicate_residual, "reading order regarding")
+        self.assertEqual(atom.predicate_residual, "reading order regarding")
+        self.assertEqual(spec.bundles[1].subject_predicate_atoms[0].subject_ids, ("subject-0", "subject-1"))
 
     def test_subject_only_identity_does_not_satisfy_another_subject(self):
         spec = build_grounding_spec(self.plan(
@@ -90,6 +91,81 @@ class SemanticGroundingTests(unittest.TestCase):
         self.assertFalse(spec.named_subjects)
         self.assertEqual(spec.bundles[0].subject_id, "query-0")
         self.assertIsNone(spec.bundles[0].referent)
+
+    def test_query_level_context_admits_evidence_without_named_subject_grounding(self):
+        spec = build_grounding_spec(self.plan(
+            resolved_referents=[],
+            concepts=["query context"],
+            semantic_queries=["query context"],
+            lexical_queries=["query context"],
+        ))
+        assessment = classify_candidate(
+            self.candidate(note_title="Unrelated", paragraph_text="query context evidence"),
+            spec,
+        )
+        self.assertTrue(assessment["relation_proposition"]["eligible"])
+        self.assertEqual(assessment["relation_proposition"]["subjects"], ["query-0"])
+        self.assertNotIn("missing_subject_grounding", assessment["rejection_reasons"])
+        self.assertTrue(assessment["graph_authority"]["query_level_only"])
+
+    def test_subject_predicate_atom_is_not_broadcast_to_unrelated_subject(self):
+        spec = build_grounding_spec(self.plan(
+            semantic_queries=["reading activity of Alpha"],
+            lexical_queries=[],
+        ))
+        candidate = self.candidate(
+            note_title="Alpha",
+            paragraph_text="reading activity",
+        )
+        assessment = classify_candidate(candidate, spec)
+        self.assertIn("subject-0", assessment["relation_proposition"]["subjects"])
+        self.assertNotIn("subject-1", assessment["relation_proposition"]["subjects"])
+
+    def test_merged_subject_evidence_cannot_pair_alpha_with_beta_predicate(self):
+        spec = build_grounding_spec(self.plan())
+        alpha = classify_candidate(self.candidate(
+            note_title="Alpha", paragraph_text="reading activity", authorized_subjects=["Alpha"],
+        ), spec)
+        beta_predicate = classify_candidate(self.candidate(
+            note_title="Noise", paragraph_text="reading activity",
+        ), spec)
+        merged = merge_grounding_assessments(alpha, beta_predicate)
+        self.assertEqual(merged["relation_proposition"]["subjects"], ["subject-0"])
+
+    def test_typed_authored_relation_provenance_admits_without_prose_predicate(self):
+        candidate = self.candidate(
+            note_title="Activity",
+            relative_path="activity.md",
+            paragraph_text="dated record",
+            wikilink_identity_promotions=[{
+                "subject_id": "subject-0", "referent": "Alpha", "target_note_id": "note-alpha",
+                "occurrence": {
+                    "source_surface": "admitted_frontmatter",
+                    "frontmatter_field_path": "related[0]",
+                    "raw_wikilink_text": "[[Alpha]]",
+                    "resolution_status": "resolved",
+                },
+            }],
+            graph_hop_provenance=[{
+                "edge_type": "note_links_note",
+                "subject_propagation_authorized": True,
+                "propagated_subjects": ["subject-0"],
+                "edge_provenance": {"source_surface": "admitted_frontmatter", "frontmatter_field_path": "related[0]"},
+            }],
+            authorized_subjects=["Alpha"],
+        )
+        assessment = classify_candidate(
+            candidate,
+            build_grounding_spec(self.plan(
+                resolved_referents=["Alpha"],
+                concepts=["start reading"],
+                semantic_queries=["start reading"],
+                lexical_queries=["start reading"],
+            )),
+        )
+        self.assertTrue(assessment["relation_proposition"]["eligible"])
+        self.assertEqual(assessment["relation_proposition"]["subjects"], ["subject-0"])
+        self.assertEqual(assessment["relation_proposition"]["context_atoms"][0]["match"], "typed_relation_provenance")
 
     def test_title_identity_can_authorize_subject_graph(self):
         assessment = classify_candidate(self.candidate(), build_grounding_spec(self.plan(resolved_referents=["Alpha"])))

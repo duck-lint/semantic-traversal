@@ -492,6 +492,8 @@ def _canonicalize_compiler_packet(
             }
         )
     }
+    if planner_diagnostics.get("literal_contract") is not None:
+        packet["planner_diagnostics"]["literal_contract"] = dict(planner_diagnostics["literal_contract"])
     return packet
 
 
@@ -596,6 +598,8 @@ def _repair_incomplete_compiler_plan(
     }
     repaired_completeness["repair_attempted"] = True
     repaired_completeness["repair_result"] = repair_record["outcome"]
+    if isinstance(repaired_completeness.get("literal_contract"), dict):
+        repaired_completeness["literal_contract"]["repair_triggered"] = True
     repaired_packet.setdefault("planner_diagnostics", {})["plan_completeness"] = repaired_completeness
     repaired_packet["planner_diagnostics"]["plan_repair"] = repair_record
     return repaired_packet, repaired_status, repair_response, repair_record
@@ -987,6 +991,14 @@ def _grounding_summary(*, specification: dict[str, Any], candidates: list[dict[s
         for key in ("referent_atoms", "subject_bearing_atoms", "subject_predicate_atoms", "shared_predicate_atoms", "query_level_atoms")
         for atom in ((bundle.get(key) or []) if isinstance(bundle.get(key), list) else [])
     ]
+    atom_keys: set[str] = set()
+    unique_atoms: list[dict[str, Any]] = []
+    for atom in atoms:
+        key = json.dumps(atom, sort_keys=True, ensure_ascii=True)
+        if key not in atom_keys:
+            atom_keys.add(key)
+            unique_atoms.append(atom)
+    atoms = unique_atoms
     unique_candidates = {str(item.get("chunk_id") or ""): item for item in candidates if str(item.get("chunk_id") or "")}
     evidence_units = {
         chunk_id for chunk_id, candidate in unique_candidates.items()
@@ -1002,8 +1014,30 @@ def _grounding_summary(*, specification: dict[str, Any], candidates: list[dict[s
     frontmatter_promotions = 0
     unresolved = 0
     authorized_seeds: set[str] = set()
+    typed_relation_count = 0
+    typed_relation_temporal_count = 0
+    rejection_reason_counts: Counter[str] = Counter()
+    per_subject: dict[str, dict[str, int]] = defaultdict(lambda: {"evidence_grounded": 0, "predicate_grounded": 0, "proposition_grounded": 0})
     for candidate in unique_candidates.values():
         grounding = candidate.get("grounding") or {}
+        typed_matches = [
+            entry
+            for evidence in (grounding.get("predicate_evidence") or {}).values()
+            if isinstance(evidence, list)
+            for entry in evidence
+            if isinstance(entry, dict) and entry.get("match") == "typed_relation_provenance"
+        ]
+        typed_relation_count += len(typed_matches)
+        if typed_matches and "temporal" in _candidate_source_layers(candidate):
+            typed_relation_temporal_count += len(typed_matches)
+        for reason in _coerce_string_list(grounding.get("rejection_reasons")):
+            rejection_reason_counts[reason] += 1
+        for subject_id in _coerce_string_list((grounding.get("evidence_unit") or {}).get("subjects")):
+            per_subject[subject_id]["evidence_grounded"] += 1
+        for subject_id in (grounding.get("predicate_evidence") or {}).keys():
+            per_subject[subject_id]["predicate_grounded"] += 1
+        for subject_id in _coerce_string_list((grounding.get("relation_proposition") or {}).get("subjects")):
+            per_subject[subject_id]["proposition_grounded"] += 1
         for subject in (grounding.get("object_identity") or {}).get("subjects", []):
             target_ids = candidate.get("identity_seed_note_ids") or [candidate.get("note_id")]
             identity_notes.update(str(value) for value in target_ids if str(value or ""))
@@ -1045,6 +1079,13 @@ def _grounding_summary(*, specification: dict[str, Any], candidates: list[dict[s
         "identity_authorized_graph_seed_count": len(authorized_seeds),
         "evidence_only_note_count": len({str(candidate.get("note_id") or "") for candidate in unique_candidates.values() if not ((candidate.get("grounding") or {}).get("object_identity") or {}).get("subjects")}),
         "grounding_assessment_merge_count": sum(1 for candidate in candidates if isinstance(candidate.get("grounding"), dict) and len(candidate.get("source_layers", [])) > 1),
+        "query_level_evidence_grounded_unit_count": sum(1 for candidate in unique_candidates.values() if "query-0" in _coerce_string_list(((candidate.get("grounding") or {}).get("evidence_unit") or {}).get("subjects"))),
+        "query_level_proposition_grounded_unit_count": sum(1 for candidate in unique_candidates.values() if "query-0" in _coerce_string_list(((candidate.get("grounding") or {}).get("relation_proposition") or {}).get("subjects"))),
+        "query_level_missing_subject_grounding_count": sum(1 for candidate in unique_candidates.values() if not specification.get("named_subjects") and "missing_subject_grounding" in _coerce_string_list((candidate.get("grounding") or {}).get("rejection_reasons"))),
+        "typed_relation_evidence_count": typed_relation_count,
+        "typed_relation_temporal_candidate_count": typed_relation_temporal_count,
+        "typed_relation_rejection_reason_counts": dict(sorted(rejection_reason_counts.items())),
+        "per_subject_grounding": {key: per_subject[key] for key in sorted(per_subject)},
     }
     diagnostics["proposition_implies_evidence"] = diagnostics["proposition_grounded_unit_count"] <= diagnostics["evidence_grounded_unit_count"]
     diagnostics["invariant_status"] = "valid" if diagnostics["proposition_implies_evidence"] else "invalid_proposition_without_evidence"

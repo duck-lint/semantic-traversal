@@ -201,7 +201,10 @@ def build_grounding_spec(plan: dict[str, Any]) -> GroundingSpecification:
         )
         return GroundingSpecification((bundle,), False, tuple(context), tuple(relations), tuple(required))
 
-    shared = tuple(atom for atom in context if atom.role == "predicate_only" or (atom.role == "subject_and_predicate" and atom.predicate_residual)) if len(referents) > 1 else ()
+    # Predicate-only atoms are the only genuinely shared context.  A
+    # subject-and-predicate atom carries an explicit subject scope and must be
+    # assigned only to the subjects named in that atom.
+    shared = tuple(atom for atom in context if atom.role == "predicate_only") if len(referents) > 1 else ()
     bundles: list[SubjectPropositionBundle] = []
     for index, referent in enumerate(referents):
         subject_id = f"subject-{index}"
@@ -270,6 +273,8 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
         "evidence_unit": {"subjects": [], "context_atoms": [], "evidence": []},
         "relation_proposition": {"subjects": [], "relations": [], "context_atoms": [], "eligible": False},
         "graph_authority": {"may_seed_subject_graph": False, "may_propagate_subjects": [], "query_level_only": not specification.named_subjects},
+        "subject_evidence": {},
+        "predicate_evidence": {},
         "rejection_reasons": [],
     }
     identity_by_subject: dict[str, list[dict[str, str]]] = {}
@@ -279,7 +284,10 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
     promotions = candidate.get("wikilink_identity_promotions") if isinstance(candidate.get("wikilink_identity_promotions"), list) else []
     for bundle in specification.bundles:
         if bundle.referent is None:
-            atoms = [*bundle.supporting_context_atoms, *bundle.shared_context_atoms]
+            # `supporting_context_atoms` is the authoritative per-subject
+            # distribution.  Do not append the shared compatibility view a
+            # second time.
+            atoms = list(bundle.supporting_context_atoms)
         else:
             identity = _identity_match(candidate, bundle.referent)
             identity.extend(
@@ -310,10 +318,21 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
                 }]
         matched = [match for atom in atoms if atom.role != "subject_only" and (match := _atom_matches(candidate, atom))]
         predicate_matches = [match for atom in atoms if atom.role in {"predicate_only", "subject_and_predicate"} and atom.predicate_residual and (match := _atom_matches(candidate, atom))]
+
+        # A resolved, admitted frontmatter wikilink plus its authored graph
+        # edge is already typed relational evidence.  The source prose does
+        # not need to repeat the field's natural-language meaning.
+        if bundle.referent is not None:
+            typed_match = _typed_relation_match(candidate, bundle.subject_id)
+            if typed_match is not None:
+                matched.append(typed_match)
+                predicate_matches.append(typed_match)
         if matched:
             evidence_by_subject[bundle.subject_id] = matched
             assessment["evidence_unit"]["subjects"].append(bundle.subject_id)
             assessment["evidence_unit"]["context_atoms"].extend(matched)
+            if not specification.named_subjects:
+                predicate_by_subject[bundle.subject_id] = list(matched)
         if predicate_matches:
             predicate_by_subject[bundle.subject_id] = predicate_matches
     # Existing graph provenance is trusted only as an explicit relation from an
@@ -329,18 +348,29 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
         associated_subjects = _unique([*associated_subjects, *subject_evidence_by_subject.keys()])
     if associated_subjects:
         assessment["evidence_unit"]["subjects"] = _unique([*assessment["evidence_unit"]["subjects"], *associated_subjects])
+    for subject_id in associated_subjects:
+        subject_evidence_by_subject.setdefault(subject_id, [{
+            "kind": "subject_authority", "value": subject_id,
+            "source": "object_identity" if subject_id in assessment["object_identity"]["subjects"] else "authorized_graph",
+            "role": "subject_only", "match": "authority",
+        }])
     if assessment["object_identity"]["subjects"] or graph_subjects:
         assessment["graph_authority"]["may_seed_subject_graph"] = bool(assessment["object_identity"]["subjects"])
         assessment["graph_authority"]["may_propagate_subjects"] = associated_subjects
     for bundle in specification.bundles:
-        subjects = set(associated_subjects if specification.named_subjects else [bundle.subject_id])
-        if bundle.subject_id not in subjects:
+        if not specification.named_subjects:
+            # Query-level context has no named object to ground.  Its
+            # proposition is admitted directly from matched query context.
+            predicate_matches = [*evidence_by_subject.get(bundle.subject_id, [])]
+            if predicate_matches:
+                assessment["relation_proposition"]["subjects"].append(bundle.subject_id)
+                assessment["relation_proposition"]["context_atoms"].extend(predicate_matches)
+            continue
+        if bundle.subject_id not in associated_subjects:
+            assessment["rejection_reasons"].append("missing_subject_grounding")
             continue
         subject_grounded = bundle.subject_id in associated_subjects
         predicate_matches = predicate_by_subject.get(bundle.subject_id, [])
-        if not subject_grounded:
-            assessment["rejection_reasons"].append("missing_subject_grounding")
-            continue
         if not predicate_matches:
             assessment["rejection_reasons"].append("missing_predicate_grounding")
             assessment["rejection_reasons"].append("missing_supporting_context")
@@ -356,6 +386,13 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
     ]
     assessment["relation_proposition"]["relations"] = list(specification.requested_relations)
     assessment["relation_proposition"]["eligible"] = bool(assessment["relation_proposition"]["subjects"])
+    assessment["subject_evidence"] = {key: value for key, value in subject_evidence_by_subject.items() if value}
+    assessment["predicate_evidence"] = {key: value for key, value in predicate_by_subject.items() if value}
+    assessment["subject_referents_by_id"] = {
+        bundle.subject_id: bundle.referent
+        for bundle in specification.bundles
+        if bundle.referent is not None
+    }
     assessment["diagnostic_subjects"] = {
         "subject_grounded": sorted(associated_subjects),
         "predicate_grounded": sorted(predicate_by_subject),
@@ -366,6 +403,56 @@ def classify_candidate(candidate: dict[str, Any], specification: GroundingSpecif
     if not specification.named_subjects and assessment["relation_proposition"]["eligible"]:
         assessment["graph_authority"]["query_level_only"] = True
     return assessment
+
+
+def _typed_relation_match(candidate: dict[str, Any], subject_id: str) -> dict[str, Any] | None:
+    """Consume existing authored-link provenance as typed relation evidence."""
+    promotions = candidate.get("wikilink_identity_promotions")
+    hops = candidate.get("graph_hop_provenance")
+    if not isinstance(promotions, list) or not isinstance(hops, list):
+        return None
+    for promotion in promotions:
+        if not isinstance(promotion, dict) or str(promotion.get("subject_id")) != subject_id:
+            continue
+        occurrence = promotion.get("occurrence") if isinstance(promotion.get("occurrence"), dict) else {}
+        if (
+            occurrence.get("source_surface") != "admitted_frontmatter"
+            or not str(occurrence.get("frontmatter_field_path") or "").strip()
+            or occurrence.get("resolution_status") != "resolved"
+            or not str(promotion.get("target_note_id") or "").strip()
+        ):
+            continue
+        for hop in hops:
+            if not isinstance(hop, dict) or hop.get("edge_type") != "note_links_note":
+                continue
+            propagated = _strings(hop.get("propagated_subjects"))
+            edge_provenance = hop.get("edge_provenance") if isinstance(hop.get("edge_provenance"), dict) else {}
+            authored_edge = edge_provenance.get("source_surface") == "admitted_frontmatter" and bool(str(edge_provenance.get("frontmatter_field_path") or "").strip())
+            if not authored_edge and isinstance(edge_provenance.get("provenance"), list):
+                authored_edge = any(
+                    isinstance(record, dict)
+                    and record.get("source_surface") == "admitted_frontmatter"
+                    and bool(str(record.get("frontmatter_field_path") or "").strip())
+                    for record in edge_provenance["provenance"]
+                )
+            if not hop.get("subject_propagation_authorized") or subject_id not in propagated:
+                continue
+            if not authored_edge:
+                continue
+            return {
+                "kind": "typed_relation_evidence",
+                "value": str(occurrence.get("frontmatter_field_path")),
+                "original_value": str(occurrence.get("raw_wikilink_text") or ""),
+                "source": "admitted_frontmatter",
+                "role": "typed_relation",
+                "match": "typed_relation_provenance",
+                "subject_id": subject_id,
+                "target_note_id": str(promotion.get("target_note_id")),
+                "occurrence": occurrence,
+                "graph_hop": hop,
+                "edge_provenance": edge_provenance,
+            }
+    return None
 
 
 def merge_grounding_assessments(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
@@ -384,6 +471,20 @@ def merge_grounding_assessments(left: dict[str, Any], right: dict[str, Any]) -> 
                 target[key] = bool(target.get(key)) or value
             elif value is not None:
                 target[key] = value
+    for evidence_key in ("subject_evidence", "predicate_evidence"):
+        target = merged.setdefault(evidence_key, {})
+        source = right.get(evidence_key) if isinstance(right.get(evidence_key), dict) else {}
+        for subject_id, evidence in source.items():
+            if not isinstance(evidence, list):
+                continue
+            existing = target.setdefault(subject_id, [])
+            for item in evidence:
+                if item not in existing:
+                    existing.append(item)
+    merged["subject_referents_by_id"] = {
+        **(left.get("subject_referents_by_id") if isinstance(left.get("subject_referents_by_id"), dict) else {}),
+        **(right.get("subject_referents_by_id") if isinstance(right.get("subject_referents_by_id"), dict) else {}),
+    }
     reasons = merged.setdefault("rejection_reasons", [])
     for reason in _strings(right.get("rejection_reasons")):
         if reason not in reasons:
@@ -391,7 +492,17 @@ def merge_grounding_assessments(left: dict[str, Any], right: dict[str, Any]) -> 
     relation = merged["relation_proposition"]
     # Eligibility is derived from the merged structured records, never from a
     # compatibility boolean supplied by one retrieval route.
-    relation["eligible"] = bool(relation.get("subjects")) and bool(relation.get("context_atoms"))
+    subject_evidence = merged.get("subject_evidence") if isinstance(merged.get("subject_evidence"), dict) else {}
+    predicate_evidence = merged.get("predicate_evidence") if isinstance(merged.get("predicate_evidence"), dict) else {}
+    eligible_subjects = [subject_id for subject_id in subject_evidence if subject_evidence.get(subject_id) and predicate_evidence.get(subject_id)]
+    # Query-level propositions intentionally have no subject record; matched
+    # query context is sufficient evidence for their single internal bundle.
+    if "query-0" in predicate_evidence and not subject_evidence.get("query-0"):
+        eligible_subjects.append("query-0")
+    relation["subjects"] = _unique(eligible_subjects)
+    referents_by_id = merged.get("subject_referents_by_id") if isinstance(merged.get("subject_referents_by_id"), dict) else {}
+    relation["subject_referents"] = [str(referents_by_id[subject_id]) for subject_id in relation["subjects"] if referents_by_id.get(subject_id)]
+    relation["eligible"] = bool(relation.get("subjects"))
     return merged
 
 
