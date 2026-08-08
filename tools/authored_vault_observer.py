@@ -119,7 +119,16 @@ def _uuid_observation(frontmatter: dict[str, Any]) -> dict[str, Any]:
 
 def _parse_link(match: re.Match[str], surface: str, key_path: str | None) -> dict[str, Any]:
     body = match.group("body")
-    target_with_fragments, display = (body.split("|", 1) + [None])[:2]
+    # Obsidian-authored links in the corpus use both `|` and the escaped
+    # `\|` display separator.  Consume the separator escape as syntax while
+    # retaining the original markup in raw_link_markup.
+    separator = re.search(r"\\?\|", body)
+    if separator:
+        target_with_fragments = body[:separator.start()]
+        display = body[separator.end():]
+    else:
+        target_with_fragments = body
+        display = None
     base = target_with_fragments
     heading = None
     block = None
@@ -284,40 +293,55 @@ def observe(vault_root: Path, output_root: Path) -> tuple[dict[str, Any], dict[s
             uuid_groups.setdefault(parsed, []).append(record["source"]["relative_path"])
     for record in markdown:
         parsed = record["uuid"].get("parsed_value")
-        record["uuid"]["duplicate_source_paths"] = sorted(uuid_groups.get(parsed, [])) if parsed else []
+        occurrences = sorted(uuid_groups.get(parsed, [])) if parsed else []
+        record["uuid"]["occurrence_source_paths"] = occurrences
+        record["uuid"]["duplicate_source_paths"] = occurrences if len(occurrences) > 1 else []
 
-    exact_lookup: dict[str, set[str]] = {}
-    stem_lookup: dict[str, set[str]] = {}
-    aliases: dict[str, set[str]] = {}
+    address_surfaces: dict[str, dict[str, set[str]]] = {
+        "exact_relative_path": {},
+        "exact_relative_path_without_extension": {},
+        "basename_stem": {},
+        "authored_alias": {},
+    }
+
+    def add_surface(surface: str, key: str, source: str) -> None:
+        address_surfaces[surface].setdefault(key, set()).add(source)
+
     for record in markdown:
         path = Path(record["source"]["relative_path"])
         source = record["source"]["relative_path"]
-        for key in {source, source.removesuffix(path.suffix)}:
-            exact_lookup.setdefault(key, set()).add(source)
-        stem_lookup.setdefault(path.stem, set()).add(source)
+        add_surface("exact_relative_path", source, source)
+        add_surface("exact_relative_path_without_extension", source.removesuffix(path.suffix), source)
+        add_surface("basename_stem", path.stem, source)
         values = record["frontmatter"].get("values", {})
         raw_aliases = values.get("aliases", [])
         if isinstance(raw_aliases, str):
             raw_aliases = [raw_aliases]
         if isinstance(raw_aliases, list):
             for alias in raw_aliases:
-                aliases.setdefault(str(alias), set()).add(source)
-    for alias, sources in aliases.items():
-        exact_lookup.setdefault(alias, set()).update(sources)
+                add_surface("authored_alias", str(alias), source)
+
     by_source = {record["source"]["relative_path"]: record for record in markdown}
     for record in markdown:
         for link in record["authored_links"]:
             target = link["raw_target_without_fragment"].strip()
-            candidates = sorted(exact_lookup.get(target, set()))
-            if not candidates:
-                candidates = sorted(stem_lookup.get(target, set()))
-            if not candidates and target.endswith(".md"):
-                candidates = sorted(exact_lookup.get(target[:-3], set()))
+            candidate_surfaces: dict[str, set[str]] = {}
+            for surface, lookup in address_surfaces.items():
+                matches = set(lookup.get(target, set()))
+                if target.endswith(".md") and surface == "exact_relative_path_without_extension":
+                    matches.update(lookup.get(target[:-3], set()))
+                if matches:
+                    candidate_surfaces[surface] = matches
+            candidates = sorted({source for sources in candidate_surfaces.values() for source in sources})
+            candidate_evidence = [
+                {"source_path": source, "surfaces": sorted(surface for surface, sources in candidate_surfaces.items() if source in sources)}
+                for source in candidates
+            ]
             cardinality = "zero_candidates" if not candidates else "one_candidate" if len(candidates) == 1 else "multiple_candidates"
             target_record = by_source.get(candidates[0]) if len(candidates) == 1 else None
             heading_names = {heading["raw_text"] for heading in target_record["headings"]} if target_record else set()
             block_ids = {block_id for block in target_record["block_candidates"] for block_id in block["explicit_block_ids"]} if target_record else set()
-            link["target_candidates"] = {"cardinality": cardinality, "candidate_source_paths": candidates}
+            link["target_candidates"] = {"cardinality": cardinality, "candidate_source_paths": candidates, "candidate_evidence": candidate_evidence}
             link["heading_target_evaluation"] = "not_applicable" if link["heading_fragment"] is None else "observed" if target_record and link["heading_fragment"] in heading_names else "not_evaluable_parent_unresolved" if not target_record else "absent"
             link["block_target_evaluation"] = "not_applicable" if link["block_fragment"] is None else "observed" if target_record and link["block_fragment"] in block_ids else "not_evaluable_parent_unresolved" if not target_record else "absent"
 

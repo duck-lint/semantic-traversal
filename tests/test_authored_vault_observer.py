@@ -17,7 +17,7 @@ related: [[Target]]
 ---
 # Heading
 
-[[Target#Heading]] [[Target#^block-id]] [[Missing]] [[Alias|Shown]] ![[Target]] [[Shared]]
+[[Target#Heading]] [[Target#^block-id]] [[Missing]] [[Alias|Shown]] [[Target\\|Shown]] [[Target#Heading\\|Shown]] [[Target#^block-id\\|Shown]] ![[Target]] [[Shared]]
 
 This authored paragraph is intentionally larger than two thousand characters and must remain whole. """ + ("x" * 2200) + "\n\n> quoted material\n\n- list item\n\n| a | b |\n|---|---|\n| c | d |\n\n```python\nprint('code')\n```\n"
 
@@ -79,12 +79,52 @@ class AuthoredVaultObserverTests(unittest.TestCase):
             (root / "DuplicateV7.md").write_text("---\nuuid: 019bc983-5620-7f08-9626-474a1e548272\n---\n", encoding="utf-8")
             observation, summary = self.run_observer(root, output)
             records = {item["source"]["relative_path"]: item for item in observation["markdown_observations"]}
+            self.assertEqual(records["Source.md"]["uuid"]["occurrence_source_paths"], ["DuplicateV7.md", "Source.md"])
             self.assertEqual(records["Source.md"]["uuid"]["duplicate_source_paths"], ["DuplicateV7.md", "Source.md"])
             self.assertEqual(summary["duplicate_uuid_group_count"], 1)
             links = records["Source.md"]["authored_links"]
             self.assertTrue(any(link["source_surface"] == "frontmatter" and link["frontmatter_key_path"] == "related" for link in links))
             self.assertTrue(any(link["source_surface"] == "body" for link in links))
             self.assertTrue(any(link["display_alias"] == "Shown" for link in links))
+
+            escaped = next(link for link in links if link["raw_link_markup"] == "[[Target\\|Shown]]")
+            self.assertEqual(escaped["raw_target"], "Target")
+            self.assertEqual(escaped["display_alias"], "Shown")
+            escaped_heading = next(link for link in links if link["raw_link_markup"] == "[[Target#Heading\\|Shown]]")
+            self.assertEqual(escaped_heading["heading_fragment"], "Heading")
+            escaped_block = next(link for link in links if link["raw_link_markup"] == "[[Target#^block-id\\|Shown]]")
+            self.assertEqual(escaped_block["block_fragment"], "block-id")
+
+    def test_uuid_singletons_and_duplicate_pair_have_truthful_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "Unique.md").write_text("---\nuuid: 22222222-2222-4222-8222-222222222222\n---\nunique\n", encoding="utf-8")
+            (root / "DuplicateA.md").write_text("---\nuuid: 33333333-3333-4333-8333-333333333333\n---\nduplicate a\n", encoding="utf-8")
+            (root / "DuplicateB.md").write_text("---\nuuid: 33333333-3333-4333-8333-333333333333\n---\nduplicate b\n", encoding="utf-8")
+            observation, summary = observe(root, output)
+            records = {item["source"]["relative_path"]: item for item in observation["markdown_observations"]}
+            self.assertEqual(records["Unique.md"]["uuid"]["occurrence_source_paths"], ["Unique.md"])
+            self.assertEqual(records["Unique.md"]["uuid"]["duplicate_source_paths"], [])
+            self.assertEqual(records["DuplicateA.md"]["uuid"]["occurrence_source_paths"], ["DuplicateA.md", "DuplicateB.md"])
+            self.assertEqual(records["DuplicateB.md"]["uuid"]["duplicate_source_paths"], ["DuplicateA.md", "DuplicateB.md"])
+            self.assertEqual(summary["duplicate_uuid_group_count"], 1)
+
+    def test_candidate_surfaces_are_union_with_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "Target.md").write_text("---\nuuid: 44444444-4444-4444-8444-444444444444\n---\n", encoding="utf-8")
+            (root / "AliasCarrier.md").write_text("---\nuuid: 55555555-5555-4555-8555-555555555555\naliases: [Target]\n---\n", encoding="utf-8")
+            (root / "Source.md").write_text("[[Target]]\n", encoding="utf-8")
+            observation, _ = observe(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            link = source["authored_links"][0]
+            self.assertEqual(link["target_candidates"]["cardinality"], "multiple_candidates")
+            self.assertEqual(link["target_candidates"]["candidate_source_paths"], ["AliasCarrier.md", "Target.md"])
+            evidence = {item["source_path"]: item["surfaces"] for item in link["target_candidates"]["candidate_evidence"]}
+            self.assertEqual(evidence["Target.md"], ["basename_stem", "exact_relative_path_without_extension"])
+            self.assertEqual(evidence["AliasCarrier.md"], ["authored_alias"])
 
     def test_fragment_evaluation_has_explicit_applicability_and_candidate_cardinality(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,7 +137,8 @@ class AuthoredVaultObserverTests(unittest.TestCase):
             self.assertEqual(plain["heading_target_evaluation"], "not_applicable")
             self.assertEqual(plain["block_target_evaluation"], "not_applicable")
             heading = next(link for link in links if link["heading_fragment"] == "Heading")
-            self.assertEqual(heading["target_candidates"]["cardinality"], "one_candidate")
+            self.assertEqual(heading["target_candidates"]["cardinality"], "multiple_candidates")
+            self.assertEqual(heading["heading_target_evaluation"], "not_evaluable_parent_unresolved")
             ambiguous = next(link for link in links if link["raw_target_without_fragment"] == "Shared")
             self.assertEqual(ambiguous["target_candidates"]["cardinality"], "multiple_candidates")
             unresolved = next(link for link in links if link["raw_target_without_fragment"] == "Missing")
