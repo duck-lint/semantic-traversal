@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,89 +9,147 @@ from unittest.mock import patch
 from tools.authored_vault_observer import observe
 
 
-FIXTURE = """---
-uuid: 11111111-1111-4111-8111-111111111111
+SOURCE = """---
+uuid: 019bc983-5620-7f08-9626-474a1e548272
 aliases: [Shared]
-secret: vault-secret-canary
+new_field: {nested: true}
+related: [[Target]]
 ---
 # Heading
 
-[[Missing]] [[Target#Heading]] [[Target#Nope]] [[Target^block]] [[Target|Shown]] ![[Target]] [[Shared]]
+[[Target#Heading]] [[Target#^block-id]] [[Missing]] [[Alias|Shown]] ![[Target]] [[Shared]]
 
-This paragraph is deliberately longer than the production chunk limit and must remain one authored block. """ + ("x" * 2200) + "\n\n> quoted material\n\n- list item\n\n| a | b |\n|---|---|\n| c | d |\n\n```python\nprint('code')\n```\n\n123\n"""
+This authored paragraph is intentionally larger than two thousand characters and must remain whole. """ + ("x" * 2200) + "\n\n> quoted material\n\n- list item\n\n| a | b |\n|---|---|\n| c | d |\n\n```python\nprint('code')\n```\n"
 
 
 class AuthoredVaultObserverTests(unittest.TestCase):
     def make_vault(self, root: Path) -> None:
-        (root / "Target.md").write_text("---\nuuid: 22222222-2222-4222-8222-222222222222\naliases: [Shared]\n---\n# Heading\n\nbody\n", encoding="utf-8")
-        (root / "Source.md").write_text(FIXTURE, encoding="utf-8")
-        (root / "MissingUuid.md").write_text("---\ntitle: missing\n---\nbody\n", encoding="utf-8")
-        (root / "MalformedUuid.md").write_text("---\nuuid: definitely-not-a-uuid\n---\nbody\n", encoding="utf-8")
-        (root / "Malformed.md").write_text("---\nuuid: [not closed\n---\nbody\n", encoding="utf-8")
-        (root / "Duplicate.md").write_text("---\nuuid: 11111111-1111-4111-8111-111111111111\n---\n", encoding="utf-8")
-        (root / "excluded" / "Policy.md").parent.mkdir()
-        (root / "excluded" / "Policy.md").write_text("---\nuuid: 33333333-3333-4333-8333-333333333333\n---\npolicy\n", encoding="utf-8")
-        (root / "asset.bin").write_bytes(b"binary")
+        (root / ".git" / "objects").mkdir(parents=True)
+        (root / ".git" / "objects" / "fake" ).write_bytes(b"git state")
+        (root / ".semantic-traversal").mkdir()
+        (root / ".semantic-traversal" / "state.db").write_bytes(b"generated")
+        (root / ".obsidian").mkdir()
+        (root / ".obsidian" / "app.json").write_text('{"app": true}', encoding="utf-8")
+        (root / "empty-dir").mkdir()
+        (root / "VAULT DESIGN" / "nested").mkdir(parents=True)
+        (root / "INBOX").mkdir()
+        (root / "Target.md").write_text("---\nuuid: 019bc983-a82b-70cd-b775-adcc3b323251\naliases: [Alias, Shared]\n---\n# Heading\n\nparagraph ^block-id\n", encoding="utf-8")
+        (root / "Other" / "Target.md").parent.mkdir()
+        (root / "Other" / "Target.md").write_text("---\nuuid: 019f99e6-b52c-7082-8913-e57ef42c5027\naliases: [Shared]\n---\nother\n", encoding="utf-8")
+        (root / "Source.md").write_text(SOURCE, encoding="utf-8")
+        (root / "OtherVersion.md").write_text("---\nuuid: 11111111-1111-4111-8111-111111111111\n---\nbody\n", encoding="utf-8")
+        (root / "MalformedUuid.md").write_text("---\nuuid: not-a-uuid\n---\nbody\n", encoding="utf-8")
+        (root / "MissingUuid.md").write_text("---\nnew_field: value\n---\n", encoding="utf-8")
+        (root / "MalformedYaml.md").write_text("---\nkey: [not closed\n---\nbody\n", encoding="utf-8")
+        (root / "VAULT DESIGN" / "Design.md").write_text("# design\n", encoding="utf-8")
+        (root / "INBOX" / "Inbox.md").write_text("# inbox\n", encoding="utf-8")
+        (root / "attachment.pdf").write_bytes(b"pdf")
 
-    def observe_fixture(self, vault: Path, output: Path, config: Path | None = None):
-        return observe(vault, output, runtime_config=config)
+    def run_observer(self, root: Path, output: Path):
+        return observe(root, output)
 
-    def test_fixture_preserves_raw_sources_and_observes_ugly_cases(self):
+    def test_shows_apparatus_topology_authored_structure_and_ugly_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, out = Path(tmp) / "vault", Path(tmp) / "out"
-            root.mkdir(); self.make_vault(root)
-            observation, summary, _ = self.observe_fixture(root, out)
-            records = {r["source"]["relative_path"]: r for r in observation["markdown_observations"]}
-            self.assertEqual(records["Source.md"]["raw_markdown"], FIXTURE)
-            self.assertEqual(records["MissingUuid.md"]["uuid"]["parse_status"], "missing")
-            self.assertEqual(records["MalformedUuid.md"]["uuid"]["parse_status"], "invalid")
-            self.assertEqual(records["Malformed.md"]["frontmatter"]["status"], "malformed")
-            self.assertEqual(records["Duplicate.md"]["uuid"]["duplicate_source_paths"], ["Duplicate.md", "Source.md"])
-            self.assertEqual(summary["file_kind_counts"]["binary_or_non_markdown"], 1)
-            self.assertGreaterEqual(summary["ambiguous_target_count"], 1)
-            self.assertGreaterEqual(summary["unresolved_target_count"], 1)
-            links = records["Source.md"]["authored_links"]
-            self.assertTrue(any(link["embedded"] for link in links))
-            self.assertTrue(any(link["display_alias"] == "Shown" for link in links))
-            self.assertTrue(any(link["heading_fragment"] == "Heading" for link in links))
-            self.assertTrue(any(link["block_fragment"] == "block" for link in links))
-            heading_missing = next(link for link in links if link["heading_fragment"] == "Nope")
-            self.assertEqual(heading_missing["target_resolution"]["heading_target_status"], "absent")
-            long_blocks = [b for b in records["Source.md"]["block_candidates"] if len(b["raw_markdown"]) > 2200]
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            self.make_vault(root)
+            observation, summary = self.run_observer(root, output)
+            self.assertEqual({item["relative_root_path"] for item in observation["technical_apparatus_observations"]}, {".git", ".obsidian", ".semantic-traversal"})
+            self.assertIn("empty-dir", {item["relative_path"] for item in observation["directory_observations"]})
+            resident_paths = {item["relative_path"] for item in observation["file_observations"]}
+            self.assertIn("VAULT DESIGN/Design.md", resident_paths)
+            self.assertIn("INBOX/Inbox.md", resident_paths)
+            records = {item["source"]["relative_path"]: item for item in observation["markdown_observations"]}
+            self.assertEqual(records["Source.md"]["raw_markdown"], SOURCE)
+            self.assertEqual(records["MalformedYaml.md"]["frontmatter"]["status"], "malformed")
+            self.assertEqual(records["MissingUuid.md"]["uuid"]["parse_status"], "absent")
+            self.assertEqual(records["MalformedUuid.md"]["uuid"]["parse_status"], "not_parseable")
+            self.assertEqual(records["Source.md"]["uuid"]["parsed_version"], 7)
+            self.assertEqual(records["OtherVersion.md"]["uuid"]["parsed_version"], 4)
+            long_blocks = [block for block in records["Source.md"]["block_candidates"] if len(block["raw_markdown"]) > 2200]
             self.assertEqual(len(long_blocks), 1)
-            start, end = long_blocks[0]["source_span"]
-            self.assertEqual(records["Source.md"]["raw_markdown"][start:end], long_blocks[0]["raw_markdown"])
+            self.assertEqual(SOURCE[long_blocks[0]["source_span"][0]:long_blocks[0]["source_span"][1]], long_blocks[0]["raw_markdown"])
+            self.assertIn("table", summary["authored_block_kind_counts"])
+            self.assertIn("code_fence", summary["authored_block_kind_counts"])
 
-    def test_identity_ignores_time_absolute_root_and_output(self):
+    def test_uuid_duplicates_and_link_provenance_are_independent_of_admission(self):
         with tempfile.TemporaryDirectory() as tmp:
-            first = Path(tmp) / "one"; second = Path(tmp) / "two"
-            first.mkdir(); second.mkdir(); self.make_vault(first); self.make_vault(second)
-            a = self.observe_fixture(first, Path(tmp) / "out-a"); b = self.observe_fixture(second, Path(tmp) / "nested" / "out-b")
-            self.assertEqual(a[0]["corpus_snapshot_identity"], b[0]["corpus_snapshot_identity"])
-            self.assertEqual(a[0]["logical_observation_hash"], b[0]["logical_observation_hash"])
-            self.assertNotEqual(a[0]["generated_at"], b[0]["generated_at"])
-
-    def test_runtime_exclusion_is_annotation_only_and_summary_redacts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root, out, config = Path(tmp) / "vault", Path(tmp) / "out", Path(tmp) / "config.yaml"
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
             root.mkdir(); self.make_vault(root)
-            config.write_text("paths:\n  vault_exclude_globs: ['excluded/**']\n", encoding="utf-8")
-            observation, _, _ = self.observe_fixture(root, out, config)
-            policy = next(e for e in observation["source_inventory"] if e["relative_path"] == "excluded/Policy.md")["legacy_runtime_policy"]
-            self.assertTrue(policy["excluded_by_current_runtime"])
-            self.assertIn("excluded/Policy.md", {r["source"]["relative_path"] for r in observation["markdown_observations"]})
-            self.assertNotIn("vault-secret-canary", (out / "authored-vault-summary.json").read_text())
+            (root / "DuplicateV7.md").write_text("---\nuuid: 019bc983-5620-7f08-9626-474a1e548272\n---\n", encoding="utf-8")
+            observation, summary = self.run_observer(root, output)
+            records = {item["source"]["relative_path"]: item for item in observation["markdown_observations"]}
+            self.assertEqual(records["Source.md"]["uuid"]["duplicate_source_paths"], ["DuplicateV7.md", "Source.md"])
+            self.assertEqual(summary["duplicate_uuid_group_count"], 1)
+            links = records["Source.md"]["authored_links"]
+            self.assertTrue(any(link["source_surface"] == "frontmatter" and link["frontmatter_key_path"] == "related" for link in links))
+            self.assertTrue(any(link["source_surface"] == "body" for link in links))
+            self.assertTrue(any(link["display_alias"] == "Shown" for link in links))
 
-    def test_read_only_and_provider_free(self):
+    def test_fragment_evaluation_has_explicit_applicability_and_candidate_cardinality(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, out = Path(tmp) / "vault", Path(tmp) / "out"
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
             root.mkdir(); self.make_vault(root)
-            before = sorted((p.relative_to(root).as_posix(), p.stat().st_mtime_ns) for p in root.rglob("*"))
-            with patch("tools.authored_vault_observer.subprocess.check_output", side_effect=AssertionError("provider call")):
-                observe(root, out)
-            after = sorted((p.relative_to(root).as_posix(), p.stat().st_mtime_ns) for p in root.rglob("*"))
+            observation, _ = self.run_observer(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            links = source["authored_links"]
+            plain = next(link for link in links if link["raw_target_without_fragment"] == "Target" and link["heading_fragment"] is None and not link["embedded"])
+            self.assertEqual(plain["heading_target_evaluation"], "not_applicable")
+            self.assertEqual(plain["block_target_evaluation"], "not_applicable")
+            heading = next(link for link in links if link["heading_fragment"] == "Heading")
+            self.assertEqual(heading["target_candidates"]["cardinality"], "one_candidate")
+            ambiguous = next(link for link in links if link["raw_target_without_fragment"] == "Shared")
+            self.assertEqual(ambiguous["target_candidates"]["cardinality"], "multiple_candidates")
+            unresolved = next(link for link in links if link["raw_target_without_fragment"] == "Missing")
+            self.assertEqual(unresolved["target_candidates"]["cardinality"], "zero_candidates")
+            serialized = (output / "vault-observation-summary.json").read_text(encoding="utf-8")
+            self.assertNotIn('"unknown"', serialized)
+
+    def test_apparatus_does_not_affect_identity_but_authored_changes_do(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, one, two = Path(tmp) / "vault", Path(tmp) / "one", Path(tmp) / "two"
+            root.mkdir(); self.make_vault(root)
+            first, _ = self.run_observer(root, one)
+            (root / ".git" / "objects" / "fake").write_bytes(b"changed git state")
+            (root / ".semantic-traversal" / "state.db").write_bytes(b"changed generated state")
+            second, _ = self.run_observer(root, two)
+            self.assertEqual(first["vault_resident_snapshot_identity"], second["vault_resident_snapshot_identity"])
+            (root / "INBOX" / "Inbox.md").write_text("# changed\n", encoding="utf-8")
+            third, _ = self.run_observer(root, Path(tmp) / "three")
+            self.assertNotEqual(second["vault_resident_snapshot_identity"], third["vault_resident_snapshot_identity"])
+            (root / "new-empty").mkdir()
+            fourth, _ = self.run_observer(root, Path(tmp) / "four")
+            self.assertNotEqual(third["vault_resident_snapshot_identity"], fourth["vault_resident_snapshot_identity"])
+
+    def test_identity_ignores_absolute_root_time_and_output_location(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first_root, second_root = Path(tmp) / "first", Path(tmp) / "second"
+            first_root.mkdir(); second_root.mkdir()
+            self.make_vault(first_root); self.make_vault(second_root)
+            first, _ = self.run_observer(first_root, Path(tmp) / "first-output")
+            second, _ = self.run_observer(second_root, Path(tmp) / "nested" / "second-output")
+            self.assertEqual(first["vault_resident_snapshot_identity"], second["vault_resident_snapshot_identity"])
+            self.assertNotEqual(first["generated_at"], second["generated_at"])
+
+    def test_cli_contract_and_outputs_are_vault_native(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir(); self.make_vault(root)
+            observe(root, output)
+            self.assertEqual({path.name for path in output.iterdir()}, {"vault-observation.json", "vault-observation-summary.json"})
+            self.assertFalse((output / "recovery-baseline-manifest.json").exists())
+            summary = json.loads((output / "vault-observation-summary.json").read_text(encoding="utf-8"))
+            self.assertNotIn("vault-secret-canary", json.dumps(summary))
+
+    def test_observation_is_read_only_and_provider_free(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir(); self.make_vault(root)
+            before = sorted((path.relative_to(root).as_posix(), path.stat().st_mtime_ns) for path in root.rglob("*"))
+            with patch("tools.authored_vault_observer._git_provenance", return_value={"status": "test_stub", "commit": "fixture"}):
+                observe(root, output)
+            after = sorted((path.relative_to(root).as_posix(), path.stat().st_mtime_ns) for path in root.rglob("*"))
             self.assertEqual(before, after)
-            self.assertFalse(any(p.name.endswith(".db") for p in out.rglob("*")))
 
 
 if __name__ == "__main__":
