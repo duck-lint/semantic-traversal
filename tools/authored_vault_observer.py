@@ -175,6 +175,28 @@ def _render_inline_wikilinks(text: str) -> str:
     return INLINE_WIKILINK_RE.sub(replace, text)
 
 
+def _source_derived_inline_wikilinks(text: str) -> str:
+    """Derive the demonstrated Obsidian address form using target + display.
+
+    This is an address surface only.  It intentionally remains separate from
+    ``rendered_text`` because the visible heading may omit the target portion
+    of an aliased wikilink even when Obsidian accepts that target in a heading
+    fragment address.
+    """
+    def replace(match: re.Match[str]) -> str:
+        body = match.group("body")
+        separator = re.search(r"\\?\|", body)
+        if not separator:
+            return body.split("#", 1)[0] if "#" in body else body
+        target = body[:separator.start()]
+        display = body[separator.end():]
+        if "#" in target:
+            target = target.split("#", 1)[0]
+        return " ".join(part for part in (target, display) if part)
+
+    return INLINE_WIKILINK_RE.sub(replace, text)
+
+
 def _heading_address_key(text: str) -> str:
     """Apply only normalization evidenced by authored Obsidian addresses.
 
@@ -185,15 +207,24 @@ def _heading_address_key(text: str) -> str:
     rendered = _render_inline_wikilinks(text).replace("\\|", "|")
     rendered = unicodedata.normalize("NFC", rendered)
     rendered = rendered.casefold().replace(":", "").replace("|", "")
+    rendered = re.sub(r"\(\s+", "(", rendered)
     return " ".join(rendered.split())
 
 
 def _heading_observation(raw_text: str, level: int, source_span: list[int]) -> dict[str, Any]:
     rendered_text = _render_inline_wikilinks(raw_text)
+    source_derived_text = _source_derived_inline_wikilinks(raw_text)
+    address_surfaces = []
+    for surface_name, surface_text in (("raw", raw_text), ("rendered", rendered_text), ("source_derived", source_derived_text)):
+        surface = {"surface": surface_name, "text": surface_text, "address_key": _heading_address_key(surface_text)}
+        if not any(existing["address_key"] == surface["address_key"] for existing in address_surfaces):
+            address_surfaces.append(surface)
     return {
         "level": level,
         "raw_text": raw_text,
         "rendered_text": rendered_text,
+        "source_derived_text": source_derived_text,
+        "address_surfaces": address_surfaces,
         "address_key": _heading_address_key(rendered_text),
         "source_span": source_span,
     }
@@ -407,7 +438,10 @@ def observe(vault_root: Path, output_root: Path) -> tuple[dict[str, Any], dict[s
             heading_matches = []
             if target_record and link["heading_fragment"] is not None:
                 fragment_key = _heading_address_key(link["heading_fragment"])
-                heading_matches = [heading for heading in target_record["headings"] if heading["address_key"] == fragment_key]
+                for heading in target_record["headings"]:
+                    matched_surfaces = [surface for surface in heading["address_surfaces"] if surface["address_key"] == fragment_key]
+                    if matched_surfaces:
+                        heading_matches.append((heading, matched_surfaces))
             block_ids = {block_id for block in target_record["block_candidates"] for block_id in block["explicit_block_ids"]} if target_record else set()
             link["target_candidates"] = {"cardinality": cardinality, "candidate_source_paths": candidates, "candidate_evidence": candidate_evidence}
             if link["heading_fragment"] is None:
@@ -419,14 +453,14 @@ def observe(vault_root: Path, output_root: Path) -> tuple[dict[str, Any], dict[s
                 link["heading_target_match_kind"] = "not_evaluable_parent_unresolved"
                 link["heading_target_matches"] = []
             elif len(heading_matches) == 1:
-                match = heading_matches[0]
+                match, matched_surfaces = heading_matches[0]
                 link["heading_target_evaluation"] = "observed"
-                link["heading_target_match_kind"] = "exact_raw" if link["heading_fragment"] == match["raw_text"] else "rendered" if link["heading_fragment"] == match["rendered_text"] else "normalized"
-                link["heading_target_matches"] = [{"raw_text": match["raw_text"], "rendered_text": match["rendered_text"], "source_span": match["source_span"]}]
+                link["heading_target_match_kind"] = "exact_raw" if link["heading_fragment"] == match["raw_text"] else "rendered" if link["heading_fragment"] == match["rendered_text"] else "source_derived" if any(surface["surface"] == "source_derived" for surface in matched_surfaces) else "normalized"
+                link["heading_target_matches"] = [{"raw_text": match["raw_text"], "rendered_text": match["rendered_text"], "source_derived_text": match["source_derived_text"], "matched_address_surfaces": matched_surfaces, "source_span": match["source_span"]}]
             elif len(heading_matches) > 1:
                 link["heading_target_evaluation"] = "ambiguous"
                 link["heading_target_match_kind"] = "ambiguous"
-                link["heading_target_matches"] = [{"raw_text": match["raw_text"], "rendered_text": match["rendered_text"], "source_span": match["source_span"]} for match in heading_matches]
+                link["heading_target_matches"] = [{"raw_text": match["raw_text"], "rendered_text": match["rendered_text"], "source_derived_text": match["source_derived_text"], "matched_address_surfaces": matched_surfaces, "source_span": match["source_span"]} for match, matched_surfaces in heading_matches]
             else:
                 link["heading_target_evaluation"] = "absent"
                 link["heading_target_match_kind"] = "absent"

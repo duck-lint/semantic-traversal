@@ -235,10 +235,13 @@ uuid: 019bc983-a82b-70cd-b775-adcc3b323251
 | B | [[2. Layer-1 — Pillars#Pillar B Dynamic Coherence\\|Dynamic Coherence]] |
 """ + "\n".join([
                 "[[3. Layer-2 — Interface#Interface Components]]",
+                "[[3. Layer-2 — Interface#3. Layer-2 — Interface Interface Components]]",
                 "[[3. Layer-2 — Interface#A) Cash-out & Inferential Bridge Enforcement]]",
+                "[[3. Layer-2 — Interface#A) Cash-out & Inferential Bridge (Rule) Inferential Bridge Enforcement]]",
                 "[[3. Layer-2 — Interface#B) Isomorphic Mappings (form, without hallucinating content)]]",
                 "[[3. Layer-2 — Interface#D) Art / Creative Writing / Experiments (instantiation + test)]]",
                 "[[3. Layer-2 — Interface#E) Ethics as Interface Constraints (Epistemic Golden Rule / Post-Perennialism)]]",
+                "[[3. Layer-2 — Interface#E) 3. Layer-2 — Interface Ethics as 3. Layer-2 — Interface Interface Constraints ( Epistemic Golden Rule / Post-Perennialism)]]",
                 "[[3. Layer-2 — Interface#Anti-reification Principle]]",
                 "[[3. Layer-2 — Interface#Guardrail C The process]]",
             ]) + "\n", encoding="utf-8")
@@ -259,7 +262,11 @@ uuid: 019bc983-a82b-70cd-b775-adcc3b323251
             self.assertEqual(table_links[1]["heading_target_evaluation"], "observed")
             self.assertEqual(table_links[1]["heading_target_match_kind"], "normalized")
             self.assertTrue(all("\\|" not in link["raw_target"] for link in table_links))
-            self.assertEqual(len([link for link in links if link["heading_target_evaluation"] == "observed"]), 9)
+            working = {link["heading_fragment"]: link for link in links if link["heading_fragment"].startswith(("3. Layer-2", "A) Cash-out & Inferential Bridge (Rule)", "E) 3. Layer-2"))}
+            self.assertEqual(working["3. Layer-2 — Interface Interface Components"]["heading_target_match_kind"], "source_derived")
+            self.assertEqual(working["A) Cash-out & Inferential Bridge (Rule) Inferential Bridge Enforcement"]["heading_target_match_kind"], "source_derived")
+            self.assertEqual(working["E) 3. Layer-2 — Interface Ethics as 3. Layer-2 — Interface Interface Constraints ( Epistemic Golden Rule / Post-Perennialism)"]["heading_target_match_kind"], "source_derived")
+            self.assertEqual(len([link for link in links if link["heading_target_evaluation"] == "observed"]), 12)
 
     def test_rendered_heading_collision_is_not_claimed_unique(self):
         with tempfile.TemporaryDirectory() as tmp:
