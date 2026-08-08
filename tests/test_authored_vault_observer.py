@@ -36,7 +36,8 @@ class AuthoredVaultObserverTests(unittest.TestCase):
         (root / "Target.md").write_text("---\nuuid: 019bc983-a82b-70cd-b775-adcc3b323251\naliases: [Alias, Shared]\n---\n# Heading\n\nparagraph ^block-id\n", encoding="utf-8")
         (root / "Other" / "Target.md").parent.mkdir()
         (root / "Other" / "Target.md").write_text("---\nuuid: 019f99e6-b52c-7082-8913-e57ef42c5027\naliases: [Shared]\n---\nother\n", encoding="utf-8")
-        (root / "Source.md").write_text(SOURCE, encoding="utf-8")
+        with (root / "Source.md").open("w", encoding="utf-8", newline="") as source_file:
+            source_file.write(SOURCE)
         (root / "OtherVersion.md").write_text("---\nuuid: 11111111-1111-4111-8111-111111111111\n---\nbody\n", encoding="utf-8")
         (root / "MalformedUuid.md").write_text("---\nuuid: not-a-uuid\n---\nbody\n", encoding="utf-8")
         (root / "MissingUuid.md").write_text("---\nnew_field: value\n---\n", encoding="utf-8")
@@ -150,17 +151,19 @@ class AuthoredVaultObserverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root, output = Path(tmp) / "vault", Path(tmp) / "out"
             root.mkdir()
-            (root / "Time.md").write_text("time\n", encoding="utf-8")
-            (root / "time.md").write_text("lowercase time\n", encoding="utf-8")
+            (root / "Upper" / "Time.md").parent.mkdir()
+            (root / "Lower" / "time.md").parent.mkdir()
+            (root / "Upper" / "Time.md").write_text("time\n", encoding="utf-8")
+            (root / "Lower" / "time.md").write_text("lowercase time\n", encoding="utf-8")
             (root / "Source.md").write_text("[[Time]]\n", encoding="utf-8")
             observation, _ = observe(root, output)
             source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
             link = source["authored_links"][0]
             self.assertEqual(link["target_candidates"]["cardinality"], "multiple_candidates")
-            self.assertEqual(link["target_candidates"]["candidate_source_paths"], ["Time.md", "time.md"])
+            self.assertEqual(link["target_candidates"]["candidate_source_paths"], ["Lower/time.md", "Upper/Time.md"])
             evidence = {item["source_path"]: item["surfaces"] for item in link["target_candidates"]["candidate_evidence"]}
-            self.assertIn("basename_stem", evidence["Time.md"])
-            self.assertIn("basename_stem_casefold", evidence["time.md"])
+            self.assertIn("basename_stem", evidence["Upper/Time.md"])
+            self.assertIn("basename_stem_casefold", evidence["Lower/time.md"])
 
     def test_non_markdown_files_are_resident_address_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -204,6 +207,82 @@ class AuthoredVaultObserverTests(unittest.TestCase):
             self.assertEqual(unresolved["target_candidates"]["cardinality"], "zero_candidates")
             serialized = (output / "vault-observation-summary.json").read_text(encoding="utf-8")
             self.assertNotIn('"unknown"', serialized)
+
+    def test_rendered_heading_addresses_preserve_table_links_and_resolve(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "2. Layer-1 — Pillars.md").write_text("""---
+uuid: 019bc983-5620-7f08-9626-474a1e548272
+---
+### Pillar A | [[Semantic Geometry]]
+### Pillar B: Dynamic [[Coherence]]
+""", encoding="utf-8")
+            (root / "3. Layer-2 — Interface.md").write_text("""---
+uuid: 019bc983-a82b-70cd-b775-adcc3b323251
+---
+### [[3. Layer-2 — Interface|Interface]] Components
+### A) Cash-out & [[Inferential Bridge (Rule)|Inferential Bridge]] Enforcement
+### B) Isomorphic Mappings ([[Form]], without hallucinating [[Content]])
+### D) [[Art]] / Creative Writing / Experiments (instantiation + test)
+### E) [[3. Layer-2 — Interface|Ethics]] as [[3. Layer-2 — Interface|Interface]] Constraints ([[Epistemic Golden Rule]] / Post-Perennialism)
+### Anti-reification Principle:
+### Guardrail C: The process
+""", encoding="utf-8")
+            (root / "Source.md").write_text("""| SECTION | LINK |
+|---|---|
+| A | [[2. Layer-1 — Pillars#Pillar A Semantic Geometry\\|Semantic Geometry]] |
+| B | [[2. Layer-1 — Pillars#Pillar B Dynamic Coherence\\|Dynamic Coherence]] |
+""" + "\n".join([
+                "[[3. Layer-2 — Interface#Interface Components]]",
+                "[[3. Layer-2 — Interface#3. Layer-2 — Interface Interface Components]]",
+                "[[3. Layer-2 — Interface#A) Cash-out & Inferential Bridge Enforcement]]",
+                "[[3. Layer-2 — Interface#A) Cash-out & Inferential Bridge (Rule) Inferential Bridge Enforcement]]",
+                "[[3. Layer-2 — Interface#B) Isomorphic Mappings (form, without hallucinating content)]]",
+                "[[3. Layer-2 — Interface#D) Art / Creative Writing / Experiments (instantiation + test)]]",
+                "[[3. Layer-2 — Interface#E) Ethics as Interface Constraints (Epistemic Golden Rule / Post-Perennialism)]]",
+                "[[3. Layer-2 — Interface#E) 3. Layer-2 — Interface Ethics as 3. Layer-2 — Interface Interface Constraints ( Epistemic Golden Rule / Post-Perennialism)]]",
+                "[[3. Layer-2 — Interface#Anti-reification Principle]]",
+                "[[3. Layer-2 — Interface#Guardrail C The process]]",
+            ]) + "\n", encoding="utf-8")
+            observation, _ = observe(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            links = source["authored_links"]
+            table_links = links[:2]
+            self.assertEqual(len(table_links), 2)
+            self.assertEqual(table_links[0]["raw_link_markup"], "[[2. Layer-1 — Pillars#Pillar A Semantic Geometry\\|Semantic Geometry]]")
+            self.assertEqual(table_links[0]["raw_target"], "2. Layer-1 — Pillars#Pillar A Semantic Geometry")
+            self.assertEqual(table_links[0]["heading_fragment"], "Pillar A Semantic Geometry")
+            self.assertEqual(table_links[0]["display_alias"], "Semantic Geometry")
+            self.assertEqual(table_links[0]["target_candidates"]["cardinality"], "one_candidate")
+            self.assertEqual(table_links[0]["heading_target_evaluation"], "observed")
+            self.assertEqual(table_links[0]["heading_target_match_kind"], "normalized")
+            self.assertEqual(table_links[0]["heading_target_matches"][0]["raw_text"], "Pillar A | [[Semantic Geometry]]")
+            self.assertEqual(table_links[0]["heading_target_matches"][0]["rendered_text"], "Pillar A | Semantic Geometry")
+            self.assertEqual(table_links[1]["heading_target_evaluation"], "observed")
+            self.assertEqual(table_links[1]["heading_target_match_kind"], "normalized")
+            self.assertTrue(all("\\|" not in link["raw_target"] for link in table_links))
+            working = {link["heading_fragment"]: link for link in links if link["heading_fragment"].startswith(("3. Layer-2", "A) Cash-out & Inferential Bridge (Rule)", "E) 3. Layer-2"))}
+            self.assertEqual(working["3. Layer-2 — Interface Interface Components"]["heading_target_match_kind"], "source_derived")
+            self.assertEqual(working["A) Cash-out & Inferential Bridge (Rule) Inferential Bridge Enforcement"]["heading_target_match_kind"], "source_derived")
+            self.assertEqual(working["E) 3. Layer-2 — Interface Ethics as 3. Layer-2 — Interface Interface Constraints ( Epistemic Golden Rule / Post-Perennialism)"]["heading_target_match_kind"], "source_derived")
+            self.assertEqual(len([link for link in links if link["heading_target_evaluation"] == "observed"]), 12)
+
+    def test_rendered_heading_collision_is_not_claimed_unique(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "Target.md").write_text("""### Pillar A | [[Semantic Geometry]]
+### Pillar A: Semantic Geometry
+""", encoding="utf-8")
+            (root / "Source.md").write_text("[[Target#Pillar A Semantic Geometry]]\n", encoding="utf-8")
+            observation, _ = observe(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            link = source["authored_links"][0]
+            self.assertEqual(link["target_candidates"]["cardinality"], "one_candidate")
+            self.assertEqual(link["heading_target_evaluation"], "ambiguous")
+            self.assertEqual(link["heading_target_match_kind"], "ambiguous")
+            self.assertEqual(len(link["heading_target_matches"]), 2)
 
     def test_apparatus_does_not_affect_identity_but_authored_changes_do(self):
         with tempfile.TemporaryDirectory() as tmp:
