@@ -302,17 +302,26 @@ def observe(vault_root: Path, output_root: Path) -> tuple[dict[str, Any], dict[s
         "exact_relative_path_without_extension": {},
         "basename_stem": {},
         "authored_alias": {},
+        "resident_basename": {},
     }
 
     def add_surface(surface: str, key: str, source: str) -> None:
         address_surfaces[surface].setdefault(key, set()).add(source)
 
-    for record in markdown:
-        path = Path(record["source"]["relative_path"])
-        source = record["source"]["relative_path"]
+    for file_record in (item for item in files if item["observation_category"] == "vault_resident"):
+        path = Path(file_record["relative_path"])
+        source = file_record["relative_path"]
         add_surface("exact_relative_path", source, source)
-        add_surface("exact_relative_path_without_extension", source.removesuffix(path.suffix), source)
-        add_surface("basename_stem", path.stem, source)
+        if file_record["source_kind"] == "markdown":
+            add_surface("exact_relative_path_without_extension", source.removesuffix(path.suffix), source)
+            add_surface("basename_stem", path.stem, source)
+        else:
+            # Non-Markdown files participate only through their authored file
+            # address.  Do not infer an extensionless note address for them.
+            add_surface("resident_basename", path.name, source)
+
+    for record in markdown:
+        source = record["source"]["relative_path"]
         values = record["frontmatter"].get("values", {})
         raw_aliases = values.get("aliases", [])
         if isinstance(raw_aliases, str):
@@ -321,15 +330,26 @@ def observe(vault_root: Path, output_root: Path) -> tuple[dict[str, Any], dict[s
             for alias in raw_aliases:
                 add_surface("authored_alias", str(alias), source)
 
+    # Case folding is an additional observed address surface, not a rewrite
+    # of either the authored target or the resident path.  Keeping it in a
+    # separate namespace makes the representation-level equivalence explicit.
+    for surface, lookup in list(address_surfaces.items()):
+        for key, sources in lookup.items():
+            address_surfaces[f"{surface}_casefold"] = address_surfaces.get(f"{surface}_casefold", {})
+            address_surfaces[f"{surface}_casefold"].setdefault(key.casefold(), set()).update(sources)
+
     by_source = {record["source"]["relative_path"]: record for record in markdown}
     for record in markdown:
         for link in record["authored_links"]:
             target = link["raw_target_without_fragment"].strip()
             candidate_surfaces: dict[str, set[str]] = {}
             for surface, lookup in address_surfaces.items():
-                matches = set(lookup.get(target, set()))
-                if target.endswith(".md") and surface == "exact_relative_path_without_extension":
-                    matches.update(lookup.get(target[:-3], set()))
+                lookup_target = target.casefold() if surface.endswith("_casefold") else target
+                matches = set(lookup.get(lookup_target, set()))
+                if lookup_target.endswith(".md") and surface == "exact_relative_path_without_extension":
+                    matches.update(lookup.get(lookup_target[:-3], set()))
+                if lookup_target.endswith(".md") and surface == "exact_relative_path_without_extension_casefold":
+                    matches.update(lookup.get(lookup_target[:-3], set()))
                 if matches:
                     candidate_surfaces[surface] = matches
             candidates = sorted({source for sources in candidate_surfaces.values() for source in sources})

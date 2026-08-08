@@ -44,6 +44,9 @@ class AuthoredVaultObserverTests(unittest.TestCase):
         (root / "VAULT DESIGN" / "Design.md").write_text("# design\n", encoding="utf-8")
         (root / "INBOX" / "Inbox.md").write_text("# inbox\n", encoding="utf-8")
         (root / "attachment.pdf").write_bytes(b"pdf")
+        (root / "image.png").write_bytes(b"png")
+        (root / "Diagram.PNG").write_bytes(b"png")
+        (root / "Concept of Time (The).pdf").write_bytes(b"pdf")
 
     def run_observer(self, root: Path, output: Path):
         return observe(root, output)
@@ -123,8 +126,64 @@ class AuthoredVaultObserverTests(unittest.TestCase):
             self.assertEqual(link["target_candidates"]["cardinality"], "multiple_candidates")
             self.assertEqual(link["target_candidates"]["candidate_source_paths"], ["AliasCarrier.md", "Target.md"])
             evidence = {item["source_path"]: item["surfaces"] for item in link["target_candidates"]["candidate_evidence"]}
-            self.assertEqual(evidence["Target.md"], ["basename_stem", "exact_relative_path_without_extension"])
-            self.assertEqual(evidence["AliasCarrier.md"], ["authored_alias"])
+            self.assertEqual(evidence["Target.md"], ["basename_stem", "basename_stem_casefold", "exact_relative_path_without_extension", "exact_relative_path_without_extension_casefold"])
+            self.assertEqual(evidence["AliasCarrier.md"], ["authored_alias", "authored_alias_casefold"])
+
+    def test_casefolded_markdown_address_evidence_preserves_authored_spelling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "Time.md").write_text("# time\n", encoding="utf-8")
+            (root / "peter.md").write_text("# peter\n", encoding="utf-8")
+            (root / "Source.md").write_text("[[time]] [[Peter]]\n", encoding="utf-8")
+            observation, _ = observe(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            time_link, peter_link = source["authored_links"]
+            self.assertEqual(time_link["raw_target_without_fragment"], "time")
+            self.assertEqual(time_link["target_candidates"]["candidate_source_paths"], ["Time.md"])
+            self.assertIn("basename_stem_casefold", time_link["target_candidates"]["candidate_evidence"][0]["surfaces"])
+            self.assertEqual(peter_link["raw_target_without_fragment"], "Peter")
+            self.assertEqual(peter_link["target_candidates"]["candidate_source_paths"], ["peter.md"])
+            self.assertIn("basename_stem_casefold", peter_link["target_candidates"]["candidate_evidence"][0]["surfaces"])
+
+    def test_casefolding_expands_candidates_and_preserves_exact_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "Time.md").write_text("time\n", encoding="utf-8")
+            (root / "time.md").write_text("lowercase time\n", encoding="utf-8")
+            (root / "Source.md").write_text("[[Time]]\n", encoding="utf-8")
+            observation, _ = observe(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            link = source["authored_links"][0]
+            self.assertEqual(link["target_candidates"]["cardinality"], "multiple_candidates")
+            self.assertEqual(link["target_candidates"]["candidate_source_paths"], ["Time.md", "time.md"])
+            evidence = {item["source_path"]: item["surfaces"] for item in link["target_candidates"]["candidate_evidence"]}
+            self.assertIn("basename_stem", evidence["Time.md"])
+            self.assertIn("basename_stem_casefold", evidence["time.md"])
+
+    def test_non_markdown_files_are_resident_address_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, output = Path(tmp) / "vault", Path(tmp) / "out"
+            root.mkdir()
+            (root / "image.png").write_bytes(b"png")
+            (root / "assets").mkdir()
+            (root / "assets" / "nested.png").write_bytes(b"nested")
+            (root / "Diagram.PNG").write_bytes(b"diagram")
+            (root / "Concept of Time (The).pdf").write_bytes(b"pdf")
+            (root / "Source.md").write_text("![[image.png]] ![[assets/nested.png]] ![[diagram.png]] ![[Concept of Time (The).pdf]]\n", encoding="utf-8")
+            observation, _ = observe(root, output)
+            source = next(item for item in observation["markdown_observations"] if item["source"]["relative_path"] == "Source.md")
+            image, nested, diagram, pdf = source["authored_links"]
+            self.assertEqual(image["raw_target_without_fragment"], "image.png")
+            self.assertEqual(image["target_candidates"]["candidate_source_paths"], ["image.png"])
+            self.assertIn("resident_basename", image["target_candidates"]["candidate_evidence"][0]["surfaces"])
+            self.assertEqual(nested["target_candidates"]["candidate_source_paths"], ["assets/nested.png"])
+            self.assertIn("exact_relative_path", nested["target_candidates"]["candidate_evidence"][0]["surfaces"])
+            self.assertEqual(diagram["target_candidates"]["candidate_source_paths"], ["Diagram.PNG"])
+            self.assertIn("resident_basename_casefold", diagram["target_candidates"]["candidate_evidence"][0]["surfaces"])
+            self.assertEqual(pdf["raw_link_markup"], "![[Concept of Time (The).pdf]]")
+            self.assertEqual(pdf["target_candidates"]["candidate_source_paths"], ["Concept of Time (The).pdf"])
 
     def test_fragment_evaluation_has_explicit_applicability_and_candidate_cardinality(self):
         with tempfile.TemporaryDirectory() as tmp:
