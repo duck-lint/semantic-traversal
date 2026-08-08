@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import subprocess
+import unicodedata
 import uuid as uuidlib
 from collections import Counter
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ HEADING_RE = re.compile(r"^(?P<marks>#{1,6})[ \t]+(?P<text>.*?)[ \t]*$")
 FENCE_RE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
 LIST_RE = re.compile(r"^[ \t]*(?:[-+*]|\d+[.)])[ \t]+")
 TABLE_SEPARATOR_RE = re.compile(r"^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$")
+INLINE_WIKILINK_RE = re.compile(r"(?P<embed>!)?\[\[(?P<body>[^\]]+)\]\]")
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -154,6 +156,49 @@ def _parse_link(match: re.Match[str], surface: str, key_path: str | None) -> dic
     }
 
 
+def _render_inline_wikilinks(text: str) -> str:
+    """Derive the visible heading text without discarding raw authored text.
+
+    Heading addresses are evaluated against what an inline wikilink displays,
+    while the raw Markdown remains the authoritative source evidence.  This is
+    deliberately limited to wikilinks; it is not a general Markdown renderer.
+    """
+    def replace(match: re.Match[str]) -> str:
+        body = match.group("body")
+        separator = re.search(r"\\?\|", body)
+        if separator:
+            return body[separator.end():]
+        if "#" in body:
+            return body.split("#", 1)[0]
+        return body
+
+    return INLINE_WIKILINK_RE.sub(replace, text)
+
+
+def _heading_address_key(text: str) -> str:
+    """Apply only normalization evidenced by authored Obsidian addresses.
+
+    The corpus demonstrates case-insensitive addressing, colon/pipe
+    punctuation elision, escaped-pipe syntax, and whitespace folding.  Other
+    punctuation is retained so unrelated headings do not silently collapse.
+    """
+    rendered = _render_inline_wikilinks(text).replace("\\|", "|")
+    rendered = unicodedata.normalize("NFC", rendered)
+    rendered = rendered.casefold().replace(":", "").replace("|", "")
+    return " ".join(rendered.split())
+
+
+def _heading_observation(raw_text: str, level: int, source_span: list[int]) -> dict[str, Any]:
+    rendered_text = _render_inline_wikilinks(raw_text)
+    return {
+        "level": level,
+        "raw_text": raw_text,
+        "rendered_text": rendered_text,
+        "address_key": _heading_address_key(rendered_text),
+        "source_span": source_span,
+    }
+
+
 def _frontmatter_key_for_offset(raw_text: str, offset: int) -> str | None:
     current: str | None = None
     running = 0
@@ -169,7 +214,7 @@ def _frontmatter_key_for_offset(raw_text: str, offset: int) -> str | None:
 
 def _blocks(text: str, body_start: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     lines = _line_spans(text)
-    headings = [{"level": len(match.group("marks")), "raw_text": match.group("text"), "source_span": [start, end]}
+    headings = [_heading_observation(match.group("text"), len(match.group("marks")), [start, end])
                 for start, end, line in lines if start >= body_start and (match := HEADING_RE.match(line.rstrip("\r\n")))]
     candidates: list[dict[str, Any]] = []
     index = 0
@@ -359,10 +404,33 @@ def observe(vault_root: Path, output_root: Path) -> tuple[dict[str, Any], dict[s
             ]
             cardinality = "zero_candidates" if not candidates else "one_candidate" if len(candidates) == 1 else "multiple_candidates"
             target_record = by_source.get(candidates[0]) if len(candidates) == 1 else None
-            heading_names = {heading["raw_text"] for heading in target_record["headings"]} if target_record else set()
+            heading_matches = []
+            if target_record and link["heading_fragment"] is not None:
+                fragment_key = _heading_address_key(link["heading_fragment"])
+                heading_matches = [heading for heading in target_record["headings"] if heading["address_key"] == fragment_key]
             block_ids = {block_id for block in target_record["block_candidates"] for block_id in block["explicit_block_ids"]} if target_record else set()
             link["target_candidates"] = {"cardinality": cardinality, "candidate_source_paths": candidates, "candidate_evidence": candidate_evidence}
-            link["heading_target_evaluation"] = "not_applicable" if link["heading_fragment"] is None else "observed" if target_record and link["heading_fragment"] in heading_names else "not_evaluable_parent_unresolved" if not target_record else "absent"
+            if link["heading_fragment"] is None:
+                link["heading_target_evaluation"] = "not_applicable"
+                link["heading_target_match_kind"] = "not_applicable"
+                link["heading_target_matches"] = []
+            elif not target_record:
+                link["heading_target_evaluation"] = "not_evaluable_parent_unresolved"
+                link["heading_target_match_kind"] = "not_evaluable_parent_unresolved"
+                link["heading_target_matches"] = []
+            elif len(heading_matches) == 1:
+                match = heading_matches[0]
+                link["heading_target_evaluation"] = "observed"
+                link["heading_target_match_kind"] = "exact_raw" if link["heading_fragment"] == match["raw_text"] else "rendered" if link["heading_fragment"] == match["rendered_text"] else "normalized"
+                link["heading_target_matches"] = [{"raw_text": match["raw_text"], "rendered_text": match["rendered_text"], "source_span": match["source_span"]}]
+            elif len(heading_matches) > 1:
+                link["heading_target_evaluation"] = "ambiguous"
+                link["heading_target_match_kind"] = "ambiguous"
+                link["heading_target_matches"] = [{"raw_text": match["raw_text"], "rendered_text": match["rendered_text"], "source_span": match["source_span"]} for match in heading_matches]
+            else:
+                link["heading_target_evaluation"] = "absent"
+                link["heading_target_match_kind"] = "absent"
+                link["heading_target_matches"] = []
             link["block_target_evaluation"] = "not_applicable" if link["block_fragment"] is None else "observed" if target_record and link["block_fragment"] in block_ids else "not_evaluable_parent_unresolved" if not target_record else "absent"
 
     resident_dirs = [d for d in directories if d["observation_category"] == "vault_resident"]
