@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.authored_vault_observer import observe
+from tools.authored_vault_observer import SCHEMA_VERSION, _frontmatter, _json_safe, _shape, observe
 
 
 SOURCE = """---
@@ -23,6 +24,62 @@ This authored paragraph is intentionally larger than two thousand characters and
 
 
 class AuthoredVaultObserverTests(unittest.TestCase):
+    def test_schema_version_and_parser_native_date_family_fidelity(self):
+        self.assertEqual(SCHEMA_VERSION, "vault-observation/v3")
+
+        frontmatter = _frontmatter("""---
+date_value: 2030-01-02
+datetime_value: 2030-01-02 03:04:05
+quoted_date: "2030-01-02"
+month_day: "--12-31"
+approximate_year: "~250 BCE"
+null_value: null
+boolean_value: true
+number_value: 7
+array_value: [one, two]
+mapping_value: {nested: value}
+nested_values:
+  - 2030-01-02
+  - when: 2030-01-02 03:04:05+02:00
+---
+body
+""")
+
+        self.assertEqual(frontmatter["value_shapes"], {
+            "approximate_year": "string",
+            "array_value": "array",
+            "boolean_value": "boolean",
+            "date_value": "date",
+            "datetime_value": "datetime",
+            "mapping_value": "mapping",
+            "month_day": "string",
+            "nested_values": "array",
+            "null_value": "null",
+            "number_value": "number",
+            "quoted_date": "string",
+        })
+        self.assertEqual(frontmatter["values"]["date_value"], "2030-01-02")
+        self.assertEqual(frontmatter["values"]["datetime_value"], "2030-01-02T03:04:05")
+        self.assertEqual(frontmatter["values"]["quoted_date"], "2030-01-02")
+        self.assertEqual(frontmatter["values"]["month_day"], "--12-31")
+        self.assertEqual(frontmatter["values"]["approximate_year"], "~250 BCE")
+        self.assertEqual(frontmatter["values"]["nested_values"], [
+            "2030-01-02",
+            {"when": "2030-01-02T03:04:05+02:00"},
+        ])
+        serialized = json.dumps(frontmatter, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        self.assertEqual(serialized, json.dumps(frontmatter, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+
+    def test_datetime_is_classified_before_date(self):
+        self.assertIsInstance(datetime(2030, 1, 2), date)
+        self.assertEqual(_shape(datetime(2030, 1, 2, 3, 4, 5)), "datetime")
+        self.assertEqual(_shape(date(2030, 1, 2)), "date")
+
+    def test_json_safe_recurses_through_date_family_values(self):
+        value = {"items": [date(2030, 1, 2), {"when": datetime(2030, 1, 2, 3, 4, 5)}]}
+        self.assertEqual(_json_safe(value), {"items": ["2030-01-02", {"when": "2030-01-02T03:04:05"}]})
+        json.dumps(_json_safe(value), sort_keys=True)
+
     def make_vault(self, root: Path) -> None:
         (root / ".git" / "objects").mkdir(parents=True)
         (root / ".git" / "objects" / "fake" ).write_bytes(b"git state")

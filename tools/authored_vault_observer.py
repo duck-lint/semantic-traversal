@@ -2,7 +2,14 @@
 
 The records in this module describe filesystem and authored-source evidence.
 They deliberately do not import production ingest, runtime configuration, or
-any semantic projection type.
+any semantic projection type. For frontmatter, the observation path is:
+
+    raw authored YAML -> parser-native factual type -> value_shapes
+                                      + deterministic JSON-safe value
+
+Parser-native dates and datetimes are representation facts, not automatically
+TemporalAnchors. Conversely, a parser-native string is not evidence that a
+value lacks temporal meaning.
 """
 
 from __future__ import annotations
@@ -15,14 +22,14 @@ import subprocess
 import unicodedata
 import uuid as uuidlib
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 
-SCHEMA_VERSION = "vault-observation/v2"
+SCHEMA_VERSION = "vault-observation/v3"
 APPARATUS_NAMESPACES = {
     ".git": "version_control",
     ".semantic-traversal": "generated_runtime_state",
@@ -51,6 +58,11 @@ def _shape(value: Any) -> str:
         return "null"
     if isinstance(value, bool):
         return "boolean"
+    # datetime is a subclass of date, so this check must remain first.
+    if isinstance(value, datetime):
+        return "datetime"
+    if isinstance(value, date):
+        return "date"
     if isinstance(value, str):
         return "string"
     if isinstance(value, (int, float)):
@@ -65,6 +77,11 @@ def _shape(value: Any) -> str:
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
+    # Preserve the parser-native value mechanically for JSON transport only.
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, list):
         return [_json_safe(item) for item in value]
     if isinstance(value, dict):
@@ -99,8 +116,10 @@ def _frontmatter(text: str) -> dict[str, Any]:
         return {"status": "malformed", "raw_text": raw, "source_span": [lines[0][0], lines[closing][1]], "body_span": [lines[closing][1], len(text)], "keys": [], "values": {}, "value_shapes": {}, "parse_issue": f"yaml_parse_failed:{type(exc).__name__}"}
     if not isinstance(parsed, dict):
         return {"status": "non_mapping", "raw_text": raw, "source_span": [lines[0][0], lines[closing][1]], "body_span": [lines[closing][1], len(text)], "keys": [], "values": {}, "value_shapes": {}, "parse_issue": "frontmatter_not_mapping"}
+    # Classify the original parser-native values before converting them for JSON.
+    value_shapes = {str(key): _shape(value) for key, value in parsed.items()}
     values = {str(key): _json_safe(value) for key, value in parsed.items()}
-    return {"status": "valid", "raw_text": raw, "source_span": [lines[0][0], lines[closing][1]], "body_span": [lines[closing][1], len(text)], "keys": sorted(values), "values": values, "value_shapes": {key: _shape(value) for key, value in sorted(values.items())}}
+    return {"status": "valid", "raw_text": raw, "source_span": [lines[0][0], lines[closing][1]], "body_span": [lines[closing][1], len(text)], "keys": sorted(values), "values": values, "value_shapes": {key: value_shapes[key] for key in sorted(value_shapes)}}
 
 
 def _uuid_observation(frontmatter: dict[str, Any]) -> dict[str, Any]:
