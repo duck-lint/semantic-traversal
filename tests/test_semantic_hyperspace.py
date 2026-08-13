@@ -119,6 +119,28 @@ class SemanticHyperspaceBuildTests(unittest.TestCase):
             self.assertEqual(manifest["status"], "failed")
             self.assertFalse((output / "substrate.sqlite3").exists())
 
+    def test_repair_manifest_collects_all_unresolved_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vault = root / "vault"
+            output = root / "build"
+            vault.mkdir()
+            (vault / "source.md").write_text(
+                "---\nuuid: 00000000-0000-4000-8000-000000000001\n---\nFirst [[missing-one]].\nSecond [[missing-two]].\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(RuntimeError):
+                build_semantic_hyperspace(
+                    vault_root=vault,
+                    output_root=output,
+                    config=BuildConfig(()),
+                    embedding_provider=DeterministicEmbeddingProvider(),
+                )
+            manifest = json.loads((output / "repair_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["failure_stage"], "link_resolution")
+            self.assertEqual(len(manifest["repair_manifest"]), 2)
+            self.assertEqual({item["link"] for item in manifest["repair_manifest"]}, {"[[missing-one]]", "[[missing-two]]"})
+
 
 if __name__ == "__main__":
     unittest.main()

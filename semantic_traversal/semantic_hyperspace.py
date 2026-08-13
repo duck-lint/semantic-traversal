@@ -261,6 +261,29 @@ def _body_links(markdown: str) -> Iterable[dict[str, Any]]:
                 yield _link_parts(match.group("body"))
 
 
+def _validate_all_links(objects: dict[str, _Object], fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Reconcile the complete authored link surface before any build work."""
+    failures: list[dict[str, Any]] = []
+    for source in objects.values():
+        occurrences: list[tuple[str, dict[str, Any]]] = []
+        for field in fields:
+            if field in source.frontmatter:
+                occurrences.extend((field, link) for link in _links(source.frontmatter[field]))
+        for link in (link for unit in source.units for link in _body_links(unit["raw_markdown"])):
+            occurrences.append(("linked_to", link))
+        for relation_name, link in occurrences:
+            try:
+                _resolve_target(source, link, objects)
+            except BuildError as exc:
+                try:
+                    details = json.loads(str(exc))
+                except json.JSONDecodeError:
+                    details = {"issue": str(exc)}
+                details.update({"source_path": source.relative_path, "relation_name": relation_name})
+                failures.append(details)
+    return failures
+
+
 def _resolve_target(source: _Object, link: dict[str, Any], objects: dict[str, _Object]) -> tuple[_Object, dict[str, Any] | None]:
     target = link["target"].replace("\\", "/").strip("/")
     candidates = [obj for obj in objects.values() if obj.relative_path.removesuffix(".md") == target or obj.relative_path.rsplit("/", 1)[-1].removesuffix(".md") == target or Path(obj.relative_path).stem == target or target in obj.aliases]
@@ -337,6 +360,11 @@ def build_semantic_hyperspace(*, vault_root: Path, output_root: Path, config: Bu
         manifest = {"status": "failed", "failure_stage": "parse", "repair_manifest": failures}
         (output_root / "repair_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
         raise BuildError(f"build failed during parse; repair manifest has {len(failures)} issue(s)")
+    link_failures = _validate_all_links(objects, config.semantic_identifier_fields)
+    if link_failures:
+        manifest = {"status": "failed", "failure_stage": "link_resolution", "repair_manifest": link_failures}
+        (output_root / "repair_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        raise BuildError(f"build failed during link resolution; repair manifest has {len(link_failures)} issue(s)")
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(database)
