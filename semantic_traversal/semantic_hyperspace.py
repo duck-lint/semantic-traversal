@@ -286,7 +286,16 @@ def _validate_all_links(objects: dict[str, _Object], fields: tuple[str, ...]) ->
 
 def _resolve_target(source: _Object, link: dict[str, Any], objects: dict[str, _Object]) -> tuple[_Object, dict[str, Any] | None]:
     target = link["target"].replace("\\", "/").strip("/")
-    candidates = [obj for obj in objects.values() if obj.relative_path.removesuffix(".md") == target or obj.relative_path.rsplit("/", 1)[-1].removesuffix(".md") == target or Path(obj.relative_path).stem == target or target in obj.aliases]
+    exact_path_candidates = [obj for obj in objects.values() if obj.relative_path.removesuffix(".md") == target]
+    if "/" in target:
+        candidates = exact_path_candidates
+    else:
+        folded_target = target.casefold()
+        candidates = [
+            obj for obj in objects.values()
+            if Path(obj.relative_path).stem.casefold() == folded_target
+            or any(alias.casefold() == folded_target for alias in obj.aliases)
+        ]
     if "/" in target:
         candidates = [obj for obj in candidates if obj.relative_path.removesuffix(".md") == target]
     if len(candidates) != 1:

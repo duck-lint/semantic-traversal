@@ -141,6 +141,19 @@ class SemanticHyperspaceBuildTests(unittest.TestCase):
             self.assertEqual(len(manifest["repair_manifest"]), 2)
             self.assertEqual({item["link"] for item in manifest["repair_manifest"]}, {"[[missing-one]]", "[[missing-two]]"})
 
+    def test_note_name_resolution_is_case_insensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vault = root / "vault"
+            output = root / "build"
+            vault.mkdir()
+            (vault / "Destination.md").write_text("---\nuuid: 00000000-0000-4000-8000-000000000002\n---\nTarget.\n", encoding="utf-8")
+            (vault / "source.md").write_text("---\nuuid: 00000000-0000-4000-8000-000000000001\n---\n[[destination]]\n", encoding="utf-8")
+            build_semantic_hyperspace(vault_root=vault, output_root=output, config=BuildConfig(()), embedding_provider=DeterministicEmbeddingProvider())
+            connection = sqlite3.connect(output / "substrate.sqlite3")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 1)
+            connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()
