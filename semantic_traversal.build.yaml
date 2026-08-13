@@ -1,5 +1,7 @@
 # Build-only configuration. Runtime conversation settings do not belong here.
 uuid_field: uuid
+excluded_folders:
+  - VAULT DESIGN
 semantic_identifier_fields:
   - note_type
   - tags

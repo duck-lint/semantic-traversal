@@ -16,6 +16,23 @@ from semantic_traversal.semantic_hyperspace import (
 
 
 class SemanticHyperspaceBuildTests(unittest.TestCase):
+    def test_excluded_folders_are_not_parsed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vault = root / "vault"
+            output = root / "build"
+            (vault / "VAULT DESIGN").mkdir(parents=True)
+            (vault / "VAULT DESIGN" / "template.md").write_text("not a semantic object", encoding="utf-8")
+            (vault / "included.md").write_text("---\nuuid: 00000000-0000-4000-8000-000000000001\n---\nIncluded.\n", encoding="utf-8")
+            manifest = build_semantic_hyperspace(
+                vault_root=vault,
+                output_root=output,
+                config=BuildConfig((), excluded_folders=("VAULT DESIGN",)),
+                embedding_provider=DeterministicEmbeddingProvider(),
+            )
+            self.assertEqual(manifest["object_count"], 1)
+            self.assertEqual(manifest["build_configuration"]["excluded_folders"], ["VAULT DESIGN"])
+
     def test_specimen_contracts_are_materialized(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

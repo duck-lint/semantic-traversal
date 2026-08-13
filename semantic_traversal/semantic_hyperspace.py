@@ -84,6 +84,7 @@ class DeterministicEmbeddingProvider:
 class BuildConfig:
     semantic_identifier_fields: tuple[str, ...]
     uuid_field: str = "uuid"
+    excluded_folders: tuple[str, ...] = ()
     embedding_max_chars: int = 4000
     parser_version: str = "markdown-it-py"
 
@@ -96,7 +97,8 @@ class BuildConfig:
         uuid_field = str(payload.get("uuid_field") or chunking.get("required_uuid_field", "uuid"))
         configured_fields = payload.get("semantic_identifier_fields")
         fields = tuple(str(value) for value in (configured_fields if configured_fields is not None else chunking.get("semantic_frontmatter_fields", [])))
-        return cls(tuple(field for field in fields if field != uuid_field), uuid_field)
+        excluded = tuple(str(value).replace("\\", "/").strip("/") for value in payload.get("excluded_folders", []))
+        return cls(tuple(field for field in fields if field != uuid_field), uuid_field, excluded)
 
 
 @dataclass
@@ -244,6 +246,11 @@ def _resolve_target(source: _Object, link: dict[str, Any], objects: dict[str, _O
     return candidates[0], region
 
 
+def _is_excluded(relative_path: str, excluded_folders: tuple[str, ...]) -> bool:
+    normalized = relative_path.replace("\\", "/").strip("/")
+    return any(normalized == folder or normalized.startswith(f"{folder}/") for folder in excluded_folders if folder)
+
+
 def _safe_column(field: str) -> str:
     return "field_" + re.sub(r"[^A-Za-z0-9_]", "_", field)
 
@@ -278,6 +285,8 @@ def build_semantic_hyperspace(*, vault_root: Path, output_root: Path, config: Bu
     failures: list[dict[str, Any]] = []
     for path in sorted(vault_root.rglob("*.md")):
         relative = path.relative_to(vault_root).as_posix()
+        if _is_excluded(relative, config.excluded_folders):
+            continue
         try:
             frontmatter, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
             value = frontmatter.get(config.uuid_field)
@@ -395,7 +404,7 @@ def build_semantic_hyperspace(*, vault_root: Path, output_root: Path, config: Bu
         raise
     catalog = _catalog(connection_path=database, fields=config.semantic_identifier_fields, objects=objects)
     (staging / "capability_catalog.json").write_text(json.dumps(catalog, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    manifest = {"status": "published", "schema_version": 1, "build_configuration": {"semantic_identifier_fields": list(config.semantic_identifier_fields), "uuid_field": config.uuid_field}, "parser": {"name": "markdown-it-py", "version": config.parser_version}, "embedding": provider.model_identity, "artifacts": {name: name for name in ("substrate.sqlite3", "vectors.npy", "capability_catalog.json", "manifest.json")}, "object_count": len(objects), "region_count": sum(len(obj.regions) for obj in objects.values()), "unit_count": sum(len(obj.units) for obj in objects.values()), "vector_count": len(all_vectors)}
+    manifest = {"status": "published", "schema_version": 1, "build_configuration": {"semantic_identifier_fields": list(config.semantic_identifier_fields), "excluded_folders": list(config.excluded_folders), "uuid_field": config.uuid_field}, "parser": {"name": "markdown-it-py", "version": config.parser_version}, "embedding": provider.model_identity, "artifacts": {name: name for name in ("substrate.sqlite3", "vectors.npy", "capability_catalog.json", "manifest.json")}, "object_count": len(objects), "region_count": sum(len(obj.regions) for obj in objects.values()), "unit_count": sum(len(obj.units) for obj in objects.values()), "vector_count": len(all_vectors)}
     (staging / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     for name in ("substrate.sqlite3", "vectors.npy", "capability_catalog.json", "manifest.json"):
         staging.joinpath(name).replace(output_root / name)
