@@ -1,2 +1,6 @@
 PyYAML
 sentence-transformers
+ruamel.yaml
+markdown-it-py
+mdit-py-plugins
+numpy

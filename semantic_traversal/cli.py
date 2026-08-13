@@ -33,6 +33,26 @@ def build_ingest_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_hyperspace_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build the specification-defined semantic hyperspace artifacts.")
+    parser.add_argument("--vault", required=True, help="Read-only Markdown vault root.")
+    parser.add_argument("--output", required=True, help="Output directory for the published build artifacts.")
+    parser.add_argument("--build-config", required=True, help="YAML build configuration containing admitted fields.")
+    return parser
+
+
+def run_hyperspace_cli(argv: Sequence[str] | None = None) -> int:
+    from .semantic_hyperspace import BuildConfig, build_semantic_hyperspace
+    args = build_hyperspace_parser().parse_args(argv)
+    manifest = build_semantic_hyperspace(
+        vault_root=Path(args.vault).resolve(),
+        output_root=Path(args.output).resolve(),
+        config=BuildConfig.from_yaml(Path(args.build_config).resolve()),
+    )
+    print(json.dumps(manifest, indent=2, ensure_ascii=True))
+    return 0
+
+
 def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     args = build_turn_parser().parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
@@ -112,6 +132,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "ingest":
         return run_ingest_cli(args[1:])
+    if args and args[0] == "hyperspace-build":
+        return run_hyperspace_cli(args[1:])
     if args and args[0] == "normalize":
         from .normalize import main as normalize_main
         return normalize_main(args[1:])
