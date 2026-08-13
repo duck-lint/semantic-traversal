@@ -16,6 +16,26 @@ from semantic_traversal.semantic_hyperspace import (
 
 
 class SemanticHyperspaceBuildTests(unittest.TestCase):
+    def test_code_blocks_do_not_create_wikilink_relations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vault = root / "vault"
+            output = root / "build"
+            vault.mkdir()
+            (vault / "note.md").write_text(
+                "---\nuuid: 00000000-0000-4000-8000-000000000001\n---\n```markdown\n[[Missing#Region]]\n```\n\n    [[Also Missing#Region]]\n",
+                encoding="utf-8",
+            )
+            build_semantic_hyperspace(
+                vault_root=vault,
+                output_root=output,
+                config=BuildConfig(()),
+                embedding_provider=DeterministicEmbeddingProvider(),
+            )
+            connection = sqlite3.connect(output / "substrate.sqlite3")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 0)
+            connection.close()
+
     def test_excluded_folders_are_not_parsed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

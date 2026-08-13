@@ -25,6 +25,7 @@ from ruamel.yaml import YAML
 
 WIKILINK_RE = re.compile(r"(?P<embed>!)?\[\[(?P<body>[^\]]+)\]\]")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+FENCE_RE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
 
 
@@ -163,6 +164,7 @@ def _parsed_text(raw: str) -> str:
 def _blocks(body: str) -> Iterable[tuple[str, str, int | None]]:
     lines = body.splitlines()
     current: list[str] = []
+    fence_marker: str | None = None
     region_stack: list[tuple[int, str]] = []
     def flush() -> tuple[str, str, int | None] | None:
         nonlocal current
@@ -172,6 +174,23 @@ def _blocks(body: str) -> Iterable[tuple[str, str, int | None]]:
         current = []
         return ("unit", raw, None)
     for line in lines:
+        if fence_marker is not None:
+            current.append(line)
+            if line.strip().startswith(fence_marker):
+                item = flush()
+                if item:
+                    yield item
+                fence_marker = None
+            continue
+        fence_match = FENCE_RE.match(line)
+        if fence_match:
+            item = flush()
+            if item:
+                yield item
+            marker = fence_match.group("fence")
+            fence_marker = marker[0] * len(marker)
+            current.append(line)
+            continue
         heading = HEADING_RE.match(line.strip())
         if heading:
             item = flush()
@@ -226,6 +245,20 @@ def _links(value: Any) -> Iterable[dict[str, Any]]:
     elif isinstance(value, list):
         for child in value:
             yield from _links(child)
+
+
+def _body_links(markdown: str) -> Iterable[dict[str, Any]]:
+    """Extract body wikilinks from Markdown text, excluding code tokens."""
+    md = MarkdownIt("commonmark", {"breaks": True}).enable("table")
+    for token in md.parse(markdown):
+        if token.type in {"fence", "code_block"}:
+            continue
+        children = token.children or ()
+        for child in children:
+            if child.type == "code_inline":
+                continue
+            for match in WIKILINK_RE.finditer(child.content):
+                yield _link_parts(match.group("body"))
 
 
 def _resolve_target(source: _Object, link: dict[str, Any], objects: dict[str, _Object]) -> tuple[_Object, dict[str, Any] | None]:
@@ -367,7 +400,7 @@ def build_semantic_hyperspace(*, vault_root: Path, output_root: Path, config: Bu
                         for link in _links(obj.frontmatter[field]):
                             target, region = _resolve_target(obj, link, objects)
                             connection.execute("INSERT INTO relations(source_unit_id, relation_name, source_kind, target_object_uuid, target_region_id, raw_markdown, visible_text) VALUES (?, ?, 'frontmatter', ?, ?, ?, ?)", (unit_id, field, target.uuid, region["region_id"] if region else None, link["raw"], link["visible_text"]))
-                for link in _links(unit["raw_markdown"]):
+                for link in _body_links(unit["raw_markdown"]):
                     target, region = _resolve_target(obj, link, objects)
                     connection.execute("INSERT INTO relations(source_unit_id, relation_name, source_kind, target_object_uuid, target_region_id, raw_markdown, visible_text) VALUES (?, 'linked_to', 'body', ?, ?, ?, ?)", (unit_id, target.uuid, region["region_id"] if region else None, link["raw"], link["visible_text"]))
                 fts_name = f"fts_{ordinal}"  # created below as one fielded table per representation
