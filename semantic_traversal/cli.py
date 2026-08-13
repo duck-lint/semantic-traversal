@@ -8,7 +8,6 @@ from typing import Sequence
 
 from .hashing import sha256_json
 from .config import load_runtime_config
-from .ingest import run_ingest
 from .llm import resolve_llm_backend
 from .semantic_compiler import resolve_semantic_compiler_backend
 from .runtime import run_thread_turn
@@ -27,13 +26,6 @@ def build_turn_parser() -> argparse.ArgumentParser:
 
 
 def build_ingest_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Ingest the configured vault into SQLite plus JSON manifests.")
-    parser.add_argument("--repo-root", default=".", help="Repo root used to resolve runtime config.")
-    parser.add_argument("--config", help="Checked-in YAML runtime config path.")
-    return parser
-
-
-def build_hyperspace_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build the specification-defined semantic hyperspace artifacts.")
     parser.add_argument("--vault", required=True, help="Read-only Markdown vault root.")
     parser.add_argument("--output", required=True, help="Output directory for the published build artifacts.")
@@ -41,9 +33,9 @@ def build_hyperspace_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_hyperspace_cli(argv: Sequence[str] | None = None) -> int:
+def run_ingest_cli(argv: Sequence[str] | None = None) -> int:
     from .semantic_hyperspace import BuildConfig, build_semantic_hyperspace
-    args = build_hyperspace_parser().parse_args(argv)
+    args = build_ingest_parser().parse_args(argv)
     manifest = build_semantic_hyperspace(
         vault_root=Path(args.vault).resolve(),
         output_root=Path(args.output).resolve(),
@@ -103,37 +95,10 @@ def run_turn_cli(argv: Sequence[str] | None = None) -> int:
     return 0 if result.runtime_outcome == "completed" else 1
 
 
-def run_ingest_cli(argv: Sequence[str] | None = None) -> int:
-    args = build_ingest_parser().parse_args(argv)
-    repo_root = Path(args.repo_root).resolve()
-    config = load_runtime_config(repo_root=repo_root, config_path=args.config)
-    result = run_ingest(repo_root=repo_root, data_root=config.data_root, config=config)
-    payload = {
-        "status": "pass",
-        "run_id": result.run_id,
-        "generated_at": result.generated_at,
-        "data_root": str(result.data_root),
-        "database_path": str(result.database_path),
-        "manifest_path": str(result.manifest_path),
-        "source_roots": [{"label": root.label, "path": str(root.path)} for root in result.source_roots],
-        "note_count": result.note_count,
-        "chunk_count": result.chunk_count,
-        "inserted_chunks": result.inserted_chunks,
-        "updated_chunks": result.updated_chunks,
-        "unchanged_chunks": result.unchanged_chunks,
-        "deleted_chunks": result.deleted_chunks,
-        "deleted_notes": result.deleted_notes,
-    }
-    print(json.dumps(payload, indent=2, ensure_ascii=True))
-    return 0
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "ingest":
         return run_ingest_cli(args[1:])
-    if args and args[0] == "hyperspace-build":
-        return run_hyperspace_cli(args[1:])
     if args and args[0] == "normalize":
         from .normalize import main as normalize_main
         return normalize_main(args[1:])

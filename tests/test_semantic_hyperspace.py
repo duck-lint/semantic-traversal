@@ -16,6 +16,16 @@ from semantic_traversal.semantic_hyperspace import (
 
 
 class SemanticHyperspaceBuildTests(unittest.TestCase):
+    def test_build_config_rejects_legacy_chunking_fallbacks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "legacy.yaml"
+            config_path.write_text(
+                "chunking:\n  required_uuid_field: uuid\n  semantic_frontmatter_fields: [title]\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                BuildConfig.from_yaml(config_path)
+
     def test_code_blocks_do_not_create_wikilink_relations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -94,10 +94,12 @@ class BuildConfig:
         yaml = YAML(typ="safe")
         yaml.version = (1, 2)
         payload = yaml.load(path.read_text(encoding="utf-8")) or {}
-        chunking = payload.get("chunking", {})
-        uuid_field = str(payload.get("uuid_field") or chunking.get("required_uuid_field", "uuid"))
-        configured_fields = payload.get("semantic_identifier_fields")
-        fields = tuple(str(value) for value in (configured_fields if configured_fields is not None else chunking.get("semantic_frontmatter_fields", [])))
+        if "uuid_field" not in payload or "semantic_identifier_fields" not in payload:
+            raise ValueError("build configuration must declare uuid_field and semantic_identifier_fields")
+        uuid_field = str(payload["uuid_field"])
+        fields = tuple(str(value) for value in payload["semantic_identifier_fields"])
+        if uuid_field in fields:
+            raise ValueError("uuid_field cannot be admitted as a semantic identifier")
         excluded = tuple(str(value).replace("\\", "/").strip("/") for value in payload.get("excluded_folders", []))
         return cls(tuple(field for field in fields if field != uuid_field), uuid_field, excluded)
 
