@@ -114,12 +114,22 @@ def _value_domain(value: Any) -> str:
     raise CapabilityObservationError(f"unsupported canonical value type: {type(value).__name__}")
 
 
-def _identifier_shapes(connection: sqlite3.Connection, field_name: str) -> tuple[list[str], list[str]]:
+def _identifier_shapes(
+    connection: sqlite3.Connection,
+    field_name: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Classify only identifier values inherited by canonical units.
+
+    Object-level state remains authoritative canonical provenance, but it is
+    not the represented population for unit-returning exact/lexical surfaces.
+    """
+
     domains: set[str] = set()
+    scalar_domains: set[str] = set()
     member_domains: set[str] = set()
     rows = connection.execute(
-        """SELECT state, value_json FROM object_identifiers
-        WHERE field_name = ? ORDER BY source_object_uuid, ordinal""",
+        """SELECT state, value_json FROM inherited_identifiers
+        WHERE field_name = ? ORDER BY unit_id, ordinal""",
         (field_name,),
     ).fetchall()
     for state, value_json in rows:
@@ -130,11 +140,17 @@ def _identifier_shapes(connection: sqlite3.Connection, field_name: str) -> tuple
         domains.add(domain)
         if isinstance(value, list):
             member_domains.update(_value_domain(member) for member in value)
+        else:
+            scalar_domains.add(domain)
     if not domains:
         raise CapabilityObservationError(
-            f"represented semantic identifier has no canonical value shape: {field_name!r}"
+            f"represented semantic identifier has no inherited unit value shape: {field_name!r}"
         )
-    return _ordered_domains(domains), _ordered_domains(member_domains)
+    return (
+        _ordered_domains(domains),
+        _ordered_domains(scalar_domains),
+        _ordered_domains(member_domains),
+    )
 
 
 def _validate_exact_dimension(field_class: str, field_name: str) -> None:
@@ -154,13 +170,21 @@ def _validate_lexical_dimension(field_class: str, field_name: str) -> None:
 
 
 def _field_capabilities(connection: sqlite3.Connection) -> list[dict[str, Any]]:
-    exact = tuple(connection.execute(
+    exact_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exact_index_entries'"
+    ).fetchone()
+    if exact_table is None:
+        raise CapabilityObservationError("completed exact surface is absent")
+    exact_rows = tuple(connection.execute(
         "SELECT DISTINCT field_class, field_name FROM exact_index_entries ORDER BY field_class, field_name"
     ))
+    # These dimensions are part of the accepted exact grammar even when this
+    # particular build has no matching rows for one of them.
+    exact = tuple(sorted(set(exact_rows) | set(_FIXED_EXACT_SHAPES)))
     lexical = tuple(connection.execute(
         "SELECT field_class, field_name FROM lexical_dimension_registry ORDER BY field_class, field_name"
     ))
-    for field_class, field_name in exact:
+    for field_class, field_name in exact_rows:
         _validate_exact_dimension(field_class, field_name)
     for field_class, field_name in lexical:
         _validate_lexical_dimension(field_class, field_name)
@@ -169,29 +193,42 @@ def _field_capabilities(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
     for field_class, field_name in dimensions:
         if field_class == "semantic_identifier":
-            shapes, member_domains = _identifier_shapes(connection, field_name)
+            shapes, scalar_domains, member_domains = _identifier_shapes(connection, field_name)
         else:
             fixed = _FIXED_EXACT_SHAPES.get((field_class, field_name))
             if fixed is None:
-                shapes, member_domains = ["string"], []
+                shapes, scalar_domains, member_domains = ["string"], ["string"], []
             else:
-                shapes, member_domains = list(fixed[0]), list(fixed[1] or ())
+                shapes = list(fixed[0])
+                scalar_domains = []
+                member_domains = list(fixed[1] or ())
         surfaces: dict[str, Any] = {}
         if (field_class, field_name) in exact:
             exact_fact: dict[str, Any] = {"operators": list(_SURFACE_OPERATIONS["exact"])}
-            if field_class == "semantic_identifier" and "sequence" in shapes:
-                exact_fact["operand_semantics"] = "member_equality"
+            if field_class == "semantic_identifier":
+                exact_fact["operand_domains"] = scalar_domains
+                if "sequence" in shapes:
+                    exact_fact["sequence_behavior"] = "member_equality"
             elif field_class in {"region", "semantic_path"} and "sequence" in shapes:
                 exact_fact["operand_semantics"] = "ordered_sequence"
             surfaces["exact"] = exact_fact
         if (field_class, field_name) in lexical:
-            surfaces["lexical"] = {"operators": list(_SURFACE_OPERATIONS["lexical"])}
+            lexical_fact: dict[str, Any] = {"operators": list(_SURFACE_OPERATIONS["lexical"])}
+            if field_class == "semantic_identifier":
+                # Lexical indexing admits only direct text members; a mixed
+                # typed field therefore exposes only its represented strings.
+                lexical_fact["operand_domains"] = [
+                    "string"
+                ] if "string" in scalar_domains or "string" in member_domains else []
+            surfaces["lexical"] = lexical_fact
         fact: dict[str, Any] = {
             "field_class": field_class,
             "field_name": field_name,
             "canonical_shapes": shapes,
             "surfaces": surfaces,
         }
+        if field_class == "semantic_identifier":
+            fact["scalar_domains"] = scalar_domains
         if member_domains:
             fact["sequence_member_domains"] = member_domains
         facts.append(fact)

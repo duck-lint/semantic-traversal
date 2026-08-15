@@ -43,7 +43,10 @@ class CapabilityFactsTests(unittest.TestCase):
         vault = root / "vault"
         vault.mkdir()
         (vault / "Target.md").write_text(
-            "---\nuuid: target-secret-uuid\ntitle: target-title-secret\ntags: [target-tag-secret]\n---\n# Region Secret\ntarget body secret\n",
+            "---\nuuid: target-secret-uuid\ntitle: target-title-secret\ntags: [target-tag-secret]\n"
+            "mixed_value: [sequence-member-secret]\n"
+            "mixed_text_number: 11\n"
+            "---\n# Region Secret\ntarget body secret\n",
             encoding="utf-8",
         )
         (vault / "Source.md").write_text(
@@ -55,13 +58,15 @@ class CapabilityFactsTests(unittest.TestCase):
             "integer_value: 7\n"
             "bool_value: true\n"
             "date_value: 2026-08-15\n"
+            "mixed_value: scalar-member-secret\n"
+            "mixed_text_number: text-member-secret\n"
             "relation: \"[[Target]]\"\n"
             "---\n"
             "source body secret [[Target]]\n",
             encoding="utf-8",
         )
         (vault / "Zero.md").write_text(
-            "---\nuuid: zero-secret-uuid\ntags: [zero-tag-secret]\n---\n",
+            "---\nuuid: zero-secret-uuid\ntags: [zero-tag-secret]\ndate_value: \"2026-08-15\"\n---\n",
             encoding="utf-8",
         )
         config = root / "config.yaml"
@@ -69,7 +74,7 @@ class CapabilityFactsTests(unittest.TestCase):
             "vault_name: observer\n"
             "uuid_field: uuid\n"
             "excluded_folders: []\n"
-            "semantic_identifier_fields: [title, tags, aliases, integer_value, bool_value, date_value, relation, admitted_only]\n",
+            "semantic_identifier_fields: [title, tags, aliases, integer_value, bool_value, date_value, mixed_value, mixed_text_number, relation, admitted_only]\n",
             encoding="utf-8",
         )
         return vault, config
@@ -152,8 +157,20 @@ class CapabilityFactsTests(unittest.TestCase):
             self.assertEqual(fields[("semantic_identifier", "date_value")]["canonical_shapes"], ["date"])
             self.assertEqual(fields[("semantic_identifier", "aliases")]["canonical_shapes"], ["sequence"])
             self.assertEqual(fields[("semantic_identifier", "aliases")] ["sequence_member_domains"], ["string"])
-            self.assertEqual(fields[("semantic_identifier", "aliases")]["surfaces"]["exact"]["operand_semantics"], "member_equality")
+            self.assertEqual(fields[("semantic_identifier", "aliases")]["surfaces"]["exact"]["sequence_behavior"], "member_equality")
+            self.assertEqual(fields[("semantic_identifier", "aliases")]["surfaces"]["exact"]["operand_domains"], [])
+            self.assertEqual(fields[("semantic_identifier", "mixed_value")]["canonical_shapes"], ["string", "sequence"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_value")]["scalar_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_value")]["sequence_member_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_value")]["surfaces"]["exact"]["operand_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_value")]["surfaces"]["exact"]["sequence_behavior"], "member_equality")
+            self.assertEqual(fields[("semantic_identifier", "mixed_value")]["surfaces"]["lexical"]["operand_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["canonical_shapes"], ["integer", "string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["scalar_domains"], ["integer", "string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["surfaces"]["lexical"]["operand_domains"], ["string"])
             self.assertEqual(fields[("intrinsic", "parsed_text")]["surfaces"]["lexical"]["operators"], ["terms", "phrase"])
+            self.assertIn(("semantic_path", "path_component"), fields)
+            self.assertEqual(fields[("semantic_path", "path_component")]["surfaces"]["exact"]["operators"], ["equals"])
             self.assertNotIn(("semantic_identifier", "admitted_only"), fields)
 
             discovery = {(item["node_kind"], item["dimension_name"]) for item in facts["graph_discovery_capabilities"]}
@@ -225,6 +242,28 @@ class CapabilityFactsTests(unittest.TestCase):
             code, _, stderr = self._observe(output)
             self.assertNotEqual(code, 0)
             self.assertIn("unsupported graph relation type", stderr)
+
+            connection = sqlite3.connect(database)
+            connection.execute("DELETE FROM graph_relation_types WHERE relation_class = 'unsupported'")
+            connection.execute(
+                "INSERT INTO graph_discovery_registry (node_kind, dimension_name, table_name) VALUES (?, ?, ?)",
+                ("unsupported", "dimension", "fake_discovery_table"),
+            )
+            connection.commit()
+            connection.close()
+            code, _, stderr = self._observe(output)
+            self.assertNotEqual(code, 0)
+            self.assertIn("unsupported graph discovery dimension", stderr)
+
+            connection = sqlite3.connect(database)
+            connection.execute("DELETE FROM graph_discovery_registry WHERE node_kind = 'unsupported'")
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            connection.execute("UPDATE vector_segments SET target_kind = 'unsupported' WHERE matrix_row = 0")
+            connection.commit()
+            connection.close()
+            code, _, stderr = self._observe(output)
+            self.assertNotEqual(code, 0)
+            self.assertIn("unknown vector target kind", stderr)
 
 
 if __name__ == "__main__":
