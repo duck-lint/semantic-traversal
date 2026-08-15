@@ -46,6 +46,7 @@ class CapabilityFactsTests(unittest.TestCase):
             "---\nuuid: target-secret-uuid\ntitle: target-title-secret\ntags: [target-tag-secret]\n"
             "mixed_value: [sequence-member-secret]\n"
             "mixed_text_number: 11\n"
+            "mixed_integer_sequence: [integer-sequence-member-secret]\n"
             "---\n# Region Secret\ntarget body secret\n",
             encoding="utf-8",
         )
@@ -60,6 +61,7 @@ class CapabilityFactsTests(unittest.TestCase):
             "date_value: 2026-08-15\n"
             "mixed_value: scalar-member-secret\n"
             "mixed_text_number: text-member-secret\n"
+            "mixed_integer_sequence: 12\n"
             "relation: \"[[Target]]\"\n"
             "---\n"
             "source body secret [[Target]]\n",
@@ -74,7 +76,7 @@ class CapabilityFactsTests(unittest.TestCase):
             "vault_name: observer\n"
             "uuid_field: uuid\n"
             "excluded_folders: []\n"
-            "semantic_identifier_fields: [title, tags, aliases, integer_value, bool_value, date_value, mixed_value, mixed_text_number, relation, admitted_only]\n",
+            "semantic_identifier_fields: [title, tags, aliases, integer_value, bool_value, date_value, mixed_value, mixed_text_number, mixed_integer_sequence, relation, admitted_only]\n",
             encoding="utf-8",
         )
         return vault, config
@@ -156,9 +158,9 @@ class CapabilityFactsTests(unittest.TestCase):
             self.assertEqual(fields[("semantic_identifier", "bool_value")]["canonical_shapes"], ["boolean"])
             self.assertEqual(fields[("semantic_identifier", "date_value")]["canonical_shapes"], ["date"])
             self.assertEqual(fields[("semantic_identifier", "aliases")]["canonical_shapes"], ["sequence"])
-            self.assertEqual(fields[("semantic_identifier", "aliases")] ["sequence_member_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "aliases")]["sequence_member_domains"], ["string"])
             self.assertEqual(fields[("semantic_identifier", "aliases")]["surfaces"]["exact"]["sequence_behavior"], "member_equality")
-            self.assertEqual(fields[("semantic_identifier", "aliases")]["surfaces"]["exact"]["operand_domains"], [])
+            self.assertEqual(fields[("semantic_identifier", "aliases")]["surfaces"]["exact"]["operand_domains"], ["string"])
             self.assertEqual(fields[("semantic_identifier", "mixed_value")]["canonical_shapes"], ["string", "sequence"])
             self.assertEqual(fields[("semantic_identifier", "mixed_value")]["scalar_domains"], ["string"])
             self.assertEqual(fields[("semantic_identifier", "mixed_value")]["sequence_member_domains"], ["string"])
@@ -167,7 +169,12 @@ class CapabilityFactsTests(unittest.TestCase):
             self.assertEqual(fields[("semantic_identifier", "mixed_value")]["surfaces"]["lexical"]["operand_domains"], ["string"])
             self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["canonical_shapes"], ["integer", "string"])
             self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["scalar_domains"], ["integer", "string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["surfaces"]["exact"]["operand_domains"], ["integer", "string"])
             self.assertEqual(fields[("semantic_identifier", "mixed_text_number")]["surfaces"]["lexical"]["operand_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_integer_sequence")]["canonical_shapes"], ["integer", "sequence"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_integer_sequence")]["scalar_domains"], ["integer"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_integer_sequence")]["sequence_member_domains"], ["string"])
+            self.assertEqual(fields[("semantic_identifier", "mixed_integer_sequence")]["surfaces"]["exact"]["operand_domains"], ["integer", "string"])
             self.assertEqual(fields[("intrinsic", "parsed_text")]["surfaces"]["lexical"]["operators"], ["terms", "phrase"])
             self.assertIn(("semantic_path", "path_component"), fields)
             self.assertEqual(fields[("semantic_path", "path_component")]["surfaces"]["exact"]["operators"], ["equals"])

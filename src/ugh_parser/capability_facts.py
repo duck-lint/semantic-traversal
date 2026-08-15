@@ -206,7 +206,9 @@ def _field_capabilities(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         if (field_class, field_name) in exact:
             exact_fact: dict[str, Any] = {"operators": list(_SURFACE_OPERATIONS["exact"])}
             if field_class == "semantic_identifier":
-                exact_fact["operand_domains"] = scalar_domains
+                exact_fact["operand_domains"] = _ordered_domains(
+                    set(scalar_domains) | set(member_domains)
+                )
                 if "sequence" in shapes:
                     exact_fact["sequence_behavior"] = "member_equality"
             elif field_class in {"region", "semantic_path"} and "sequence" in shapes:
