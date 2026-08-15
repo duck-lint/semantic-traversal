@@ -1,3 +1,12 @@
 .env.*
 *.pyc
 agent_harness/private/
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+output/
+.runtime_deps/
+*.egg*
+*pytest*
