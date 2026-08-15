@@ -90,16 +90,30 @@ def _build(args: argparse.Namespace) -> dict[str, Any]:
             raise CliError(json.dumps(_json_value(resolved.failures), ensure_ascii=False))
         _stage("canonical")
         completed = canonicalize_ingest(resolved)
+        print(
+            f"canonical objects: {len(completed.objects)}; regions: {len(completed.regions)}; units: {len(completed.units)}",
+            file=sys.stderr,
+        )
         _stage("substrate")
         connection = sqlite3.connect(db_path)
         try:
             write_completed_ingest(connection, completed)
             _stage("exact")
             build_exact_index(connection)
+            print(f"exact entries: {connection.execute('SELECT COUNT(*) FROM exact_index_entries').fetchone()[0]}", file=sys.stderr)
             _stage("lexical")
             build_lexical_index(connection)
+            lexical_tables = [row[0] for row in connection.execute("SELECT table_name FROM lexical_dimension_registry")]
+            lexical_occurrences = sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in lexical_tables)
+            print(f"lexical dimensions: {len(lexical_tables)}; occurrences: {lexical_occurrences}", file=sys.stderr)
             _stage("graph")
             build_graph(connection)
+            print(
+                f"graph nodes: {connection.execute('SELECT COUNT(*) FROM graph_nodes').fetchone()[0]}; "
+                f"edges: {connection.execute('SELECT COUNT(*) FROM graph_edges').fetchone()[0]}; "
+                f"relation types: {connection.execute('SELECT COUNT(*) FROM graph_relation_types').fetchone()[0]}",
+                file=sys.stderr,
+            )
             _stage("vector")
             targets = vector_eligible_targets(connection)
             provider = OllamaEmbeddingProvider(base_url=args.ollama_url)
@@ -157,7 +171,10 @@ def _inspect_counts(args: argparse.Namespace) -> None:
             "canonical_regions": connection.execute("SELECT COUNT(*) FROM canonical_regions").fetchone()[0],
             "canonical_units": connection.execute("SELECT COUNT(*) FROM canonical_units").fetchone()[0],
             "zero_unit_objects": connection.execute("SELECT COUNT(*) FROM canonical_objects o WHERE NOT EXISTS (SELECT 1 FROM canonical_units u WHERE u.source_object_uuid=o.source_object_uuid)").fetchone()[0],
-            "empty_units": connection.execute("SELECT COUNT(*) FROM canonical_units WHERE trim(parsed_text) = ''").fetchone()[0],
+            "empty_units": sum(
+                not parsed_text.strip()
+                for (parsed_text,) in connection.execute("SELECT parsed_text FROM canonical_units")
+            ),
             "exact_entries": connection.execute("SELECT COUNT(*) FROM exact_index_entries").fetchone()[0],
             "lexical_dimensions": len(lexical_tables),
             "lexical_occurrences": sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in lexical_tables),
@@ -228,9 +245,17 @@ def _parse_scalar(value_type: str, value: str | None) -> Any:
 
 
 def _exact(args: argparse.Namespace) -> None:
+    if args.component and (args.value_type is not None or args.value is not None):
+        raise CliError("--component cannot be combined with --value-type or --value")
     if args.component:
         value: Any = tuple(args.component)
     else:
+        if args.value_type is None:
+            raise CliError("exact lookup requires --component or --value-type")
+        if args.value_type == "null" and args.value is not None:
+            raise CliError("null exact lookup does not accept --value")
+        if args.value_type != "null" and args.value is None:
+            raise CliError("--value is required for this value type")
         value = _parse_scalar(args.value_type, args.value)
     connection = _connection(args.build)
     try:
@@ -260,7 +285,16 @@ def _graph_relations(args: argparse.Namespace) -> None:
 
 def _graph_traverse(args: argparse.Namespace) -> None:
     raw = json.loads(args.handle_json)
-    handle = GraphHandle(raw["node_kind"], tuple(raw["identity"]))
+    identity = raw["identity"]
+    if raw["node_kind"] in {"semantic_object", "semantic_unit"}:
+        identity = (identity[0],)
+    elif raw["node_kind"] == "semantic_region":
+        identity = (identity[0], tuple(identity[1]))
+    elif raw["node_kind"] == "scope":
+        identity = (tuple(identity[0]),)
+    else:
+        raise CliError("unknown graph handle node kind")
+    handle = GraphHandle(raw["node_kind"], identity)
     connection = _connection(args.build)
     try: _emit(graph_traverse(connection, handle, args.relation_class, args.relation_name, args.direction), args)
     finally: connection.close()
