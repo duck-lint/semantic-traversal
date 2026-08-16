@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from semantic_traversal.cli import main
 from semantic_traversal.runtime.config import (
-    RouterConfig,
+    ModelConfig,
     RuntimeConfig,
     RuntimeConfigError,
     load_runtime_config,
@@ -42,8 +42,8 @@ class ProviderDouble:
         self.error = error
         self.calls = []
 
-    def infer(self, config, prompt, messages):
-        self.calls.append((config, prompt, tuple(messages)))
+    def infer_router(self, config, messages):
+        self.calls.append((config, config.prompt, tuple(messages)))
         if self.error is not None:
             raise self.error
         return self.inference
@@ -52,8 +52,8 @@ class ProviderDouble:
 class RuntimeRouterTests(unittest.TestCase):
     def _config(self):
         return RuntimeConfig(
-            RouterConfig("openai", "explicit-model-id", 7.5, ROUTER_PROMPT_V1),
-            RouterConfig("openai", "retrieval-model", 8.5, "retrieval test prompt"),
+            ModelConfig("openai", "explicit-model-id", 7.5, ROUTER_PROMPT_V1),
+            ModelConfig("openai", "retrieval-model", 8.5, "retrieval test prompt"),
         )
 
     def _clock(self, seconds=0):
@@ -122,7 +122,7 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertEqual(result.trigger_message_id, trigger.message_id)
             self.assertEqual(len(provider.calls), 1)
             config, prompt, messages = provider.calls[0]
-            self.assertEqual(config, self._config())
+            self.assertEqual(config, self._config().router)
             self.assertEqual(prompt, ROUTER_PROMPT_V1)
             self.assertEqual([message.role for message in messages], ["user", "synthesis", "user"])
             self.assertEqual([message.content for message in messages], ["hello  ", "hi\nthere", "What is in my notes?"])
@@ -189,7 +189,7 @@ class RuntimeRouterTests(unittest.TestCase):
 
                 with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
                     with self.assertRaises(OpenAIProviderError) as raised:
-                        OpenAIResponsesProvider().infer(self._config(), ROUTER_PROMPT_V1, ())
+                        OpenAIResponsesProvider().infer_router(self._config().router, ())
                 self.assertEqual(raised.exception.error_type, expected_error)
 
     def test_invalid_provider_json_creates_failed_run_without_touching_messages(self):
@@ -331,7 +331,7 @@ class RuntimeRouterTests(unittest.TestCase):
                 self.responses = Responses()
 
         with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
-            result = OpenAIResponsesProvider().infer(self._config(), ROUTER_PROMPT_V1, messages)
+            result = OpenAIResponsesProvider().infer_router(self._config().router, messages)
         self.assertEqual(result.route, "direct")
         self.assertEqual(captured["client"], {"max_retries": 0, "timeout": 7.5})
         request = captured["request"]
@@ -354,7 +354,7 @@ class RuntimeRouterTests(unittest.TestCase):
             conversation = create_conversation(database)
             append_message(database, conversation.conversation_id, "user", "hello")
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch("semantic_traversal.runtime.router.OpenAIResponsesProvider.infer", return_value=ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage())), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with patch("semantic_traversal.runtime.router.OpenAIResponsesProvider.infer_router", return_value=ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage())), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 code = main(["runtime", "router", "infer", "--database", str(database), "--config", str(config), "--conversation-id", conversation.conversation_id, "--json"])
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertEqual(json.loads(stdout.getvalue())["route"], "direct")

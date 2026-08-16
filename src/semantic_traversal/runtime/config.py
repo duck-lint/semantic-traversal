@@ -30,11 +30,6 @@ class RuntimeConfig:
     retrieval_inference: ModelConfig
 
 
-# Keep the router type name as a descriptive alias while both model roles use
-# the same validated configuration contract.
-RouterConfig = ModelConfig
-
-
 def _load_values(path: str | Path) -> dict[str, Any]:
     yaml = YAML(typ="safe", pure=True)
     yaml.version = (1, 2)
@@ -86,4 +81,4 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     return RuntimeConfig(parse_section("router"), parse_section("retrieval_inference"))
 
 
-__all__ = ["ModelConfig", "RouterConfig", "RuntimeConfig", "RuntimeConfigError", "load_runtime_config"]
+__all__ = ["ModelConfig", "RuntimeConfig", "RuntimeConfigError", "load_runtime_config"]

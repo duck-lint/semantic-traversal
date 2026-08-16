@@ -16,6 +16,7 @@ from .conversation import Conversation, Message, RuntimeConversationError, _conn
 from .model_runs import complete_retrieval_run, fail_retrieval_run, insert_retrieval_run
 from .openai_provider import OpenAIProviderError, OpenAIResponsesProvider, RetrievalProviderInference
 from .prompts import prompt_version
+from .retrieval_requests import RetrievalRequestError, canonicalize_retrieval_requests
 
 Clock = Callable[[], dt.datetime]
 
@@ -55,7 +56,7 @@ def _catalog(path: str | Path) -> tuple[str, str]:
         parsed = json.loads(text)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeRetrievalError(f"capability catalog is not valid UTF-8 JSON: {exc}") from exc
-    if not isinstance(parsed, dict) or parsed.get("catalog_schema_version") not in {1, "1"}:
+    if not isinstance(parsed, dict) or parsed.get("catalog_schema_version") != "1":
         raise RuntimeRetrievalError("capability catalog schema version is unsupported")
     if not {"semantic_dimensions", "graph", "vector", "operators"}.issubset(parsed):
         raise RuntimeRetrievalError("capability catalog envelope is incomplete")
@@ -96,7 +97,6 @@ def infer_retrieval(
     clock: Clock | None = None,
 ) -> RetrievalInferenceResult:
     """Propose retrieval requests for the current user turn without executing them."""
-    catalog_text, catalog_sha256 = _catalog(capability_catalog_path)
     connection = _connect_runtime(database_path)
     try:
         parent = connection.execute(
@@ -115,14 +115,22 @@ def infer_retrieval(
         latest = conversation.messages[-1]
         if latest.message_id != parent["trigger_message_id"] or latest.role != "user":
             raise RuntimeRetrievalError("router run is stale or its trigger is not the current user message")
+
+        # Parent authority is established before reading catalog/model inputs.
+        catalog_text, catalog_sha256 = _catalog(capability_catalog_path)
         run_id = str(uuid4())
         prompt_hash = prompt_version(runtime_config.retrieval_inference.prompt)
         connection.execute("BEGIN IMMEDIATE")
         insert_retrieval_run(
-            connection, run_id=run_id, conversation_id=conversation.conversation_id,
-            trigger_message_id=latest.message_id, provider=runtime_config.retrieval_inference.provider,
-            model=runtime_config.retrieval_inference.model, prompt_version=prompt_hash,
-            started_at=_timestamp(clock), parent_run_id=router_run_id,
+            connection,
+            run_id=run_id,
+            conversation_id=conversation.conversation_id,
+            trigger_message_id=latest.message_id,
+            provider=runtime_config.retrieval_inference.provider,
+            model=runtime_config.retrieval_inference.model,
+            prompt_version=prompt_hash,
+            started_at=_timestamp(clock),
+            parent_run_id=router_run_id,
             capability_catalog_sha256=catalog_sha256,
         )
         connection.commit()
@@ -137,27 +145,50 @@ def infer_retrieval(
 
     selected_provider = provider if provider is not None else OpenAIResponsesProvider()
     try:
-        inference = selected_provider.infer_retrieval(runtime_config, catalog_text, conversation.messages)
+        inference = selected_provider.infer_retrieval(
+            runtime_config.retrieval_inference,
+            catalog_text,
+            conversation.messages,
+        )
         if not isinstance(inference, RetrievalProviderInference):
             raise RuntimeRetrievalError("provider returned an unsupported retrieval result")
+        try:
+            requests = canonicalize_retrieval_requests(inference.requests)
+        except RetrievalRequestError as exc:
+            raise RuntimeRetrievalError(str(exc)) from exc
         usage = inference.usage
-        output_json = json.dumps({"requests": list(inference.requests)}, ensure_ascii=False, separators=(",", ":"))
+        output_json = json.dumps({"requests": list(requests)}, ensure_ascii=False, separators=(",", ":"))
         connection.execute("BEGIN IMMEDIATE")
         complete_retrieval_run(
-            connection, run_id=run_id, completed_at=_timestamp(clock), provider_response_id=inference.provider_response_id,
-            output_json=output_json, input_tokens=usage.input_tokens,
-            cached_input_tokens=usage.cached_input_tokens, output_tokens=usage.output_tokens,
-            reasoning_tokens=usage.reasoning_tokens, total_tokens=usage.total_tokens,
+            connection,
+            run_id=run_id,
+            completed_at=_timestamp(clock),
+            provider_response_id=inference.provider_response_id,
+            output_json=output_json,
+            input_tokens=usage.input_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            output_tokens=usage.output_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            total_tokens=usage.total_tokens,
         )
         connection.commit()
         return RetrievalInferenceResult(
-            run_id=run_id, parent_run_id=router_run_id, conversation_id=conversation.conversation_id,
+            run_id=run_id,
+            parent_run_id=router_run_id,
+            conversation_id=conversation.conversation_id,
             trigger_message_id=conversation.messages[-1].message_id,
-            provider=runtime_config.retrieval_inference.provider, model=runtime_config.retrieval_inference.model,
-            prompt_version=prompt_hash, capability_catalog_sha256=catalog_sha256, status="succeeded",
-            requests=inference.requests, provider_response_id=inference.provider_response_id,
-            input_tokens=usage.input_tokens, cached_input_tokens=usage.cached_input_tokens,
-            output_tokens=usage.output_tokens, reasoning_tokens=usage.reasoning_tokens, total_tokens=usage.total_tokens,
+            provider=runtime_config.retrieval_inference.provider,
+            model=runtime_config.retrieval_inference.model,
+            prompt_version=prompt_hash,
+            capability_catalog_sha256=catalog_sha256,
+            status="succeeded",
+            requests=requests,
+            provider_response_id=inference.provider_response_id,
+            input_tokens=usage.input_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            output_tokens=usage.output_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            total_tokens=usage.total_tokens,
         )
     except Exception as exc:
         error_type, error_message = _provider_failure(exc)
@@ -165,7 +196,11 @@ def infer_retrieval(
             connection.rollback()
             connection.execute("BEGIN IMMEDIATE")
             fail_retrieval_run(
-                connection, run_id=run_id, completed_at=_timestamp(clock), error_type=error_type, error_message=error_message,
+                connection,
+                run_id=run_id,
+                completed_at=_timestamp(clock),
+                error_type=error_type,
+                error_message=error_message,
             )
             connection.commit()
         except sqlite3.Error:

@@ -121,7 +121,7 @@ def route_conversation(
 
     selected_provider = provider if provider is not None else OpenAIResponsesProvider()
     try:
-        inference = selected_provider.infer(runtime_config, prompt, conversation.messages)
+        inference = selected_provider.infer_router(runtime_config.router, conversation.messages)
         if not isinstance(inference, ProviderInference):
             raise RuntimeRouterError("provider returned an unsupported router result")
         output_json = _canonical_output(inference.route)

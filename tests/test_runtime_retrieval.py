@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig, RouterConfig, RuntimeConfigError, load_runtime_config
+from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import (
     OpenAIProviderError,
@@ -39,7 +39,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
 
     def catalog(self, directory):
         path = Path(directory) / "capability_catalog.json"
-        content = '{"catalog_schema_version":1,"semantic_dimensions":[],"graph":{},"vector":{},"operators":{}}'
+        content = '{"catalog_schema_version":"1","semantic_dimensions":[],"graph":{},"vector":{},"operators":{}}'
         path.write_bytes(content.encode("utf-8"))
         return path, content
 
@@ -48,7 +48,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
         initialize_runtime(database)
         conversation = create_conversation(database)
         append_message(database, conversation.conversation_id, "user", "first")
-        router_provider = type("RouterProvider", (), {"infer": lambda self, config, prompt, messages: ProviderInference(route, json.dumps({"route": route}), None, ProviderUsage())})()
+        router_provider = type("RouterProvider", (), {"infer_router": lambda self, config, messages: ProviderInference(route, json.dumps({"route": route}), None, ProviderUsage())})()
         router = route_conversation(database, self.config(), conversation.conversation_id, provider=router_provider)
         return database, conversation, router
 
@@ -80,6 +80,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
             self.assertEqual(result.requests, (request, request))
             self.assertEqual(result.prompt_version, prompt_version("retrieval prompt\n"))
             self.assertEqual(result.capability_catalog_sha256, "sha256:" + hashlib.sha256(catalog_text.encode()).hexdigest())
+            self.assertEqual(len(provider.calls), 1)
             self.assertEqual(provider.calls[0][1], catalog_text)
             self.assertEqual([m.content for m in provider.calls[0][2]], ["first"])
             connection = sqlite3.connect(database)
@@ -97,7 +98,6 @@ class RuntimeRetrievalTests(unittest.TestCase):
             with self.assertRaises(RuntimeRetrievalError):
                 infer_retrieval(database, self.config(), catalog_path, "missing", provider=provider)
             self.assertEqual(len(provider.calls), 1)
-
     def test_stale_router_trigger_is_rejected_before_provider_contact(self):
         with TemporaryDirectory() as directory:
             database, conversation, router = self.prepared(directory)
@@ -120,15 +120,15 @@ class RuntimeRetrievalTests(unittest.TestCase):
                 self.responses = Responses()
         messages = (type("Message", (), {"role": "router", "content": "bad"})(),)
         config = self.config()
-        with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client) as opened:
+        with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI") as opened:
             with self.assertRaises(OpenAIProviderError) as error:
-                OpenAIResponsesProvider().infer(config, config.router.prompt, messages)
+                OpenAIResponsesProvider().infer_router(config.router, messages)
             self.assertEqual(error.exception.error_type, "runtime_validation")
-            self.assertFalse(getattr(Client, "called", False))
+            opened.assert_not_called()
         messages = ()
         with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
             with self.assertRaises(OpenAIProviderError) as error:
-                OpenAIResponsesProvider().infer_retrieval(config, "catalog", messages)
+                OpenAIResponsesProvider().infer_retrieval(config.retrieval_inference, "catalog", messages)
             self.assertEqual(error.exception.error_type, "runtime_validation")
 
 
@@ -149,9 +149,90 @@ class RuntimeRetrievalTests(unittest.TestCase):
             def __init__(self, **kwargs):
                 self.responses = Responses()
         with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
-            result = OpenAIResponsesProvider().infer_retrieval(self.config(), "catalog-bytes", ())
+            result = OpenAIResponsesProvider().infer_retrieval(self.config().retrieval_inference, "catalog-bytes", ())
         self.assertEqual([request["operator"] for request in result.requests], [request["operator"] for request in requests])
         self.assertEqual(json.loads(result.output_json)["requests"], requests)
+    def test_provider_double_output_is_revalidated_and_failed_durably(self):
+        invalid_requests = [
+            {"operator": "graph.inbound_traversal"},
+            {"operator": "graph.outbound_traversal"},
+            {"operator": "unknown"},
+            {"operator": "exact.equals", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": {"shape": "scalar", "domain": "integer", "value": "wrong"}},
+            {"operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": []},
+            {"operator": "graph.discovery.terms", "node_kind": "semantic_object", "dimension_name": "tag", "operand": []},
+            {"operator": "vector.semantic_similarity", "query": "query", "unexpected": True},
+        ]
+        for request in invalid_requests:
+            with self.subTest(operator=request["operator"]), TemporaryDirectory() as directory:
+                database, conversation, router = self.prepared(directory)
+                catalog_path, _ = self.catalog(directory)
+                provider = RetrievalProviderDouble(RetrievalProviderInference((request,), "provider-output", None, ProviderUsage()))
+                with self.assertRaisesRegex(RuntimeRetrievalError, "runtime_validation"):
+                    infer_retrieval(database, self.config(), catalog_path, router.run_id, provider=provider)
+                connection = sqlite3.connect(database)
+                row = connection.execute(
+                    "SELECT status, output_json, error_type FROM model_runs WHERE run_kind='retrieval_inference'"
+                ).fetchone()
+                self.assertEqual(row, ("failed", None, "runtime_validation"))
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
+                connection.close()
+
+    def test_provider_double_accepts_all_first_stage_shapes_in_order_without_catalog_authorization(self):
+        requests = (
+            {"operator": "exact.equals", "field_class": "semantic_identifier", "field_name": "made_up", "target": "complete_value", "operand": {"shape": "scalar", "domain": "integer", "value": 7}},
+            {"operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": ["one"]},
+            {"operator": "lexical.phrase", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": "one phrase"},
+            {"operator": "vector.semantic_similarity", "query": "query"},
+            {"operator": "graph.discovery.terms", "node_kind": "semantic_object", "dimension_name": "tag", "operand": ["book"]},
+            {"operator": "graph.discovery.phrase", "node_kind": "semantic_object", "dimension_name": "tag", "operand": "book notes"},
+            {"operator": "graph.relation_occurrence_lookup", "relation_class": "body_wikilink", "relation_name": "linked_to"},
+        )
+        with TemporaryDirectory() as directory:
+            database, conversation, router = self.prepared(directory)
+            catalog_path, _ = self.catalog(directory)
+            provider = RetrievalProviderDouble(RetrievalProviderInference(requests + (requests[0],), "ignored", None, ProviderUsage()))
+            result = infer_retrieval(database, self.config(), catalog_path, router.run_id, provider=provider)
+            self.assertEqual(result.requests, requests + (requests[0],))
+            self.assertEqual(len(provider.calls), 1)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT status FROM model_runs WHERE run_id=?", (result.run_id,)).fetchone()[0], "succeeded")
+            connection.close()
+
+    def test_numeric_catalog_schema_version_is_rejected_before_provider_contact(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, router = self.prepared(directory)
+            path = Path(directory) / "capability_catalog.json"
+            path.write_text('{"catalog_schema_version":1,"semantic_dimensions":[],"graph":{},"vector":{},"operators":{}}', encoding="utf-8")
+            provider = RetrievalProviderDouble(RetrievalProviderInference((), "ignored", None, ProviderUsage()))
+            with self.assertRaises(RuntimeRetrievalError):
+                infer_retrieval(database, self.config(), path, router.run_id, provider=provider)
+            self.assertEqual(provider.calls, [])
+
+    def test_parent_preconditions_fail_closed_without_retrieval_provider_contact(self):
+        cases = ("missing", "wrong_kind", "running", "failed", "direct", "stale", "latest_synthesis")
+        for case in cases:
+            with self.subTest(case=case), TemporaryDirectory() as directory:
+                database, conversation, router = self.prepared(directory, route="direct" if case == "direct" else "semantic_retrieval")
+                catalog_path, _ = self.catalog(directory)
+                parent_id = router.run_id
+                connection = sqlite3.connect(database)
+                if case == "wrong_kind":
+                    parent_id = "wrong-kind"
+                    connection.execute("INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at) VALUES (?, ?, ?, 'retrieval_inference', ?, 'sha256:x', 'openai', 'm', 'p', 'running', 't')", (parent_id, conversation.conversation_id, 1, router.run_id))
+                    connection.commit()
+                elif case in {"running", "failed"}:
+                    parent_id = case
+                    connection.execute("INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, provider, model, prompt_version, status, started_at, error_type) VALUES (?, ?, ?, 'router', 'openai', 'm', 'p', ?, 't', ?)", (parent_id, conversation.conversation_id, 1, case, "injected" if case == "failed" else None))
+                    connection.commit()
+                connection.close()
+                if case == "stale":
+                    append_message(database, conversation.conversation_id, "user", "new")
+                elif case == "latest_synthesis":
+                    append_message(database, conversation.conversation_id, "synthesis", "late")
+                provider = RetrievalProviderDouble(RetrievalProviderInference((), "ignored", None, ProviderUsage()))
+                with self.assertRaises(RuntimeRetrievalError):
+                    infer_retrieval(database, self.config(), catalog_path, "missing" if case == "missing" else parent_id, provider=provider)
+                self.assertEqual(provider.calls, [])
     def test_v2_migration_hashes_historical_router_prompt_and_preserves_rows(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"

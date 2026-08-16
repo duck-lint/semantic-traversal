@@ -241,6 +241,55 @@ class RuntimeConversationTests(unittest.TestCase):
                 self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
                 connection.close()
 
+    def test_schema_v3_requires_lineage_check(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.executescript(
+                """
+                CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+                CREATE TABLE messages (
+                    message_id INTEGER PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'synthesis')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
+                    UNIQUE (conversation_id, ordinal)
+                );
+                CREATE TABLE model_runs (
+                    run_id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    trigger_message_id INTEGER NOT NULL,
+                    run_kind TEXT NOT NULL CHECK (run_kind IN ('router', 'retrieval_inference')),
+                    parent_run_id TEXT,
+                    capability_catalog_sha256 TEXT,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    provider_response_id TEXT,
+                    output_json TEXT,
+                    error_type TEXT,
+                    error_message TEXT,
+                    input_tokens INTEGER,
+                    cached_input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    total_tokens INTEGER,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
+                    FOREIGN KEY (trigger_message_id) REFERENCES messages(message_id),
+                    FOREIGN KEY (parent_run_id) REFERENCES model_runs(run_id)
+                );
+                PRAGMA user_version = 3;
+                """
+            )
+            connection.close()
+            with self.assertRaisesRegex(RuntimeConversationError, "lineage"):
+                initialize_runtime(database)
     def test_schema_v1_column_type_must_match(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
