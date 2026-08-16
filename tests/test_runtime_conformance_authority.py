@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.catalog_fixtures import minimum_catalog
 from semantic_traversal.runtime.control_plane import conform_retrieval
 from semantic_traversal.runtime.conversation import (
     RuntimeConversationError,
@@ -18,25 +19,7 @@ from semantic_traversal.runtime.conversation import (
 
 class RuntimeConformanceAuthorityTests(unittest.TestCase):
     def _catalog(self):
-        return {
-            "catalog_schema_version": "1",
-            "semantic_dimensions": [
-                {
-                    "field_class": "intrinsic",
-                    "field_name": "parsed_text",
-                    "description": "parsed text",
-                    "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
-                    "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
-                }
-            ],
-            "graph": {"node_kinds": [], "discovery": [], "relations": []},
-            "vector": {
-                "operator": "vector.semantic_similarity",
-                "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False},
-                "targets": [],
-            },
-            "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}, "lexical.terms": {"surface": "lexical", "meaning": "terms"}, "lexical.phrase": {"surface": "lexical", "meaning": "phrase"}, "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"}, "graph.discovery.terms": {"surface": "graph", "meaning": "discovery terms"}, "graph.discovery.phrase": {"surface": "graph", "meaning": "discovery phrase"}, "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "lookup"}, "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound"}, "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound"}},
-        }
+        return minimum_catalog()
 
     def _prepare(self, directory):
         database = Path(directory) / "runtime.sqlite3"

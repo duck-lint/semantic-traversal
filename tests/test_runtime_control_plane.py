@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from semantic_traversal.cli import main
+from tests.catalog_fixtures import minimum_catalog
 from semantic_traversal.runtime.control_plane import (
     CATALOG_CONFORMANCE_CONTRACT_VERSION,
     RetrievalConformanceError,
@@ -21,84 +22,7 @@ from semantic_traversal.runtime.retrieval_requests import canonicalize_retrieval
 
 class RuntimeControlPlaneTests(unittest.TestCase):
     def catalog(self):
-        return {
-            "catalog_schema_version": "1",
-            "semantic_dimensions": [
-                {
-                    "field_class": "intrinsic",
-                    "field_name": "parsed_text",
-                    "description": "parsed text",
-                    "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
-                    "access": [
-                        {"operator": "exact.equals", "target": "complete_value", "domains": ["string"]},
-                        {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
-                        {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
-                    ],
-                },
-                {
-                    "field_class": "semantic_identifier",
-                    "field_name": "tags",
-                    "description": "tags",
-                    "value": {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
-                    "access": [
-                        {"operator": "exact.equals", "target": "member", "domains": ["string"]},
-                        {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
-                    ],
-                },
-                {
-                    "field_class": "region",
-                    "field_name": "region_path",
-                    "description": "region path",
-                    "value": {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]},
-                    "access": [
-                        {
-                            "operator": "exact.equals",
-                            "target": "complete_value",
-                            "operand": {"shape": "ordered_sequence", "member_domains": ["string"]},
-                        }
-                    ],
-                },
-                {
-                    "field_class": "semantic_path",
-                    "field_name": "path_hierarchy",
-                    "description": "path hierarchy",
-                    "value": {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]},
-                    "access": [
-                        {
-                            "operator": "exact.equals",
-                            "target": "complete_value",
-                            "operand": {"shape": "ordered_sequence", "member_domains": ["string"]},
-                        }
-                    ],
-                },
-            ],
-            "graph": {
-                "node_kinds": ["semantic_object", "semantic_region", "semantic_unit"],
-                "discovery": [
-                    {"node_kind": "semantic_object", "dimension_name": "tag", "description": "object tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"},
-                    {"node_kind": "semantic_region", "dimension_name": "address_text", "description": "region address", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"},
-                ],
-                "relations": [
-                    {
-                        "relation_class": "body_wikilink",
-                        "relation_name": "linked_to",
-                        "description": "body link", "source_kinds": ["semantic_unit"], "target_kinds": ["semantic_object", "semantic_region"], "operations": ["graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"],
-                    }
-                ],
-            },
-            "vector": {"operator": "vector.semantic_similarity", "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False}, "targets": []},
-            "operators": {
-                "exact.equals": {"surface": "exact", "meaning": "typed exact equality"},
-                "lexical.terms": {"surface": "lexical", "meaning": "OR lexical term matching"},
-                "lexical.phrase": {"surface": "lexical", "meaning": "lexical phrase matching"},
-                "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"},
-                "graph.discovery.terms": {"surface": "graph", "meaning": "graph discovery terms"},
-                "graph.discovery.phrase": {"surface": "graph", "meaning": "graph discovery phrase"},
-                "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "relation occurrence lookup"},
-                "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound traversal"},
-                "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound traversal"},
-            },
-        }
+        return minimum_catalog(include_tag=True)
 
     def requests(self):
         return [
@@ -232,23 +156,22 @@ class RuntimeControlPlaneTests(unittest.TestCase):
     def test_invalid_catalog_conformance_collects_exact_mechanical_violations(self):
         cases = []
         catalog = self.catalog()
-        request = self.requests()[0]
-        without_field = copy.deepcopy(catalog)
-        without_field["semantic_dimensions"] = [item for item in without_field["semantic_dimensions"] if item["field_name"] != "parsed_text"]
-        cases.append(("field_not_advertised", without_field, [request]))
-        without_access = copy.deepcopy(catalog)
-        without_access["semantic_dimensions"][0]["access"] = []
-        cases.append(("field_access_not_advertised", without_access, [request]))
-        wrong_target = copy.deepcopy(catalog)
-        cases.append(("field_access_not_advertised", wrong_target, [dict(request, target="member")]))
-        wrong_domain = copy.deepcopy(catalog)
-        cases.append(("operand_domain_not_advertised", wrong_domain, [dict(request, operand={"shape": "scalar", "domain": "integer", "value": 7})]))
-        wrong_shape = copy.deepcopy(catalog)
+        intrinsic_request = self.requests()[0]
+        cases.append(("field_not_advertised", catalog, [dict(intrinsic_request, field_class="semantic_identifier", field_name="made_up")]))
+        cases.append(("field_access_not_advertised", catalog, [dict(intrinsic_request, target="member")]))
+        custom_catalog = copy.deepcopy(catalog)
+        custom_catalog["semantic_dimensions"].append({
+            "field_class": "semantic_identifier",
+            "field_name": "custom",
+            "description": "custom",
+            "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+            "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
+        })
+        custom_lexical = dict(self.requests()[3], field_class="semantic_identifier", field_name="custom", target="complete_value", operand=["one"])
+        cases.append(("field_access_not_advertised", custom_catalog, [custom_lexical]))
+        cases.append(("operand_domain_not_advertised", catalog, [dict(intrinsic_request, operand={"shape": "scalar", "domain": "integer", "value": 7})]))
         ordered_request = dict(self.requests()[2], field_class="intrinsic", field_name="parsed_text")
-        cases.append(("operand_shape_not_advertised", wrong_shape, [ordered_request]))
-        no_lexical = copy.deepcopy(catalog)
-        no_lexical["semantic_dimensions"][0]["access"] = [no_lexical["semantic_dimensions"][0]["access"][0]]
-        cases.append(("field_access_not_advertised", no_lexical, [self.requests()[3]]))
+        cases.append(("operand_shape_not_advertised", catalog, [ordered_request]))
         for expected_code, case_catalog, case_requests in cases:
             with self.subTest(code=expected_code), TemporaryDirectory() as directory:
                 database, catalog_path, run_id, _, _ = self.prepared(directory, catalog=case_catalog, requests=case_requests)

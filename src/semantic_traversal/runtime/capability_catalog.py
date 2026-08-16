@@ -67,6 +67,24 @@ _RELATION_ENDPOINTS = {
     ("structural", "contains_region"): (("semantic_object", "semantic_region"), ("semantic_region",)),
     ("structural", "contains_unit"): (("semantic_object", "semantic_region"), ("semantic_unit",)),
 }
+_CONSTITUTIVE_DIMENSIONS = frozenset({
+    ("intrinsic", "raw_markdown"),
+    ("intrinsic", "parsed_text"),
+    ("region", "region_path"),
+    ("semantic_path", "path_hierarchy"),
+    ("semantic_path", "path_component"),
+})
+_CONSTITUTIVE_RELATIONS = frozenset({
+    ("structural", "contains_scope"),
+    ("structural", "contains_object"),
+    ("structural", "contains_region"),
+    ("structural", "contains_unit"),
+    ("body_wikilink", "linked_to"),
+})
+_CONSTITUTIVE_DISCOVERY_IDENTITIES = frozenset({
+    ("semantic_object", "address_text"),
+    ("semantic_region", "address_text"),
+})
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -188,11 +206,42 @@ def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[s
     return operator, target
 
 
-def _validate_semantic_dimensions(value: Any) -> set[str]:
+def _validate_fixed_access_grammar(identity: tuple[str, str], access_identities: set[tuple[str, str]]) -> None:
+    exact = ("exact.equals", "complete_value")
+    lexical_terms = ("lexical.terms", "complete_value")
+    lexical_phrase = ("lexical.phrase", "complete_value")
+    vector = ("vector.semantic_similarity", "complete_value")
+    if identity == ("intrinsic", "raw_markdown"):
+        if access_identities != {exact}:
+            raise CapabilityCatalogError("raw_markdown has an incompatible access grammar")
+    elif identity == ("intrinsic", "parsed_text"):
+        allowed = {exact, lexical_terms, lexical_phrase, vector}
+        required = {exact, lexical_terms, lexical_phrase}
+        if not required.issubset(access_identities) or not access_identities.issubset(allowed):
+            raise CapabilityCatalogError("parsed_text has an incompatible access grammar")
+    elif identity == ("region", "region_path"):
+        if access_identities != {exact}:
+            raise CapabilityCatalogError("region_path has an incompatible access grammar")
+    elif identity == ("region", "region_text"):
+        if access_identities != {lexical_terms, lexical_phrase}:
+            raise CapabilityCatalogError("region_text has an incompatible access grammar")
+    elif identity == ("semantic_path", "path_hierarchy"):
+        if access_identities != {exact}:
+            raise CapabilityCatalogError("path_hierarchy has an incompatible access grammar")
+    elif identity == ("semantic_path", "path_component"):
+        allowed = {exact, lexical_terms, lexical_phrase}
+        if exact not in access_identities or not access_identities.issubset(allowed):
+            raise CapabilityCatalogError("path_component has an incompatible access grammar")
+        lexical = {lexical_terms, lexical_phrase} & access_identities
+        if lexical and lexical != {lexical_terms, lexical_phrase}:
+            raise CapabilityCatalogError("path_component lexical access is incomplete")
+
+def _validate_semantic_dimensions(value: Any) -> tuple[set[str], dict[tuple[str, str], set[tuple[str, str]]]]:
     if not isinstance(value, list):
         raise CapabilityCatalogError("semantic_dimensions must be an array")
     identities: set[tuple[str, str]] = set()
     references: set[str] = set()
+    access_by_dimension: dict[tuple[str, str], set[tuple[str, str]]] = {}
     for index, item in enumerate(value):
         label = f"semantic_dimensions[{index}]"
         entry = _mapping(item, {"field_class", "field_name", "description", "value", "access"}, label)
@@ -222,15 +271,21 @@ def _validate_semantic_dimensions(value: Any) -> set[str]:
                 raise CapabilityCatalogError(f"{label}.access contains duplicate identities")
             access_identities.add(access_identity)
             references.add(access_identity[0])
-    return references
+        if field_class != "semantic_identifier":
+            _validate_fixed_access_grammar(identity, access_identities)
+        access_by_dimension[identity] = access_identities
+    return references, access_by_dimension
 
 
-def _validate_graph(value: Any) -> set[str]:
+def _validate_graph(value: Any) -> tuple[set[str], set[str], set[tuple[str, str]], set[tuple[str, str]]]:
     graph = _mapping(value, {"node_kinds", "discovery", "relations"}, "graph")
     node_kinds = _text_list(graph["node_kinds"], "graph.node_kinds")
     unsupported_nodes = [kind for kind in node_kinds if kind not in _GRAPH_NODE_KINDS]
     if unsupported_nodes:
         raise CapabilityCatalogError(f"graph.node_kinds contains unsupported node kind: {unsupported_nodes[0]}")
+
+    if set(node_kinds) != _GRAPH_NODE_KINDS:
+        raise CapabilityCatalogError("graph.node_kinds does not match the constitutive schema-1 node set")
     if not isinstance(graph["discovery"], list) or not isinstance(graph["relations"], list):
         raise CapabilityCatalogError("graph.discovery and graph.relations must be arrays")
     references: set[str] = set()
@@ -273,7 +328,7 @@ def _validate_graph(value: Any) -> set[str]:
         _text(entry["description"], f"{label}.description")
         source_kinds = _text_list(entry["source_kinds"], f"{label}.source_kinds", nonempty=True)
         target_kinds = _text_list(entry["target_kinds"], f"{label}.target_kinds", nonempty=True)
-        if (source_kinds, target_kinds) != expected_endpoints:
+        if (set(source_kinds) != set(expected_endpoints[0]) or set(target_kinds) != set(expected_endpoints[1])):
             raise CapabilityCatalogError(f"{label} has incompatible schema-1 endpoints")
         if any(kind not in node_kinds for kind in (*source_kinds, *target_kinds)):
             raise CapabilityCatalogError(f"{label} references a node kind not admitted by graph.node_kinds")
@@ -281,10 +336,10 @@ def _validate_graph(value: Any) -> set[str]:
         if set(operations) != _GRAPH_RELATION_OPERATIONS:
             raise CapabilityCatalogError(f"{label}.operations does not match the schema-1 relation grammar")
         references.update(operations)
-    return references
+    return references, set(node_kinds), discovery_ids, relation_ids
 
 
-def _validate_vector(value: Any) -> str:
+def _validate_vector(value: Any) -> tuple[str, set[str]]:
     vector = _mapping(value, {"operator", "query", "targets"}, "vector")
     if vector["operator"] != "vector.semantic_similarity":
         raise CapabilityCatalogError("vector.operator is unsupported")
@@ -310,7 +365,7 @@ def _validate_vector(value: Any) -> str:
         target_ids.add(target_kind)
         if target_kind not in _VECTOR_TARGET_INPUTS or entry["input"] != _VECTOR_TARGET_INPUTS[target_kind]:
             raise CapabilityCatalogError(f"{label} has an unsupported target/input pairing")
-    return vector["operator"]
+    return vector["operator"], target_ids
 
 
 def _validate_operators(value: Any, references: set[str]) -> None:
@@ -335,9 +390,21 @@ def _validate_schema_one(parsed: Any) -> None:
     envelope = _mapping(parsed, {"catalog_schema_version", "semantic_dimensions", "graph", "vector", "operators"}, "catalog")
     if envelope["catalog_schema_version"] != "1":
         raise CapabilityCatalogError("capability catalog schema version is unsupported")
-    references = _validate_semantic_dimensions(envelope["semantic_dimensions"])
-    references.update(_validate_graph(envelope["graph"]))
-    references.add(_validate_vector(envelope["vector"]))
+    references, access_by_dimension = _validate_semantic_dimensions(envelope["semantic_dimensions"])
+    graph_references, node_kinds, discovery_ids, relation_ids = _validate_graph(envelope["graph"])
+    references.update(graph_references)
+    vector_operator, vector_target_kinds = _validate_vector(envelope["vector"])
+    references.add(vector_operator)
+    if not _CONSTITUTIVE_DIMENSIONS.issubset(access_by_dimension):
+        raise CapabilityCatalogError("catalog omits constitutive semantic dimensions")
+    if not _CONSTITUTIVE_RELATIONS.issubset(relation_ids):
+        raise CapabilityCatalogError("catalog omits constitutive graph relations")
+    if not _CONSTITUTIVE_DISCOVERY_IDENTITIES.issubset(discovery_ids):
+        raise CapabilityCatalogError("catalog omits constitutive graph discovery")
+    parsed_text_access = access_by_dimension[("intrinsic", "parsed_text")]
+    parsed_text_vector = ("vector.semantic_similarity", "complete_value") in parsed_text_access
+    if parsed_text_vector != ("semantic_unit" in vector_target_kinds):
+        raise CapabilityCatalogError("parsed_text vector access and semantic_unit target are inconsistent")
     _validate_operators(envelope["operators"], references)
 
 

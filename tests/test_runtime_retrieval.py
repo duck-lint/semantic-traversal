@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.catalog_fixtures import minimum_catalog
 from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import (
@@ -39,7 +40,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
 
     def catalog(self, directory):
         path = Path(directory) / "capability_catalog.json"
-        content = json.dumps({"catalog_schema_version": "1", "semantic_dimensions": [], "graph": {"node_kinds": [], "discovery": [], "relations": []}, "vector": {"operator": "vector.semantic_similarity", "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False}, "targets": []}, "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}, "lexical.terms": {"surface": "lexical", "meaning": "terms"}, "lexical.phrase": {"surface": "lexical", "meaning": "phrase"}, "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"}, "graph.discovery.terms": {"surface": "graph", "meaning": "discovery terms"}, "graph.discovery.phrase": {"surface": "graph", "meaning": "discovery phrase"}, "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "lookup"}, "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound"}, "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound"}}}, separators=(",", ":"))
+        content = json.dumps(minimum_catalog(), separators=(",", ":"))
         path.write_bytes(content.encode("utf-8"))
         return path, content
 

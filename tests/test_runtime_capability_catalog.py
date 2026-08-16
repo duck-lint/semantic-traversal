@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.catalog_fixtures import minimum_catalog
 from semantic_traversal.runtime.capability_catalog import CapabilityCatalogError, load_capability_catalog
 from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig
 from semantic_traversal.runtime.control_plane import RetrievalConformanceError, conform_retrieval
@@ -16,37 +17,7 @@ from semantic_traversal.runtime.retrieval import RuntimeRetrievalError, infer_re
 
 class CatalogAdmissionTests(unittest.TestCase):
     def catalog(self):
-        return {
-            "catalog_schema_version": "1",
-            "semantic_dimensions": [{
-                "field_class": "intrinsic",
-                "field_name": "parsed_text",
-                "description": "parsed text",
-                "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
-                "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
-            }],
-            "graph": {
-                "node_kinds": ["semantic_object", "semantic_region", "semantic_unit"],
-                "discovery": [{"node_kind": "semantic_object", "dimension_name": "tag", "description": "tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"}],
-                "relations": [{"relation_class": "body_wikilink", "relation_name": "linked_to", "description": "body link", "source_kinds": ["semantic_unit"], "target_kinds": ["semantic_object", "semantic_region"], "operations": ["graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"]}],
-            },
-            "vector": {
-                "operator": "vector.semantic_similarity",
-                "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False},
-                "targets": [{"target_kind": "semantic_unit", "input": "exact canonical parsed_text"}],
-            },
-            "operators": {
-                "exact.equals": {"surface": "exact", "meaning": "typed exact equality"},
-                "lexical.terms": {"surface": "lexical", "meaning": "lexical terms"},
-                "lexical.phrase": {"surface": "lexical", "meaning": "lexical phrase"},
-                "graph.discovery.terms": {"surface": "graph", "meaning": "graph discovery"},
-                "graph.discovery.phrase": {"surface": "graph", "meaning": "graph discovery phrase"},
-                "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "relation lookup"},
-                "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound traversal"},
-                "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound traversal"},
-                "vector.semantic_similarity": {"surface": "vector", "meaning": "similarity"},
-            },
-        }
+        return minimum_catalog(semantic_unit_target=True)
 
     def malformed_catalogs(self):
         base = self.catalog()
@@ -213,6 +184,35 @@ class CatalogAdmissionTests(unittest.TestCase):
         missing_global_operator = copy.deepcopy(base)
         del missing_global_operator["operators"]["graph.outbound_traversal"]
         cases["missing global operator"] = json.dumps(missing_global_operator, separators=(",", ":"))
+        for identity in (
+            ("intrinsic", "raw_markdown"),
+            ("intrinsic", "parsed_text"),
+            ("region", "region_path"),
+            ("semantic_path", "path_hierarchy"),
+            ("semantic_path", "path_component"),
+        ):
+            missing_dimension = copy.deepcopy(base)
+            missing_dimension["semantic_dimensions"] = [
+                item for item in missing_dimension["semantic_dimensions"]
+                if (item["field_class"], item["field_name"]) != identity
+            ]
+            cases[f"constitutive dimension missing: {identity}"] = json.dumps(missing_dimension, separators=(",", ":"))
+        missing_node = copy.deepcopy(base)
+        missing_node["graph"]["node_kinds"].remove("scope")
+        cases["constitutive graph node missing"] = json.dumps(missing_node, separators=(",", ":"))
+        missing_relation = copy.deepcopy(base)
+        missing_relation["graph"]["relations"] = missing_relation["graph"]["relations"][1:]
+        cases["constitutive graph relation missing"] = json.dumps(missing_relation, separators=(",", ":"))
+        missing_discovery = copy.deepcopy(base)
+        missing_discovery["graph"]["discovery"] = missing_discovery["graph"]["discovery"][1:]
+        cases["constitutive graph discovery missing"] = json.dumps(missing_discovery, separators=(",", ":"))
+        missing_vector_access = copy.deepcopy(base)
+        parsed_text = next(item for item in missing_vector_access["semantic_dimensions"] if item["field_name"] == "parsed_text")
+        parsed_text["access"] = [access for access in parsed_text["access"] if access["operator"] != "vector.semantic_similarity"]
+        cases["constitutive vector coupling missing access"] = json.dumps(missing_vector_access, separators=(",", ":"))
+        missing_vector_target = copy.deepcopy(base)
+        missing_vector_target["vector"]["targets"] = []
+        cases["constitutive vector coupling missing target"] = json.dumps(missing_vector_target, separators=(",", ":"))
         return cases
     def _write(self, directory, text):
         path = Path(directory) / "capability_catalog.json"
@@ -277,6 +277,132 @@ class CatalogAdmissionTests(unittest.TestCase):
             })
             path = self._write(directory, json.dumps(catalog, separators=(",", ":")))
             load_capability_catalog(path)
+    def test_minimum_producer_fixture_preserves_optional_absence(self):
+        with TemporaryDirectory() as directory:
+            catalog = minimum_catalog()
+            text = json.dumps(catalog, separators=(",", ":"))
+            load_capability_catalog(self._write(directory, text))
+            self.assertNotIn(("semantic_identifier", "tags"), {
+                (item["field_class"], item["field_name"])
+                for item in catalog["semantic_dimensions"]
+            })
+            self.assertNotIn(("region", "region_text"), {
+                (item["field_class"], item["field_name"])
+                for item in catalog["semantic_dimensions"]
+            })
+            self.assertEqual(catalog["vector"]["targets"], [])
+
+    def test_constitutive_presence_and_coupling_fail_closed(self):
+        base = minimum_catalog()
+        cases = {}
+        for identity in (
+            ("intrinsic", "raw_markdown"),
+            ("intrinsic", "parsed_text"),
+            ("region", "region_path"),
+            ("semantic_path", "path_hierarchy"),
+            ("semantic_path", "path_component"),
+        ):
+            catalog = copy.deepcopy(base)
+            catalog["semantic_dimensions"] = [
+                item for item in catalog["semantic_dimensions"]
+                if (item["field_class"], item["field_name"]) != identity
+            ]
+            cases[f"missing dimension {identity}"] = catalog
+
+        for identity in (
+            ("intrinsic", "raw_markdown"),
+            ("intrinsic", "parsed_text"),
+            ("region", "region_path"),
+            ("semantic_path", "path_hierarchy"),
+            ("semantic_path", "path_component"),
+        ):
+            catalog = copy.deepcopy(base)
+            item = next(
+                item for item in catalog["semantic_dimensions"]
+                if (item["field_class"], item["field_name"]) == identity
+            )
+            item["access"] = []
+            cases[f"missing exact access {identity}"] = catalog
+
+        for operator in ("lexical.terms", "lexical.phrase"):
+            catalog = copy.deepcopy(base)
+            item = next(item for item in catalog["semantic_dimensions"] if item["field_name"] == "parsed_text")
+            item["access"] = [access for access in item["access"] if access["operator"] != operator]
+            cases[f"parsed text missing {operator}"] = catalog
+
+        raw_lexical = copy.deepcopy(base)
+        raw = next(item for item in raw_lexical["semantic_dimensions"] if item["field_name"] == "raw_markdown")
+        raw["access"].append({"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]})
+        cases["raw markdown lexical access"] = raw_lexical
+
+        region_exact = copy.deepcopy(base)
+        region_text = {
+            "field_class": "region",
+            "field_name": "region_text",
+            "description": "region text",
+            "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+            "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
+        }
+        region_exact["semantic_dimensions"].append(region_text)
+        cases["region text exact access"] = region_exact
+
+        region_partial = copy.deepcopy(base)
+        region_text = copy.deepcopy(region_text)
+        region_text["access"] = [{"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]}]
+        region_partial["semantic_dimensions"].append(region_text)
+        cases["region text partial lexical access"] = region_partial
+
+        path_partial = copy.deepcopy(base)
+        path_component = next(item for item in path_partial["semantic_dimensions"] if item["field_name"] == "path_component")
+        path_component["access"].append({"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]})
+        cases["path component partial lexical access"] = path_partial
+
+        missing_node = copy.deepcopy(base)
+        missing_node["graph"]["node_kinds"].remove("scope")
+        cases["missing graph node kind"] = missing_node
+
+        for relation in (
+            ("structural", "contains_scope"),
+            ("structural", "contains_object"),
+            ("structural", "contains_region"),
+            ("structural", "contains_unit"),
+            ("body_wikilink", "linked_to"),
+        ):
+            catalog = copy.deepcopy(base)
+            catalog["graph"]["relations"] = [
+                item for item in catalog["graph"]["relations"]
+                if (item["relation_class"], item["relation_name"]) != relation
+            ]
+            cases[f"missing relation {relation}"] = catalog
+
+        for discovery in (("semantic_object", "address_text"), ("semantic_region", "address_text")):
+            catalog = copy.deepcopy(base)
+            catalog["graph"]["discovery"] = [
+                item for item in catalog["graph"]["discovery"]
+                if (item["node_kind"], item["dimension_name"]) != discovery
+            ]
+            cases[f"missing discovery {discovery}"] = catalog
+
+        with_unit = minimum_catalog(semantic_unit_target=True)
+        parsed_text = next(item for item in with_unit["semantic_dimensions"] if item["field_name"] == "parsed_text")
+        parsed_text["access"] = [
+            access for access in parsed_text["access"]
+            if access["operator"] != "vector.semantic_similarity"
+        ]
+        cases["semantic unit target without parsed text vector access"] = with_unit
+
+        without_unit = minimum_catalog()
+        parsed_text = next(item for item in without_unit["semantic_dimensions"] if item["field_name"] == "parsed_text")
+        parsed_text["access"].append(
+            {"operator": "vector.semantic_similarity", "target": "complete_value", "domains": ["string"]}
+        )
+        cases["parsed text vector access without semantic unit target"] = without_unit
+
+        for label, catalog in cases.items():
+            with self.subTest(label=label), TemporaryDirectory() as directory:
+                text = json.dumps(catalog, separators=(",", ":"))
+                with self.assertRaises(CapabilityCatalogError):
+                    load_capability_catalog(self._write(directory, text))
     def test_malformed_catalogs_fail_at_shared_admission(self):
         for label, text in self.malformed_catalogs().items():
             with self.subTest(label=label), TemporaryDirectory() as directory:
