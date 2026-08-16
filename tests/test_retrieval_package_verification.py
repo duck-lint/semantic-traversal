@@ -153,6 +153,65 @@ class RetrievalPackageVerificationTests(unittest.TestCase):
         self._write_catalog(build, catalog)
         self._assert_fails(build)
 
+    def test_fixed_prose_changes_fail_verification_after_catalog_reloads(self):
+        mutations = {
+            "dimension": lambda catalog: next(
+                item for item in catalog["semantic_dimensions"]
+                if (item["field_class"], item["field_name"]) == ("intrinsic", "parsed_text")
+            ).__setitem__("description", "contradictory parsed text meaning"),
+            "discovery": lambda catalog: next(
+                item for item in catalog["graph"]["discovery"]
+                if (item["node_kind"], item["dimension_name"]) == ("semantic_object", "address_text")
+            ).__setitem__("description", "contradictory object discovery meaning"),
+            "relation": lambda catalog: next(
+                item for item in catalog["graph"]["relations"]
+                if (item["relation_class"], item["relation_name"]) == ("structural", "contains_unit")
+            ).__setitem__("description", "contradictory containment meaning"),
+            "operator": lambda catalog: catalog["operators"]["vector.semantic_similarity"].__setitem__(
+                "meaning", "vector similarity is exact equality"
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                build = self._copy(f"fixed-prose-{name}")
+                catalog = self._catalog(build)
+                mutate(catalog)
+                self._write_catalog(build, catalog)
+                package = load_retrieval_package(build)
+                original = load_retrieval_package(self.build_a)
+                self.assertNotEqual(package.identity.capability_catalog_sha256, original.identity.capability_catalog_sha256)
+                self.assertNotEqual(package.identity.package_id, original.identity.package_id)
+                with self.assertRaises(RetrievalPackageVerificationError):
+                    verify_retrieval_package(package)
+
+    def test_authored_description_change_is_accepted_when_consistent(self):
+        build = self._copy("authored-description-change")
+        catalog = self._catalog(build)
+        for item in catalog["semantic_dimensions"]:
+            if item["field_class"] == "semantic_identifier" and item["field_name"] == "relation":
+                item["description"] = "new authored historical meaning"
+        for item in catalog["graph"]["relations"]:
+            if item["relation_class"] == "semantic_identifier" and item["relation_name"] == "relation":
+                item["description"] = "new authored historical meaning"
+        self._write_catalog(build, catalog)
+        package = load_retrieval_package(build)
+        original = load_retrieval_package(self.build_a)
+        self.assertNotEqual(package.identity.capability_catalog_sha256, original.identity.capability_catalog_sha256)
+        verified = verify_retrieval_package(package)
+        self.assertEqual(verified.package.identity, package.identity)
+
+    def test_inconsistent_authored_descriptions_fail_verification(self):
+        build = self._copy("inconsistent-authored-description")
+        catalog = self._catalog(build)
+        next(
+            item for item in catalog["semantic_dimensions"]
+            if item["field_class"] == "semantic_identifier" and item["field_name"] == "relation"
+        )["description"] = "only on the dimension"
+        self._write_catalog(build, catalog)
+        package = load_retrieval_package(build)
+        with self.assertRaises(RetrievalPackageVerificationError):
+            verify_retrieval_package(package)
+
     def test_post_load_artifact_mutations_fail_without_rebinding(self):
         for name in ("substrate.sqlite3", "vectors.npy", "capability_catalog.json"):
             with self.subTest(name=name):

@@ -54,18 +54,6 @@ def _merge_description(descriptions: dict[str, str], name: str, description: str
     descriptions[name] = description
 
 
-def _without_prose(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {
-            key: _without_prose(item)
-            for key, item in value.items()
-            if key not in {"description", "meaning"}
-        }
-    if isinstance(value, (list, tuple)):
-        return [_without_prose(item) for item in value]
-    return value
-
-
 def _sort_key(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -89,14 +77,14 @@ _IDENTITY_ARRAY_KEYS = frozenset({
 })
 
 
-def _normalize_machine_catalog(value: Any, key: str | None = None) -> Any:
+def _normalize_catalog(value: Any, key: str | None = None) -> Any:
     if isinstance(value, Mapping):
         return {
-            name: _normalize_machine_catalog(item, name)
+            name: _normalize_catalog(item, name)
             for name, item in value.items()
         }
-    if isinstance(value, list):
-        values = [_normalize_machine_catalog(item, key) for item in value]
+    if isinstance(value, (list, tuple)):
+        values = [_normalize_catalog(item, key) for item in value]
         if key in _SET_LIKE_ARRAY_KEYS or key in _IDENTITY_ARRAY_KEYS:
             return sorted(values, key=_sort_key)
         return values
@@ -114,9 +102,9 @@ def _assert_catalog_matches_facts(
         raise RetrievalPackageVerificationError(
             f"catalog cannot represent observed capability facts: {exc}"
         ) from exc
-    actual_machine = _normalize_machine_catalog(_without_prose(catalog))
-    expected_machine = _normalize_machine_catalog(_without_prose(expected))
-    if actual_machine != expected_machine:
+    actual_catalog = _normalize_catalog(catalog)
+    expected_catalog = _normalize_catalog(expected)
+    if actual_catalog != expected_catalog:
         raise RetrievalPackageVerificationError(
             "capability catalog machine semantics do not match observed completed-build facts"
         )
