@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import re
+from types import MappingProxyType
 from typing import Any, Iterable
 
 from markdown_it import MarkdownIt
@@ -17,19 +18,55 @@ class NoteParseError(ValueError):
 
 
 @dataclass(frozen=True)
+class SemanticIdentifierDeclaration:
+    """One authored semantic-identifier admission and its meaning."""
+
+    field_name: str
+    description: str
+
+
+@dataclass(frozen=True)
 class BuildConfig:
     """Parser-affecting build configuration loaded from the build seed."""
 
     vault_name: str
     uuid_field: str
     excluded_folders: tuple[str, ...]
-    semantic_identifier_fields: tuple[str, ...]
+    semantic_identifiers: tuple[SemanticIdentifierDeclaration, ...]
 
     def __post_init__(self) -> None:
-        if self.uuid_field in self.semantic_identifier_fields:
+        seen: set[str] = set()
+        for declaration in self.semantic_identifiers:
+            if not isinstance(declaration, SemanticIdentifierDeclaration):
+                raise NoteParseError("semantic_identifiers must contain declarations")
+            if not isinstance(declaration.field_name, str) or not declaration.field_name.strip():
+                raise NoteParseError("semantic identifier field names must be non-empty strings")
+            if declaration.field_name in seen:
+                raise NoteParseError(f"duplicate semantic identifier declaration: {declaration.field_name!r}")
+            if not isinstance(declaration.description, str) or not declaration.description.strip():
+                raise NoteParseError(
+                    f"semantic identifier description must be a non-empty string: {declaration.field_name!r}"
+                )
+            seen.add(declaration.field_name)
+        if self.uuid_field in seen:
             raise NoteParseError("uuid_field cannot also be a semantic identifier field")
         for excluded_folder in self.excluded_folders:
             _validate_excluded_folder(excluded_folder)
+
+    @property
+    def semantic_identifier_fields(self) -> tuple[str, ...]:
+        """The ordered admission set derived from semantic_identifiers."""
+
+        return tuple(declaration.field_name for declaration in self.semantic_identifiers)
+
+    @property
+    def semantic_identifier_descriptions(self) -> MappingProxyType:
+        """An immutable mapping of authored meanings by admitted field name."""
+
+        return MappingProxyType({
+            declaration.field_name: declaration.description
+            for declaration in self.semantic_identifiers
+        })
 
 
 def _validate_excluded_folder(value: str) -> None:
@@ -48,13 +85,7 @@ def _validate_excluded_folder(value: str) -> None:
         raise NoteParseError(f"excluded_folders entry is not a vault-relative directory path: {value!r}")
 
 
-def load_build_config(path: str | Path) -> BuildConfig:
-    """Load the typed configuration used by note parsing.
-
-    Exclusions are retained as configuration data, but enumeration and
-    exclusion policy belong to the later whole-vault assembly stage.
-    """
-
+def _load_config_values(path: str | Path) -> dict[str, Any]:
     yaml = YAML(typ="safe", pure=True)
     yaml.version = (1, 2)
     try:
@@ -63,6 +94,85 @@ def load_build_config(path: str | Path) -> BuildConfig:
         raise NoteParseError("build configuration contains duplicate keys") from exc
     if not isinstance(values, dict):
         raise NoteParseError("build configuration must contain a mapping")
+    if "semantic_identifier_fields" in values:
+        raise NoteParseError(
+            "build configuration must use semantic_identifiers declarations, not semantic_identifier_fields"
+        )
+    return dict(values)
+
+
+def _semantic_identifier_declarations(
+    values: dict[str, Any],
+    *,
+    allow_incomplete: bool = False,
+) -> tuple[SemanticIdentifierDeclaration, ...]:
+    raw = values.get("semantic_identifiers", {})
+    if not isinstance(raw, dict):
+        raise NoteParseError("build configuration semantic_identifiers must be a mapping")
+    declarations: list[SemanticIdentifierDeclaration] = []
+    seen: set[str] = set()
+    for field_name, entry in raw.items():
+        if not isinstance(field_name, str) or not field_name.strip():
+            raise NoteParseError("semantic identifier field names must be non-empty strings")
+        if field_name in seen:
+            raise NoteParseError(f"duplicate semantic identifier declaration: {field_name!r}")
+        seen.add(field_name)
+        if not isinstance(entry, dict):
+            raise NoteParseError(f"semantic identifier declaration must be a mapping: {field_name!r}")
+        if "description" not in entry:
+            if not allow_incomplete:
+                raise NoteParseError(f"semantic identifier declaration lacks description: {field_name!r}")
+            description = ""
+        else:
+            description = entry["description"]
+            if not isinstance(description, str):
+                raise NoteParseError(f"semantic identifier description must be a string: {field_name!r}")
+        if not allow_incomplete and not description.strip():
+            raise NoteParseError(
+                f"semantic identifier description must be non-empty: {field_name!r}"
+            )
+        declarations.append(SemanticIdentifierDeclaration(field_name, description))
+    return tuple(declarations)
+
+
+def semantic_identifier_homework(path: str | Path) -> tuple[str, ...]:
+    """Return configured declarations whose authored meaning is incomplete."""
+
+    values = _load_config_values(path)
+    declarations = _semantic_identifier_declarations(values, allow_incomplete=True)
+    return tuple(sorted(
+        declaration.field_name
+        for declaration in declarations
+        if not declaration.description.strip()
+    ))
+
+
+def write_semantic_identifier_homework(path: str | Path, field_names: Iterable[str]) -> None:
+    """Write deterministic blank declarations for an incomplete config."""
+
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    yaml = YAML()
+    yaml.default_flow_style = False
+    yaml.sort_base_mapping_type_on_output = False
+    document = {
+        "semantic_identifiers": {
+            field_name: {"description": ""}
+            for field_name in sorted(set(field_names))
+        }
+    }
+    with output.open("w", encoding="utf-8", newline="\n") as stream:
+        yaml.dump(document, stream)
+
+
+def load_build_config(path: str | Path) -> BuildConfig:
+    """Load the typed configuration used by note parsing.
+
+    Exclusions are retained as configuration data, but enumeration and
+    exclusion policy belong to the later whole-vault assembly stage.
+    """
+
+    values = _load_config_values(path)
 
     def required_string(name: str) -> str:
         value = values.get(name)
@@ -77,12 +187,11 @@ def load_build_config(path: str | Path) -> BuildConfig:
         return tuple(value)
 
     uuid_field = required_string("uuid_field")
-    semantic_identifier_fields = string_tuple("semantic_identifier_fields")
     return BuildConfig(
         vault_name=required_string("vault_name"),
         uuid_field=uuid_field,
         excluded_folders=string_tuple("excluded_folders"),
-        semantic_identifier_fields=semantic_identifier_fields,
+        semantic_identifiers=_semantic_identifier_declarations(values),
     )
 
 
@@ -342,7 +451,7 @@ def parse_note(
     build_config: BuildConfig,
     require_uuid: bool = True,
 ) -> ParsedNote:
-    """Parse exactly one Markdown note using the supplied build admission list."""
+    """Parse exactly one Markdown note using the supplied BuildConfig declarations."""
 
     source_path = Path(path)
     source = source_path.read_text(encoding="utf-8")

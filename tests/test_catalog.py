@@ -7,8 +7,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from ruamel.yaml import YAML
-
 from ugh_parser.catalog import CatalogGenerationError, generate_catalog
 from ugh_parser.cli import main
 
@@ -114,25 +112,26 @@ class CatalogTests(unittest.TestCase):
             },
         }
 
-    def _vocabulary(self, root: Path, descriptions: dict[str, str]) -> Path:
-        path = root / "semantic-vocabulary.yaml"
-        yaml = YAML()
-        with path.open("w", encoding="utf-8", newline="\n") as stream:
-            yaml.dump({"semantic_identifiers": {name: {"description": value} for name, value in descriptions.items()}}, stream)
+    def _config(self, root: Path, descriptions: dict[str, str]) -> Path:
+        path = root / "build-config.yaml"
+        lines = ["vault_name: test", "uuid_field: uuid", "excluded_folders: []", "semantic_identifiers:"]
+        for name, description in descriptions.items():
+            lines.extend([f"  {name}:", f"    description: {description!r}"])
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
     def test_success_presents_value_shapes_access_and_reused_authored_description(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             description = "  authored meaning, preserved exactly  "
-            vocabulary = self._vocabulary(root, {
+            descriptions = {
                 "sequence_string": description,
                 "graph_only": "graph-only meaning",
                 "mixed_integer_string": "mixed meaning",
                 "scalar_integer": "integer meaning",
-            })
+            }
             output = root / "capability-catalog.json"
-            catalog = generate_catalog(self._facts(), vocabulary, output, root / "homework.yaml")
+            catalog = generate_catalog(self._facts(), descriptions, output)
             self.assertEqual(catalog, json.loads(output.read_text(encoding="utf-8")))
             self.assertEqual(list(catalog), ["catalog_schema_version", "semantic_dimensions", "graph", "vector", "operators"])
 
@@ -168,34 +167,28 @@ class CatalogTests(unittest.TestCase):
     def test_missing_descriptions_write_only_sorted_homework_and_preserve_catalog(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            vocabulary = self._vocabulary(root, {"sequence_string": "ok"})
+            descriptions = {"sequence_string": "ok"}
             output = root / "capability-catalog.json"
             output.write_text("sentinel", encoding="utf-8")
             homework = root / "homework.yaml"
             with self.assertRaisesRegex(CatalogGenerationError, "graph_only, mixed_integer_string, scalar_integer"):
-                generate_catalog(self._facts(), vocabulary, output, homework)
+                generate_catalog(self._facts(), descriptions, output)
             self.assertEqual(output.read_text(encoding="utf-8"), "sentinel")
-            document = YAML(typ="safe", pure=True).load(homework.read_text(encoding="utf-8"))
-            self.assertEqual(list(document["semantic_identifiers"]), ["graph_only", "mixed_integer_string", "scalar_integer"])
-            self.assertEqual(document["semantic_identifiers"], {
-                "graph_only": {"description": ""},
-                "mixed_integer_string": {"description": ""},
-                "scalar_integer": {"description": ""},
-            })
+            self.assertFalse(homework.exists())
 
-    def test_blank_description_is_missing_and_unknown_vocabulary_does_not_create_dimension(self):
+    def test_blank_description_is_missing_and_unknown_config_key_does_not_create_dimension(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            vocabulary = self._vocabulary(root, {"sequence_string": " ", "unknown": "not represented"})
+            descriptions = {"sequence_string": " ", "unknown": "not represented"}
             with self.assertRaisesRegex(CatalogGenerationError, "sequence_string"):
-                generate_catalog(self._facts(), vocabulary, root / "catalog.json", root / "homework.yaml")
-            complete = self._vocabulary(root, {
+                generate_catalog(self._facts(), descriptions, root / "catalog.json")
+            complete = {
                 "sequence_string": "sequence",
                 "graph_only": "relation",
                 "mixed_integer_string": "mixed",
                 "scalar_integer": "integer",
-            })
-            catalog = generate_catalog(self._facts(), complete, root / "catalog.json", root / "homework-2.yaml")
+            }
+            catalog = generate_catalog(self._facts(), complete, root / "catalog.json")
             names = {(item["field_class"], item["field_name"]) for item in catalog["semantic_dimensions"]}
             self.assertNotIn(("semantic_identifier", "unknown"), names)
             self.assertNotIn("unknown", json.dumps(catalog))
@@ -206,45 +199,66 @@ class CatalogTests(unittest.TestCase):
             facts = self._facts()
             first = root / "first.json"
             second = root / "second.json"
-            generate_catalog(facts, self._vocabulary(root, {"graph_only": "g", "sequence_string": "s", "mixed_integer_string": "m", "scalar_integer": "i"}), first, root / "h1.yaml")
-            generate_catalog(facts, self._vocabulary(root, {"scalar_integer": "i", "mixed_integer_string": "m", "sequence_string": "s", "graph_only": "g"}), second, root / "h2.yaml")
+            generate_catalog(facts, {"graph_only": "g", "sequence_string": "s", "mixed_integer_string": "m", "scalar_integer": "i"}, first)
+            generate_catalog(facts, {"scalar_integer": "i", "mixed_integer_string": "m", "sequence_string": "s", "graph_only": "g"}, second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
 
     def test_cli_catalog_generate_delegates_to_accepted_observer(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            vocabulary = self._vocabulary(root, {
+            descriptions = {
                 "sequence_string": "sequence",
                 "graph_only": "relation",
                 "mixed_integer_string": "mixed",
                 "scalar_integer": "integer",
-            })
+            }
+            config = self._config(root, descriptions)
             output = root / "catalog.json"
             stdout, stderr = io.StringIO(), io.StringIO()
             with patch("ugh_parser.cli._connection"), patch("ugh_parser.cli.observe_capability_facts", return_value=self._facts()):
                 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                     code = main([
                         "catalog", "generate", "--build", str(root / "completed-build"),
-                        "--vocabulary", str(vocabulary), "--output", str(output),
+                        "--config", str(config), "--output", str(output),
                         "--missing-output", str(root / "homework.yaml"), "--json",
                     ])
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertEqual(json.loads(stdout.getvalue()), {"catalog": str(output.resolve())})
             self.assertTrue(output.is_file())
 
+    def test_cli_incomplete_config_writes_all_config_homework_before_observation(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._config(root, {"represented": "", "unrepresented": ""})
+            output = root / "catalog.json"
+            with patch("ugh_parser.cli.observe_capability_facts", side_effect=AssertionError("must not observe incomplete config")):
+                code = main([
+                    "catalog", "generate", "--build", str(root / "completed-build"),
+                    "--config", str(config), "--output", str(output),
+                    "--missing-output", str(root / "config-homework.yaml"),
+                ])
+            self.assertNotEqual(code, 0)
+            self.assertFalse(output.exists())
+            self.assertEqual((root / "config-homework.yaml").read_text(encoding="utf-8"), """semantic_identifiers:
+  represented:
+    description: ''
+  unrepresented:
+    description: ''
+""")
+
     def test_unsupported_observer_facts_fail_closed(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            vocabulary = self._vocabulary(root, {
+            descriptions = {
                 "sequence_string": "sequence",
                 "graph_only": "relation",
                 "mixed_integer_string": "mixed",
                 "scalar_integer": "integer",
-            })
+            }
             facts = copy.deepcopy(self._facts())
             facts["graph_discovery_capabilities"][0]["dimension_name"] = "unsupported"
             with self.assertRaises(CatalogGenerationError):
-                generate_catalog(facts, vocabulary, root / "catalog.json", root / "homework.yaml")
+                generate_catalog(facts, descriptions, root / "catalog.json")
 
 
 if __name__ == "__main__":

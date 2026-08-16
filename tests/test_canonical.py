@@ -12,6 +12,7 @@ from ugh_parser import (
     parse_vault,
     resolve_relations,
 )
+from tests._test_helpers import build_config
 
 
 class CanonicalIngestTests(unittest.TestCase):
@@ -25,7 +26,7 @@ class CanonicalIngestTests(unittest.TestCase):
         root = Path(directory.name)
         self._write(root, "source.md", "---\nuuid: source\nrelation: \"[[target#Inner Target|front]]\"\nblank:\n---\npreamble\n# Outer\n## Inner\nbody [[target|same]] [[target|same]]\n# Other\noutside\n")
         self._write(root, "target.md", "---\nuuid: target\n---\n# Inner Target\ntarget body\n")
-        config = BuildConfig("test", "uuid", (), ("relation", "blank", "missing"))
+        config = build_config(fields=("relation", "blank", "missing"))
         parsed = parse_vault(root, config)
         materialized = materialize_context(parsed)
         resolved = resolve_relations(materialized)

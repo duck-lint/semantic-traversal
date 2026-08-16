@@ -11,37 +11,70 @@ vault_name: kháos
 uuid_field: uuid
 excluded_folders:
   - VAULT DESIGN
-semantic_identifier_fields:
-  - note_type
-  - tags
-  - aliases
-  - journal_entry_date
-  - title
-  - creator
-  - book_read_today
-  - layer
-  - unity_level
-  - vector_direction
-  - register
-  - register_mode
-  - pillar
-  - temporal_pace
-  - hypnagogic_resonance
-  - reactivity
-  - racing_thoughts_while_awake
-  - ran_script_when_racing
-  - dream_motif
-  - dream_motif_valence
-  - dream_location
-  - recall_ability
-  - dream_lucidity
-  - format
-  - publish_studio
-  - original_year_published
-  - origin
-  - entity
-  - entity_type
-  - canonical_name
-  - relationship
-  - first_met
-  - birthday
+semantic_identifiers:
+  note_type:
+    description: ''
+  tags:
+    description: ''
+  aliases:
+    description: ''
+  journal_entry_date:
+    description: ''
+  title:
+    description: ''
+  creator:
+    description: ''
+  book_read_today:
+    description: ''
+  layer:
+    description: ''
+  unity_level:
+    description: ''
+  vector_direction:
+    description: ''
+  register:
+    description: ''
+  register_mode:
+    description: ''
+  pillar:
+    description: ''
+  temporal_pace:
+    description: ''
+  hypnagogic_resonance:
+    description: ''
+  reactivity:
+    description: ''
+  racing_thoughts_while_awake:
+    description: ''
+  ran_script_when_racing:
+    description: ''
+  dream_motif:
+    description: ''
+  dream_motif_valence:
+    description: ''
+  dream_location:
+    description: ''
+  recall_ability:
+    description: ''
+  dream_lucidity:
+    description: ''
+  format:
+    description: ''
+  publish_studio:
+    description: ''
+  original_year_published:
+    description: ''
+  origin:
+    description: ''
+  entity:
+    description: ''
+  entity_type:
+    description: ''
+  canonical_name:
+    description: ''
+  relationship:
+    description: ''
+  first_met:
+    description: ''
+  birthday:
+    description: ''

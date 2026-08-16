@@ -41,7 +41,7 @@ class CliTests(unittest.TestCase):
         source.write_text("---\nuuid: source\nrelation: \"[[Target]]\"\n---\nsource body\n", encoding="utf-8")
         config = root / "config.yaml"
         config.write_text(
-            "vault_name: test\nuuid_field: uuid\nexcluded_folders: []\nsemantic_identifier_fields: [tags, relation]\n",
+            "vault_name: test\nuuid_field: uuid\nexcluded_folders: []\nsemantic_identifiers:\n  tags:\n    description: test-authored declaration\n  relation:\n    description: test-authored declaration\n",
             encoding="utf-8",
         )
         return vault, config

@@ -17,6 +17,8 @@ semantic_identifiers:
     description: ''
   dream_motif_valence:
     description: ''
+  entity:
+    description: ''
   entity_type:
     description: ''
   first_met:
@@ -39,6 +41,10 @@ semantic_identifiers:
     description: ''
   publish_studio:
     description: ''
+  racing_thoughts_while_awake:
+    description: ''
+  ran_script_when_racing:
+    description: ''
   reactivity:
     description: ''
   recall_ability:
@@ -50,6 +56,8 @@ semantic_identifiers:
   relationship:
     description: ''
   tags:
+    description: ''
+  temporal_pace:
     description: ''
   title:
     description: ''

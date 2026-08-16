@@ -1,9 +1,9 @@
 """Generate the model-facing capability catalog from accepted facts.
 
 The capability-facts observer is the authority for what a completed build
-represents. This module only presents those facts and applies the authored
-semantic vocabulary gate; it does not inspect canonical tables, the vault, or
-build configuration.
+represents. This module only presents those facts and applies descriptions
+supplied by the effective BuildConfig; it does not inspect canonical tables,
+the vault, or build configuration.
 """
 
 from __future__ import annotations
@@ -12,11 +12,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from ruamel.yaml import YAML
 
 
 class CatalogGenerationError(ValueError):
-    """The vocabulary or accepted facts cannot produce a catalog."""
+    """The effective config or accepted facts cannot produce a catalog."""
 
 
 _DOMAIN_ORDER = ("null", "boolean", "integer", "float", "date", "datetime", "string", "mapping")
@@ -68,27 +67,7 @@ def _ordered_domains(values: Any) -> list[str]:
     return sorted(set(values), key=_DOMAIN_RANK.__getitem__)
 
 
-def _load_vocabulary(path: str | Path) -> dict[str, str]:
-    try:
-        document = YAML(typ="safe", pure=True).load(Path(path).read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise CatalogGenerationError(f"cannot read semantic vocabulary: {exc}") from exc
-    if not isinstance(document, dict) or not isinstance(document.get("semantic_identifiers"), dict):
-        raise CatalogGenerationError("semantic vocabulary must contain semantic_identifiers mapping")
-    descriptions: dict[str, str] = {}
-    for field_name, entry in document["semantic_identifiers"].items():
-        if not isinstance(field_name, str) or not field_name:
-            raise CatalogGenerationError("semantic vocabulary field names must be non-empty strings")
-        if not isinstance(entry, dict) or "description" not in entry:
-            raise CatalogGenerationError(f"semantic vocabulary entry lacks description: {field_name!r}")
-        description = entry["description"]
-        if not isinstance(description, str):
-            raise CatalogGenerationError(f"semantic vocabulary description must be a string: {field_name!r}")
-        descriptions[field_name] = description
-    return descriptions
-
-
-def _required_vocabulary_keys(facts: Mapping[str, Any]) -> list[str]:
+def _represented_semantic_identifier_keys(facts: Mapping[str, Any]) -> list[str]:
     keys = {
         field["field_name"]
         for field in facts["field_capabilities"]
@@ -100,17 +79,6 @@ def _required_vocabulary_keys(facts: Mapping[str, Any]) -> list[str]:
         if relation["relation_class"] == "semantic_identifier"
     )
     return sorted(keys)
-
-
-def _write_homework(path: str | Path, missing: list[str]) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    yaml = YAML()
-    yaml.default_flow_style = False
-    yaml.sort_base_mapping_type_on_output = False
-    document = {"semantic_identifiers": {name: {"description": ""} for name in missing}}
-    with output.open("w", encoding="utf-8", newline="\n") as stream:
-        yaml.dump(document, stream)
 
 
 def _semantic_identifier_value_model(field: Mapping[str, Any]) -> dict[str, Any]:
@@ -254,14 +222,25 @@ def _operators(facts: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def generate_catalog(facts: Mapping[str, Any], vocabulary_path: str | Path, output_path: str | Path, missing_output_path: str | Path) -> dict[str, Any]:
-    """Generate one deterministic catalog or write vocabulary homework."""
-    descriptions = _load_vocabulary(vocabulary_path)
-    required = _required_vocabulary_keys(facts)
+def generate_catalog(
+    facts: Mapping[str, Any],
+    semantic_identifier_descriptions: Mapping[str, str],
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Generate one deterministic catalog from an effective BuildConfig mapping."""
+    descriptions = semantic_identifier_descriptions
+    if not isinstance(descriptions, Mapping):
+        raise CatalogGenerationError("catalog descriptions must come from effective BuildConfig")
+    for field_name, description in descriptions.items():
+        if not isinstance(field_name, str) or not isinstance(description, str):
+            raise CatalogGenerationError("catalog descriptions must be string keyed and string valued")
+    required = _represented_semantic_identifier_keys(facts)
     missing = [name for name in required if name not in descriptions or not descriptions[name].strip()]
     if missing:
-        _write_homework(missing_output_path, missing)
-        raise CatalogGenerationError("missing authored semantic vocabulary descriptions: " + ", ".join(missing))
+        raise CatalogGenerationError(
+            "effective BuildConfig lacks descriptions for represented semantic identifiers: "
+            + ", ".join(missing)
+        )
     catalog = {
         "catalog_schema_version": "1",
         "semantic_dimensions": _semantic_dimensions(facts, descriptions),

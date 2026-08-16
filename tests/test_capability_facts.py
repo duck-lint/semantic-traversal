@@ -76,7 +76,18 @@ class CapabilityFactsTests(unittest.TestCase):
             "vault_name: observer\n"
             "uuid_field: uuid\n"
             "excluded_folders: []\n"
-            "semantic_identifier_fields: [title, tags, aliases, integer_value, bool_value, date_value, mixed_value, mixed_text_number, mixed_integer_sequence, relation, admitted_only]\n",
+            "semantic_identifiers:\n"
+            "  title: {description: test-authored declaration}\n"
+            "  tags: {description: test-authored declaration}\n"
+            "  aliases: {description: test-authored declaration}\n"
+            "  integer_value: {description: test-authored declaration}\n"
+            "  bool_value: {description: test-authored declaration}\n"
+            "  date_value: {description: test-authored declaration}\n"
+            "  mixed_value: {description: test-authored declaration}\n"
+            "  mixed_text_number: {description: test-authored declaration}\n"
+            "  mixed_integer_sequence: {description: test-authored declaration}\n"
+            "  relation: {description: test-authored declaration}\n"
+            "  admitted_only: {description: test-authored declaration}\n",
             encoding="utf-8",
         )
         return vault, config

@@ -13,6 +13,7 @@ from ugh_parser import (
     resolve_relations,
     write_completed_ingest,
 )
+from tests._test_helpers import build_config
 
 
 class CanonicalSubstrateTests(unittest.TestCase):
@@ -44,10 +45,7 @@ uuid: target-uuid
 # Inner Target
 target body
 """)
-        config = BuildConfig(
-            "test", "uuid", (),
-            ("number", "ratio", "flag", "items", "blank", "missing", "relation"),
-        )
+        config = build_config(fields=("number", "ratio", "flag", "items", "blank", "missing", "relation"))
         parsed = parse_vault(root, config)
         materialized = materialize_context(parsed)
         resolved = resolve_relations(materialized)

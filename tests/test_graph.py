@@ -21,6 +21,7 @@ from ugh_parser import (
     resolve_relations,
     write_completed_ingest,
 )
+from tests._test_helpers import build_config
 
 
 class GraphProjectionTests(unittest.TestCase):
@@ -30,9 +31,7 @@ class GraphProjectionTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
 
     def _build(self):
-        config = BuildConfig(
-            "test", "uuid", (), ("aliases", "tags", "book_read_today", "related", "other", "linked_to", "contains_unit"),
-        )
+        config = build_config(fields=("aliases", "tags", "book_read_today", "related", "other", "linked_to", "contains_unit"))
         directory = TemporaryDirectory()
         root = Path(directory.name)
         self._write(root, "A/Marx, Karl - Capital.md", """---

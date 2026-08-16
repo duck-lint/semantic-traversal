@@ -9,6 +9,7 @@ from ugh_parser import (
     hydrate_unit, materialize_context, parse_vault, resolve_relations,
     write_completed_ingest,
 )
+from tests._test_helpers import build_config
 
 
 class ExactRetrievalTests(unittest.TestCase):
@@ -22,10 +23,7 @@ class ExactRetrievalTests(unittest.TestCase):
         root = Path(directory.name)
         self._write(root, "a/b/source.md", "---\nuuid: source-uuid\ntitle: Work\nnumber: 7\nflag: true\nday: 2024-01-02\nmoment: 2024-01-02T03:04:05\nunity_level: [model, meta, model]\naliases: [Alpha Name, Second Name]\ntags: [One, Two]\nparsed_text: authored parsed metadata\nregion_path: authored region metadata\npath_component: authored path metadata\nblank:\n---\nunheaded raw\n# Outer Heading\nouter text\n## Inner Heading\ninner text\n")
         self._write(root, "target.md", "---\nuuid: target-uuid\n---\n# Target Region\ntarget text\n")
-        config = BuildConfig(
-            "test", "uuid", (),
-            ("title", "number", "flag", "day", "moment", "unity_level", "aliases", "tags", "parsed_text", "region_path", "path_component", "blank", "missing"),
-        )
+        config = build_config(fields=("title", "number", "flag", "day", "moment", "unity_level", "aliases", "tags", "parsed_text", "region_path", "path_component", "blank", "missing"))
         parsed = parse_vault(root, config)
         materialized = materialize_context(parsed)
         resolved = resolve_relations(materialized)
