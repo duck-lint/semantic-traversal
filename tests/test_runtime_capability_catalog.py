@@ -213,6 +213,30 @@ class CatalogAdmissionTests(unittest.TestCase):
         missing_vector_target = copy.deepcopy(base)
         missing_vector_target["vector"]["targets"] = []
         cases["constitutive vector coupling missing target"] = json.dumps(missing_vector_target, separators=(",", ":"))
+        malformed_scalar = copy.deepcopy(base)
+        malformed_scalar["semantic_dimensions"].append({
+            "field_class": "semantic_identifier",
+            "field_name": "malformed_scalar",
+            "description": "malformed scalar",
+            "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+            "access": [
+                {"operator": "exact.equals", "target": "complete_value", "domains": ["string"]},
+                {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
+            ],
+        })
+        cases["semantic identifier scalar lexical access incomplete"] = json.dumps(malformed_scalar, separators=(",", ":"))
+        malformed_sequence = copy.deepcopy(base)
+        malformed_sequence["semantic_dimensions"].append({
+            "field_class": "semantic_identifier",
+            "field_name": "malformed_sequence",
+            "description": "malformed sequence",
+            "value": {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+            "access": [
+                {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+            ],
+        })
+        cases["semantic identifier sequence exact access missing"] = json.dumps(malformed_sequence, separators=(",", ":"))
         return cases
     def _write(self, directory, text):
         path = Path(directory) / "capability_catalog.json"
@@ -248,6 +272,154 @@ class CatalogAdmissionTests(unittest.TestCase):
             self.assertEqual(artifact.sha256, "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest())
             self.assertEqual(artifact.text, text)
 
+    def test_semantic_identifier_access_is_derived_from_value_models(self):
+        cases = [
+            (
+                "arbitrary_date",
+                {"shapes": [{"shape": "scalar", "domains": ["date"]}]},
+                [{"operator": "exact.equals", "target": "complete_value", "domains": ["date"]}],
+            ),
+            (
+                "arbitrary_string",
+                {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
+                ],
+            ),
+            (
+                "arbitrary_sequence_string",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "arbitrary_sequence_mixed",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string", "integer"]}]},
+                [
+                    {"operator": "exact.equals", "target": "member", "domains": ["string", "integer"]},
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "arbitrary_mixed",
+                {
+                    "shapes": [
+                        {"shape": "scalar", "domains": ["date"]},
+                        {"shape": "sequence", "member_domains": ["string"]},
+                    ]
+                },
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["date"]},
+                    {"operator": "exact.equals", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+        ]
+        for field_name, value, access in cases:
+            with self.subTest(field_name=field_name), TemporaryDirectory() as directory:
+                catalog = minimum_catalog()
+                catalog["semantic_dimensions"].append({
+                    "field_class": "semantic_identifier",
+                    "field_name": field_name,
+                    "description": field_name,
+                    "value": value,
+                    "access": access,
+                })
+                text = json.dumps(catalog, separators=(",", ":"))
+                load_capability_catalog(self._write(directory, text))
+
+    def test_semantic_identifier_access_erasure_fails_closed(self):
+        cases = [
+            (
+                "scalar_exact_omitted",
+                {"shapes": [{"shape": "scalar", "domains": ["date"]}]},
+                [],
+            ),
+            (
+                "sequence_exact_omitted",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+                [
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "scalar_terms_omitted",
+                {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
+                ],
+            ),
+            (
+                "scalar_phrase_omitted",
+                {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
+                ],
+            ),
+            (
+                "sequence_terms_omitted",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "sequence_phrase_omitted",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "date_lexical",
+                {"shapes": [{"shape": "scalar", "domains": ["date"]}]},
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["date"]},
+                    {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
+                ],
+            ),
+            (
+                "complete_without_scalar",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+                [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
+            ),
+            (
+                "member_without_sequence",
+                {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+                [{"operator": "exact.equals", "target": "member", "domains": ["string"]}],
+            ),
+            (
+                "vector_access",
+                {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+                [{"operator": "vector.semantic_similarity", "target": "complete_value", "domains": ["string"]}],
+            ),
+        ]
+        for field_name, value, access in cases:
+            with self.subTest(field_name=field_name), TemporaryDirectory() as directory:
+                catalog = minimum_catalog()
+                catalog["semantic_dimensions"].append({
+                    "field_class": "semantic_identifier",
+                    "field_name": f"malformed_{field_name}",
+                    "description": field_name,
+                    "value": value,
+                    "access": access,
+                })
+                text = json.dumps(catalog, separators=(",", ":"))
+                with self.assertRaises(CapabilityCatalogError):
+                    load_capability_catalog(self._write(directory, text))
     def test_authored_semantic_identifier_names_remain_open(self):
         with TemporaryDirectory() as directory:
             catalog = copy.deepcopy(self.catalog())
@@ -264,7 +436,7 @@ class CatalogAdmissionTests(unittest.TestCase):
                     "field_name": "arbitrary_authored_field_b",
                     "description": "authored B",
                     "value": {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
-                    "access": [{"operator": "exact.equals", "target": "member", "domains": ["string"]}],
+                    "access": [{"operator": "exact.equals", "target": "member", "domains": ["string"]}, {"operator": "lexical.terms", "target": "member", "domains": ["string"]}, {"operator": "lexical.phrase", "target": "member", "domains": ["string"]}],
                 },
             ])
             catalog["graph"]["relations"].append({

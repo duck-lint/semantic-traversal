@@ -236,6 +236,30 @@ def _validate_fixed_access_grammar(identity: tuple[str, str], access_identities:
         if lexical and lexical != {lexical_terms, lexical_phrase}:
             raise CapabilityCatalogError("path_component lexical access is incomplete")
 
+def _validate_semantic_identifier_access(
+    value_models: Mapping[str, tuple[str, ...]],
+    access_identities: set[tuple[str, str]],
+) -> None:
+    exact = ("exact.equals", "complete_value")
+    member_exact = ("exact.equals", "member")
+    terms_complete = ("lexical.terms", "complete_value")
+    phrase_complete = ("lexical.phrase", "complete_value")
+    terms_member = ("lexical.terms", "member")
+    phrase_member = ("lexical.phrase", "member")
+    expected: set[tuple[str, str]] = set()
+
+    if "scalar" in value_models:
+        expected.add(exact)
+        if "string" in value_models["scalar"]:
+            expected.update({terms_complete, phrase_complete})
+    if "sequence" in value_models:
+        expected.add(member_exact)
+        if "string" in value_models["sequence"]:
+            expected.update({terms_member, phrase_member})
+
+    if access_identities != expected:
+        raise CapabilityCatalogError("semantic_identifier has an incompatible access grammar")
+
 def _validate_semantic_dimensions(value: Any) -> tuple[set[str], dict[tuple[str, str], set[tuple[str, str]]]]:
     if not isinstance(value, list):
         raise CapabilityCatalogError("semantic_dimensions must be an array")
@@ -271,7 +295,9 @@ def _validate_semantic_dimensions(value: Any) -> tuple[set[str], dict[tuple[str,
                 raise CapabilityCatalogError(f"{label}.access contains duplicate identities")
             access_identities.add(access_identity)
             references.add(access_identity[0])
-        if field_class != "semantic_identifier":
+        if field_class == "semantic_identifier":
+            _validate_semantic_identifier_access(value_models, access_identities)
+        else:
             _validate_fixed_access_grammar(identity, access_identities)
         access_by_dimension[identity] = access_identities
     return references, access_by_dimension

@@ -158,15 +158,16 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         catalog = self.catalog()
         intrinsic_request = self.requests()[0]
         cases.append(("field_not_advertised", catalog, [dict(intrinsic_request, field_class="semantic_identifier", field_name="made_up")]))
-        cases.append(("field_access_not_advertised", catalog, [dict(intrinsic_request, target="member")]))
         custom_catalog = copy.deepcopy(catalog)
         custom_catalog["semantic_dimensions"].append({
             "field_class": "semantic_identifier",
             "field_name": "custom",
             "description": "custom",
-            "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
-            "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
+            "value": {"shapes": [{"shape": "scalar", "domains": ["date"]}]},
+            "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["date"]}],
         })
+        custom_member = dict(intrinsic_request, field_class="semantic_identifier", field_name="custom", target="member")
+        cases.append(("field_access_not_advertised", custom_catalog, [custom_member]))
         custom_lexical = dict(self.requests()[3], field_class="semantic_identifier", field_name="custom", target="complete_value", operand=["one"])
         cases.append(("field_access_not_advertised", custom_catalog, [custom_lexical]))
         cases.append(("operand_domain_not_advertised", catalog, [dict(intrinsic_request, operand={"shape": "scalar", "domain": "integer", "value": 7})]))
