@@ -24,12 +24,18 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
                 {
                     "field_class": "intrinsic",
                     "field_name": "parsed_text",
+                    "description": "parsed text",
+                    "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
                     "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
                 }
             ],
-            "graph": {"discovery": [], "relations": []},
-            "vector": {"operator": "vector.semantic_similarity"},
-            "operators": {"exact.equals": {}},
+            "graph": {"node_kinds": [], "discovery": [], "relations": []},
+            "vector": {
+                "operator": "vector.semantic_similarity",
+                "query": {"shape": "string", "requirement": "one string", "segmentation": False, "truncation": False, "deterministic_enrichment": False},
+                "targets": [],
+            },
+            "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}},
         }
 
     def _prepare(self, directory):

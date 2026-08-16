@@ -27,6 +27,8 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 {
                     "field_class": "intrinsic",
                     "field_name": "parsed_text",
+                    "description": "parsed text",
+                    "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
                     "access": [
                         {"operator": "exact.equals", "target": "complete_value", "domains": ["string"]},
                         {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
@@ -36,6 +38,8 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 {
                     "field_class": "semantic_identifier",
                     "field_name": "tags",
+                    "description": "tags",
+                    "value": {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
                     "access": [
                         {"operator": "exact.equals", "target": "member", "domains": ["string"]},
                         {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
@@ -44,6 +48,8 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 {
                     "field_class": "region",
                     "field_name": "region_path",
+                    "description": "region path",
+                    "value": {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]},
                     "access": [
                         {
                             "operator": "exact.equals",
@@ -55,6 +61,8 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 {
                     "field_class": "semantic_path",
                     "field_name": "path_hierarchy",
+                    "description": "path hierarchy",
+                    "value": {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]},
                     "access": [
                         {
                             "operator": "exact.equals",
@@ -65,27 +73,28 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 },
             ],
             "graph": {
+                "node_kinds": ["semantic_object", "semantic_region"],
                 "discovery": [
-                    {"node_kind": "semantic_object", "dimension_name": "tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"]},
-                    {"node_kind": "semantic_region", "dimension_name": "address_text", "operators": ["graph.discovery.phrase"]},
+                    {"node_kind": "semantic_object", "dimension_name": "tag", "description": "object tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"},
+                    {"node_kind": "semantic_region", "dimension_name": "address_text", "description": "region address", "operators": ["graph.discovery.phrase"], "result": "opaque_graph_handle"},
                 ],
                 "relations": [
                     {
                         "relation_class": "body_wikilink",
                         "relation_name": "linked_to",
-                        "operations": ["graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"],
+                        "description": "body link", "source_kinds": ["semantic_unit"], "target_kinds": ["semantic_object", "semantic_region"], "operations": ["graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"],
                     }
                 ],
             },
-            "vector": {"operator": "vector.semantic_similarity"},
+            "vector": {"operator": "vector.semantic_similarity", "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False}, "targets": []},
             "operators": {
-                "exact.equals": {},
-                "lexical.terms": {},
-                "lexical.phrase": {},
-                "vector.semantic_similarity": {},
-                "graph.discovery.terms": {},
-                "graph.discovery.phrase": {},
-                "graph.relation_occurrence_lookup": {},
+                "exact.equals": {"surface": "exact", "meaning": "typed exact equality"},
+                "lexical.terms": {"surface": "lexical", "meaning": "OR lexical term matching"},
+                "lexical.phrase": {"surface": "lexical", "meaning": "lexical phrase matching"},
+                "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"},
+                "graph.discovery.terms": {"surface": "graph", "meaning": "graph discovery terms"},
+                "graph.discovery.phrase": {"surface": "graph", "meaning": "graph discovery phrase"},
+                "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "relation occurrence lookup"},
             },
         }
 
@@ -239,7 +248,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         ordered_request = dict(self.requests()[2], field_class="intrinsic", field_name="parsed_text")
         cases.append(("operand_shape_not_advertised", wrong_shape, [ordered_request]))
         wrong_member_domain = copy.deepcopy(catalog)
-        wrong_member_domain["semantic_dimensions"][2]["access"][0]["operand"]["member_domains"] = []
+        wrong_member_domain["semantic_dimensions"][2]["access"][0]["operand"]["member_domains"] = ["integer"]
         cases.append(("operand_domain_not_advertised", wrong_member_domain, [self.requests()[2]]))
         no_lexical = copy.deepcopy(catalog)
         no_lexical["semantic_dimensions"][0]["access"] = [no_lexical["semantic_dimensions"][0]["access"][0]]
@@ -252,7 +261,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         no_relation = copy.deepcopy(catalog)
         cases.append(("graph_relation_not_advertised", no_relation, [dict(self.requests()[8], relation_name="missing")]))
         no_relation_operation = copy.deepcopy(catalog)
-        no_relation_operation["graph"]["relations"][0]["operations"] = []
+        no_relation_operation["graph"]["relations"][0]["operations"] = ["graph.inbound_traversal"]
         cases.append(("graph_relation_operation_not_advertised", no_relation_operation, [self.requests()[8]]))
         no_vector = copy.deepcopy(catalog)
         no_vector["vector"]["operator"] = "other"
@@ -286,7 +295,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database, catalog_path, run_id, catalog, _ = self.prepared(directory, requests=[])
             other = copy.deepcopy(catalog)
-            other["operators"]["exact.equals"]["changed"] = True
+            other["operators"]["exact.equals"]["meaning"] = "different"
             other_path = Path(directory) / "other.json"
             other_path.write_text(json.dumps(other, separators=(",", ":")), encoding="utf-8")
             with self.assertRaisesRegex(RetrievalConformanceError, "identity"):
