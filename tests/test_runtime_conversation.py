@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from uuid import UUID
 
 from semantic_traversal.cli import main
@@ -17,6 +18,7 @@ from semantic_traversal.runtime.conversation import (
     create_conversation,
     get_conversation,
     initialize_runtime,
+    migrate_runtime,
 )
 
 
@@ -68,16 +70,16 @@ class RuntimeConversationTests(unittest.TestCase):
         )
         connection.close()
 
-    def test_new_database_schema_is_v1_foreign_keyed_and_idempotent(self):
+    def test_new_database_schema_is_v2_foreign_keyed_and_idempotent(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
             initialize_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 0)
             self.assertEqual(
                 {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
-                {"conversations", "messages"},
+                {"conversations", "messages", "model_runs"},
             )
             self.assertEqual(
                 tuple(row[1] for row in connection.execute("PRAGMA table_info(messages)")),
@@ -85,6 +87,15 @@ class RuntimeConversationTests(unittest.TestCase):
             )
             self.assertEqual(len(tuple(connection.execute("PRAGMA foreign_key_list(messages)"))), 1)
             self.assertIn("CHECK", connection.execute("SELECT sql FROM sqlite_master WHERE name='messages'").fetchone()[0])
+            self.assertEqual(
+                tuple(row[1] for row in connection.execute("PRAGMA table_info(model_runs)")),
+                (
+                    "run_id", "conversation_id", "trigger_message_id", "run_kind", "provider", "model",
+                    "prompt_version", "status", "started_at", "completed_at", "provider_response_id",
+                    "output_json", "error_type", "error_message", "input_tokens", "cached_input_tokens",
+                    "output_tokens", "reasoning_tokens", "total_tokens",
+                ),
+            )
             connection.close()
 
             initialize_runtime(database)
@@ -105,6 +116,95 @@ class RuntimeConversationTests(unittest.TestCase):
             connection.close()
             with self.assertRaises(RuntimeConversationError):
                 initialize_runtime(database)
+
+    def test_v1_requires_explicit_migration_and_preserves_thread_state(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO conversations(conversation_id, created_at) VALUES (?, ?)",
+                ("legacy-conversation", "2026-01-01T00:00:00.000000Z"),
+            )
+            connection.executemany(
+                "INSERT INTO messages(conversation_id, ordinal, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    ("legacy-conversation", 0, "user", "hello  ", "2026-01-01T00:00:01.000000Z"),
+                    ("legacy-conversation", 1, "synthesis", "hi\nthere", "2026-01-01T00:00:02.000000Z"),
+                ),
+            )
+            connection.commit()
+            before_conversations = tuple(connection.execute("SELECT * FROM conversations ORDER BY conversation_id"))
+            before_messages = tuple(connection.execute("SELECT * FROM messages ORDER BY conversation_id, ordinal"))
+            connection.close()
+
+            with self.assertRaisesRegex(RuntimeConversationError, "requires explicit migration"):
+                get_conversation(database, "legacy-conversation")
+            with self.assertRaises(RuntimeConversationError):
+                initialize_runtime(database)
+            migrate_runtime(database)
+            restored = get_conversation(database, "legacy-conversation")
+            connection = sqlite3.connect(database)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM conversations ORDER BY conversation_id")), before_conversations)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM messages ORDER BY conversation_id, ordinal")), before_messages)
+            connection.close()
+
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(
+                {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
+                {"conversations", "messages", "model_runs"},
+            )
+            connection.close()
+            migrate_runtime(database)
+
+    def test_migration_rejects_incompatible_v1_without_partial_upgrade(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database, message_content="TEXT")
+            with self.assertRaises(RuntimeConversationError):
+                migrate_runtime(database)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='model_runs'").fetchone(), None)
+            connection.close()
+
+    def test_injected_candidate_v2_validation_failure_rolls_back_to_v1(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database)
+            connection = sqlite3.connect(database)
+            connection.execute("INSERT INTO conversations VALUES (?, ?)", ("legacy", "created"))
+            connection.execute("INSERT INTO messages(conversation_id, ordinal, role, content, created_at) VALUES (?, ?, ?, ?, ?)", ("legacy", 0, "user", "content", "created"))
+            connection.commit()
+            before_conversations = tuple(connection.execute("SELECT * FROM conversations"))
+            before_messages = tuple(connection.execute("SELECT * FROM messages"))
+            connection.close()
+            with patch(
+                "semantic_traversal.runtime.conversation._validate_schema",
+                side_effect=[None, RuntimeConversationError("injected candidate-v2 validation failure")],
+            ), self.assertRaisesRegex(RuntimeConversationError, "injected candidate-v2"):
+                migrate_runtime(database)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM conversations")), before_conversations)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM messages")), before_messages)
+            self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='model_runs'").fetchone())
+            connection.close()
+
+    def test_injected_v2_construction_failure_rolls_back_new_initialization(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            with patch(
+                "semantic_traversal.runtime.conversation._create_model_runs_table",
+                side_effect=sqlite3.OperationalError("injected schema-construction failure"),
+            ), self.assertRaisesRegex(sqlite3.OperationalError, "injected schema-construction"):
+                initialize_runtime(database)
+            self.assertTrue(database.exists())
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(tuple(connection.execute("SELECT name FROM sqlite_master WHERE type='table'")), ())
+            connection.close()
 
     def test_non_init_operations_never_create_missing_or_empty_databases(self):
         for operation in ("create", "append", "get"):
@@ -136,7 +236,7 @@ class RuntimeConversationTests(unittest.TestCase):
                 connection.close()
                 initialize_runtime(database)
                 connection = sqlite3.connect(database)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
                 connection.close()
 
     def test_schema_v1_column_type_must_match(self):
@@ -173,14 +273,15 @@ class RuntimeConversationTests(unittest.TestCase):
                 with self.assertRaises(RuntimeConversationError):
                     initialize_runtime(database)
 
-    def test_no_execution_tables_are_created(self):
+    def test_model_runs_is_the_only_execution_evidence_table(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
             initialize_runtime(database)
             connection = sqlite3.connect(database)
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             connection.close()
-            self.assertFalse(tables & {"model_runs", "router", "retrieval_inference", "synthesis"})
+            self.assertIn("model_runs", tables)
+            self.assertFalse(tables & {"router", "retrieval_inference", "synthesis", "model_runs_router"})
 
     def test_conversation_identity_is_uuid_and_timestamps_are_utc_facts(self):
         with TemporaryDirectory() as directory:
@@ -250,7 +351,10 @@ class RuntimeConversationTests(unittest.TestCase):
             import semantic_traversal.runtime.conversation as module
             self.assertEqual(
                 set(module.__all__),
-                {"Conversation", "Message", "RuntimeConversationError", "initialize_runtime", "create_conversation", "append_message", "get_conversation"},
+                {
+                    "Conversation", "Message", "RuntimeConversationError", "initialize_runtime", "migrate_runtime",
+                    "create_conversation", "append_message", "get_conversation",
+                },
             )
             self.assertFalse(any(name in module.__all__ for name in ("edit_message", "delete_message", "truncate_thread")))
 
@@ -265,7 +369,7 @@ class RuntimeConversationTests(unittest.TestCase):
             self.assertFalse(database.exists())
             code, stdout, _ = self._run_cli("runtime", "init", "--database", str(database), "--json")
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(stdout)["schema_version"], 1)
+            self.assertEqual(json.loads(stdout)["schema_version"], 2)
             code, stdout, _ = self._run_cli("runtime", "conversation", "create", "--database", str(database), "--json")
             self.assertEqual(code, 0)
             conversation_id = json.loads(stdout)["conversation_id"]
