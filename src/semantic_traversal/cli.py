@@ -26,6 +26,7 @@ from .build.resolve import resolve_relations
 from .projection.substrate import foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
 from .build.vault import parse_vault
 from .projection.vector import OllamaEmbeddingProvider, build_vector_index, validate_vector_index, vector_eligible_targets, vector_lookup
+from .runtime.conversation import append_message, create_conversation, get_conversation, initialize_runtime
 
 
 class CliError(ValueError):
@@ -339,6 +340,23 @@ def _vector(args: argparse.Namespace) -> None:
     finally: connection.close()
 
 
+def _runtime_init(args: argparse.Namespace) -> None:
+    initialize_runtime(args.database)
+    _emit({"database": str(Path(args.database).resolve()), "schema_version": 1}, args)
+
+
+def _runtime_conversation_create(args: argparse.Namespace) -> None:
+    _emit(create_conversation(args.database), args)
+
+
+def _runtime_message_append(args: argparse.Namespace) -> None:
+    _emit(append_message(args.database, args.conversation_id, args.role, args.content), args)
+
+
+def _runtime_conversation_show(args: argparse.Namespace) -> None:
+    _emit(get_conversation(args.database, args.conversation_id), args)
+
+
 def _add_build(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--vault", required=True); parser.add_argument("--config", required=True); parser.add_argument("--output", required=True); parser.add_argument("--ollama-url", default="http://127.0.0.1:11434"); parser.add_argument("--json", action="store_true")
 
@@ -372,6 +390,13 @@ def _parser() -> argparse.ArgumentParser:
     a = gsub.add_parser("relations"); _add_build_ref(a); a.add_argument("--relation-class", required=True); a.add_argument("--relation-name", required=True); a.set_defaults(handler=_graph_relations)
     a = gsub.add_parser("traverse"); _add_build_ref(a); a.add_argument("--handle-json", required=True); a.add_argument("--relation-class", required=True); a.add_argument("--relation-name", required=True); a.add_argument("--direction", choices=["inbound","outbound"], required=True); a.set_defaults(handler=_graph_traverse)
     v = sub.add_parser("vector"); _add_build_ref(v); v.add_argument("--query", required=True); v.add_argument("--ollama-url", default="http://127.0.0.1:11434"); v.set_defaults(handler=_vector)
+    runtime = sub.add_parser("runtime"); rsub = runtime.add_subparsers(dest="runtime_command", required=True)
+    a = rsub.add_parser("init"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_init)
+    conversation = rsub.add_parser("conversation"); csub = conversation.add_subparsers(dest="conversation_command", required=True)
+    a = csub.add_parser("create"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_conversation_create)
+    a = csub.add_parser("show"); a.add_argument("--database", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_conversation_show)
+    message = rsub.add_parser("message"); msub = message.add_subparsers(dest="message_command", required=True)
+    a = msub.add_parser("append"); a.add_argument("--database", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--role", choices=["user", "synthesis"], required=True); a.add_argument("--content", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_message_append)
     return p
 
 
