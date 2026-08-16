@@ -99,13 +99,22 @@ def _semantic_identifier_value_model(field: Mapping[str, Any]) -> dict[str, Any]
     return {"shapes": value_shapes}
 
 
-def _access(operator: str, target: str, domains: list[str], **extra: Any) -> dict[str, Any]:
-    value = {"operator": operator, "target": target, "domains": domains}
-    value.update(extra)
-    return value
+def _access(operator: str, target: str, domains: list[str]) -> dict[str, Any]:
+    return {"operator": operator, "target": target, "domains": domains}
 
 
-def _field_access(field: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _ordered_sequence_access(operator: str, target: str, member_domains: list[str]) -> dict[str, Any]:
+    return {
+        "operator": operator,
+        "target": target,
+        "operand": {
+            "shape": "ordered_sequence",
+            "member_domains": member_domains,
+        },
+    }
+
+
+def _field_access(field: Mapping[str, Any], vector_catalog: Mapping[str, Any]) -> list[dict[str, Any]]:
     field_class, field_name = field["field_class"], field["field_name"]
     surfaces = field.get("surfaces")
     if not isinstance(surfaces, dict):
@@ -121,12 +130,16 @@ def _field_access(field: Mapping[str, Any]) -> list[dict[str, Any]]:
             if scalar_domains:
                 access.append(_access("exact.equals", "complete_value", scalar_domains))
             if member_domains:
-                access.append(_access("exact.equals", "member", member_domains, sequence_behavior="member_equality"))
+                access.append(_access("exact.equals", "member", member_domains))
         else:
             model = _FIXED_VALUE_MODELS.get((field_class, field_name))
             if model is None:
                 raise CatalogGenerationError(f"unsupported exact field dimension: {field_class}/{field_name}")
-            access.append(_access("exact.equals", "complete_value", list(model["shapes"][0]["domains"])))
+            shape = model["shapes"][0]
+            if shape["shape"] == "ordered_sequence":
+                access.append(_ordered_sequence_access("exact.equals", "complete_value", list(shape["domains"])))
+            else:
+                access.append(_access("exact.equals", "complete_value", list(shape["domains"])))
     if "lexical" in surfaces:
         lexical = surfaces["lexical"]
         if not isinstance(lexical, dict) or lexical.get("operators") != ["terms", "phrase"]:
@@ -137,15 +150,29 @@ def _field_access(field: Mapping[str, Any]) -> list[dict[str, Any]]:
             if "string" in scalar_domains:
                 access.extend((_access("lexical.terms", "complete_value", ["string"]), _access("lexical.phrase", "complete_value", ["string"])))
             if "string" in member_domains:
-                access.extend((_access("lexical.terms", "member", ["string"], sequence_behavior="member_equality"), _access("lexical.phrase", "member", ["string"], sequence_behavior="member_equality")))
+                access.extend((_access("lexical.terms", "member", ["string"]), _access("lexical.phrase", "member", ["string"])))
         else:
             if (field_class, field_name) not in _FIXED_VALUE_MODELS:
                 raise CatalogGenerationError(f"unsupported lexical field dimension: {field_class}/{field_name}")
             access.extend((_access("lexical.terms", "complete_value", ["string"]), _access("lexical.phrase", "complete_value", ["string"])))
+    if (
+        field_class == "intrinsic"
+        and field_name == "parsed_text"
+        and any(
+            target.get("target_kind") == "semantic_unit"
+            and target.get("input") == "exact canonical parsed_text"
+            for target in vector_catalog.get("targets", [])
+        )
+    ):
+        access.append(_access("vector.semantic_similarity", "complete_value", ["string"]))
     return access
 
 
-def _semantic_dimensions(facts: Mapping[str, Any], descriptions: Mapping[str, str]) -> list[dict[str, Any]]:
+def _semantic_dimensions(
+    facts: Mapping[str, Any],
+    descriptions: Mapping[str, str],
+    vector_catalog: Mapping[str, Any],
+) -> list[dict[str, Any]]:
     dimensions = []
     fields = sorted(facts["field_capabilities"], key=lambda field: (field["field_class"], field["field_name"]))
     for field in fields:
@@ -157,7 +184,7 @@ def _semantic_dimensions(facts: Mapping[str, Any], descriptions: Mapping[str, st
             if key not in _FIXED_DESCRIPTIONS or key not in _FIXED_VALUE_MODELS:
                 raise CatalogGenerationError(f"unsupported field capability: {field_class}/{field_name}")
             description, value = _FIXED_DESCRIPTIONS[key], _FIXED_VALUE_MODELS[key]
-        dimensions.append({"field_class": field_class, "field_name": field_name, "description": description, "value": value, "access": _field_access(field)})
+        dimensions.append({"field_class": field_class, "field_name": field_name, "description": description, "value": value, "access": _field_access(field, vector_catalog)})
     return dimensions
 
 
@@ -241,11 +268,12 @@ def generate_catalog(
             "effective BuildConfig lacks descriptions for represented semantic identifiers: "
             + ", ".join(missing)
         )
+    vector = _vector(facts)
     catalog = {
         "catalog_schema_version": "1",
-        "semantic_dimensions": _semantic_dimensions(facts, descriptions),
+        "semantic_dimensions": _semantic_dimensions(facts, descriptions, vector),
         "graph": _graph(facts, descriptions),
-        "vector": _vector(facts),
+        "vector": vector,
         "operators": _operators(facts),
     }
     output = Path(output_path)

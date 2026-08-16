@@ -142,6 +142,7 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual([(item["operator"], item["target"]) for item in sequence["access"]], [
                 ("exact.equals", "member"), ("lexical.terms", "member"), ("lexical.phrase", "member")
             ])
+            self.assertTrue(all("sequence_behavior" not in item for item in sequence["access"]))
 
             mixed = dimensions[("semantic_identifier", "mixed_integer_string")]
             self.assertEqual(mixed["value"], {"shapes": [
@@ -154,7 +155,30 @@ class CatalogTests(unittest.TestCase):
                 ("lexical.terms", "member", ["string"]),
                 ("lexical.phrase", "member", ["string"]),
             ])
-            self.assertEqual(dimensions[("semantic_path", "path_hierarchy")]["value"], {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]})
+            self.assertEqual(
+                dimensions[("semantic_path", "path_hierarchy")]["value"],
+                {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]},
+            )
+            for key in (("region", "region_path"), ("semantic_path", "path_hierarchy")):
+                ordered_access = dimensions[key]["access"]
+                self.assertEqual(len(ordered_access), 1)
+                self.assertEqual(ordered_access[0], {
+                    "operator": "exact.equals",
+                    "target": "complete_value",
+                    "operand": {"shape": "ordered_sequence", "member_domains": ["string"]},
+                })
+                self.assertNotIn("domains", ordered_access[0])
+
+            parsed_text = dimensions[("intrinsic", "parsed_text")]
+            self.assertEqual(
+                [(item["operator"], item["target"], item["domains"]) for item in parsed_text["access"]],
+                [
+                    ("exact.equals", "complete_value", ["string"]),
+                    ("lexical.terms", "complete_value", ["string"]),
+                    ("lexical.phrase", "complete_value", ["string"]),
+                    ("vector.semantic_similarity", "complete_value", ["string"]),
+                ],
+            )
 
             relations = {(item["relation_class"], item["relation_name"]): item for item in catalog["graph"]["relations"]}
             self.assertEqual(relations[("semantic_identifier", "sequence_string")]["description"], description)
@@ -162,7 +186,48 @@ class CatalogTests(unittest.TestCase):
             self.assertNotIn("scalar_domains", json.dumps(catalog))
             self.assertNotIn("sequence_member_domains", json.dumps(catalog))
             self.assertNotIn("operand_domains", json.dumps(catalog))
+            self.assertNotIn("sequence_behavior", json.dumps(catalog))
             self.assertNotIn("unit_id", json.dumps(catalog))
+
+    def test_parsed_text_vector_access_requires_represented_unit_input(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts = self._facts()
+            facts["vector_capability"]["represented_target_kinds"] = [
+                {"target_kind": "semantic_object", "input_dimension": "canonical_authored_object_name_for_zero_unit_object"},
+            ]
+            catalog = generate_catalog(
+                facts,
+                {
+                    "sequence_string": "sequence",
+                    "graph_only": "relation",
+                    "mixed_integer_string": "mixed",
+                    "scalar_integer": "integer",
+                },
+                root / "catalog.json",
+            )
+            parsed_text = next(
+                item for item in catalog["semantic_dimensions"]
+                if (item["field_class"], item["field_name"]) == ("intrinsic", "parsed_text")
+            )
+            self.assertFalse(any(item["operator"] == "vector.semantic_similarity" for item in parsed_text["access"]))
+
+    def test_inconsistent_vector_target_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts = copy.deepcopy(self._facts())
+            facts["vector_capability"]["represented_target_kinds"][0]["input_dimension"] = "unsupported"
+            with self.assertRaises(CatalogGenerationError):
+                generate_catalog(
+                    facts,
+                    {
+                        "sequence_string": "sequence",
+                        "graph_only": "relation",
+                        "mixed_integer_string": "mixed",
+                        "scalar_integer": "integer",
+                    },
+                    root / "catalog.json",
+                )
 
     def test_missing_descriptions_preserve_existing_catalog_without_artifact(self):
         with TemporaryDirectory() as directory:
