@@ -1,4 +1,5 @@
 .env.*
+.env
 *.pyc
 agent_harness/private/
 .venv/

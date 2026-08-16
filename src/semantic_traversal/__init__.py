@@ -1,4 +1,4 @@
-"""Single-note parsing for the build's first implementation stage."""
+"""Semantic Traversal package."""
 
 from .build.parser import (
     BuildConfig,
