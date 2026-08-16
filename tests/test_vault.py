@@ -9,6 +9,7 @@ from ugh_parser import (
     discover_markdown_notes,
     parse_vault,
 )
+from tests._test_helpers import build_config
 
 
 class WholeVaultParsingTests(unittest.TestCase):
@@ -18,7 +19,7 @@ class WholeVaultParsingTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
 
     def test_discovers_root_and_nested_notes_with_exact_subtree_exclusion(self):
-        config = BuildConfig("test", "uuid", ("private/notes",), ())
+        config = build_config("test", "uuid", ("private/notes",))
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, "root.md", "---\nuuid: root\n---\nroot\n")
@@ -29,7 +30,7 @@ class WholeVaultParsingTests(unittest.TestCase):
         self.assertEqual([path.relative_to(root).as_posix() for path in discovered], ["included/child.md", "other/notes/same-leaf.md", "root.md"])
 
     def test_malformed_note_does_not_prevent_independent_note(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, "bad.md", "not frontmatter\n")
@@ -40,7 +41,7 @@ class WholeVaultParsingTests(unittest.TestCase):
         self.assertEqual(result.failures[0].source_paths, ("bad.md",))
 
     def test_missing_and_duplicate_uuid_failures_are_aggregated(self):
-        config = BuildConfig("test", "identity", (), ())
+        config = build_config(uuid_field="identity")
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, "missing.md", "---\nname: missing\n---\nmissing\n")
@@ -61,7 +62,7 @@ class WholeVaultParsingTests(unittest.TestCase):
         self.assertIn("identity", duplicate_failures[0].message)
 
     def test_valid_corpus_is_distinguished_and_units_have_no_global_id(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, "a.md", "---\nuuid: a\n---\na\n")
@@ -71,7 +72,7 @@ class WholeVaultParsingTests(unittest.TestCase):
         self.assertFalse(hasattr(result.notes[0].units[0], "unit_id"))
 
     def test_unexpected_implementation_failure_propagates(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, "note.md", "---\nuuid: note\n---\nnote\n")
@@ -81,11 +82,11 @@ class WholeVaultParsingTests(unittest.TestCase):
 
     def test_excluded_folder_must_be_vault_relative_without_parent_traversal(self):
         with self.assertRaises(NoteParseError):
-            BuildConfig("test", "uuid", ("../private",), ())
+            build_config(excluded_folders=("../private",))
         with self.assertRaises(NoteParseError):
-            BuildConfig("test", "uuid", ("C:/private",), ())
+            build_config(excluded_folders=("C:/private",))
         with self.assertRaises(NoteParseError):
-            BuildConfig("test", "uuid", ("private/../notes",), ())
+            build_config(excluded_folders=("private/../notes",))
 
 
 if __name__ == "__main__":

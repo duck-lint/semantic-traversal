@@ -2,11 +2,22 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ugh_parser import BuildConfig, NoteParseError, load_build_config, parse_note
+from ugh_parser import BuildConfig, NoteParseError, SemanticIdentifierDeclaration, load_build_config, parse_note
+from tests._test_helpers import build_config
 
 
 ROOT = Path(__file__).parents[1]
-CONFIG = load_build_config(ROOT / "docs/build_config_seed.yaml")
+CONFIG = build_config(
+    fields=(
+        "note_type", "tags", "aliases", "journal_entry_date", "title", "creator",
+        "book_read_today", "layer", "unity_level", "vector_direction", "register",
+        "register_mode", "pillar", "temporal_pace", "hypnagogic_resonance", "reactivity",
+        "racing_thoughts_while_awake", "ran_script_when_racing", "dream_motif",
+        "dream_motif_valence", "dream_location", "recall_ability", "dream_lucidity",
+        "format", "publish_studio", "original_year_published", "origin", "entity",
+        "entity_type", "canonical_name", "relationship", "first_met", "birthday",
+    )
+)
 
 
 class SingleNoteParserTests(unittest.TestCase):
@@ -39,7 +50,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "heading-forms.md"
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         self.assertEqual(
             [(region.raw_markdown, region.parsed_text, region.address_text) for region in parsed.regions],
             [
@@ -77,7 +88,7 @@ uuid: heading-forms
         self.assertIsNone(unit.wikilinks[0].target_region_fragment)
 
     def test_admitted_absence_and_blank_are_distinct(self):
-        config = BuildConfig("test", "uuid", (), ("architect_or_operator", "missing"))
+        config = build_config(fields=("architect_or_operator", "missing"))
         parsed = parse_note(ROOT / "docs/07_Tuesday.md", vault_root=ROOT / "docs", build_config=config)
         states = {field.name: field.state for field in parsed.semantic_object.admitted_fields}
         self.assertEqual(states["architect_or_operator"], "present_blank")
@@ -88,7 +99,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "note.md"
             path.write_text(source, encoding="utf-8")
-            config = BuildConfig("test", "uuid", (), ("empty",))
+            config = build_config(fields=("empty",))
             parsed = parse_note(path, vault_root=directory, build_config=config)
         self.assertEqual(len(parsed.units), 3)
         self.assertEqual(parsed.units[0].parsed_text, "first\nsecond")
@@ -102,7 +113,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "nested.md"
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         self.assertEqual([unit.region_path for unit in parsed.units], [("region-0001", "region-0002"), ("region-0001", "region-0002", "region-0003")])
 
     def test_authored_path_and_scope_hierarchy_are_separate(self):
@@ -111,7 +122,7 @@ uuid: heading-forms
             path = Path(directory) / "scope" / "nested.md"
             path.parent.mkdir()
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         self.assertEqual(parsed.semantic_object.authored_path, "scope/nested.md")
         self.assertEqual(parsed.semantic_object.path_hierarchy, ("scope",))
         self.assertEqual(parsed.units[0].authored_path, "scope/nested.md")
@@ -121,7 +132,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "fenced.md"
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         self.assertEqual(len(parsed.regions), 1)
         self.assertEqual(len(parsed.units), 1)
         self.assertEqual(parsed.units[0].wikilinks, ())
@@ -133,7 +144,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "callout.md"
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         self.assertEqual(len(parsed.units), 1)
         self.assertEqual(len(parsed.regions), 0)
         self.assertEqual(parsed.units[0].wikilinks[0].target, "topic")
@@ -144,7 +155,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "configured.md"
             path.write_text(source, encoding="utf-8")
-            config = BuildConfig("test", "identity", (), ("kept", "absent_field"))
+            config = build_config("test", "identity", fields=("kept", "absent_field"))
             parsed = parse_note(path, vault_root=directory, build_config=config)
         self.assertEqual(parsed.semantic_object.uuid, "configured-id")
         self.assertEqual([field.name for field in parsed.semantic_object.admitted_fields], ["kept", "absent_field"])
@@ -160,7 +171,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "embeds.md"
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         unit = parsed.units[0]
         self.assertEqual([(link.target, link.label, link.target_region_fragment) for link in unit.wikilinks], [("note", "label", "Region")])
         self.assertEqual(
@@ -175,7 +186,7 @@ uuid: heading-forms
         with TemporaryDirectory() as directory:
             path = Path(directory) / "links.md"
             path.write_text(source, encoding="utf-8")
-            parsed = parse_note(path, vault_root=directory, build_config=BuildConfig("test", "uuid", (), ()))
+            parsed = parse_note(path, vault_root=directory, build_config=build_config())
         self.assertEqual(
             [(link.target, link.label, link.target_region_fragment) for link in parsed.units[0].wikilinks],
             [("Object", "Object", "Region"), ("Object", "visible", "Other")],

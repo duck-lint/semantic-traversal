@@ -17,6 +17,7 @@ from ugh_parser import (
     write_completed_ingest,
     hydrate_unit,
 )
+from tests._test_helpers import build_config
 
 
 class LexicalRetrievalTests(unittest.TestCase):
@@ -30,10 +31,7 @@ class LexicalRetrievalTests(unittest.TestCase):
         root = Path(directory.name)
         self._write(root, "journal/2026/source.md", "---\nuuid: source-uuid\nparsed_text: metadata lexical namespace\ntitle: Café Running\nlabels: [Alpha, Beta, [Hidden]]\naliases: [AliasOne, AliasTwo]\ntags: [TagOne, TagTwo, repeat, repeat]\nnumber: 7\nflag: true\nday: 2026-01-02\nmoment: 2026-01-02T03:04:05\nmapping: {label: HiddenMapping}\nblank:\n---\nAlpha beta socially necessary labour time\n# Philosophy\nphilosophy body\n## Schopenhauer\nfourfold root socially necessary labour time\n")
         self._write(root, "other.md", "---\nuuid: other-uuid\n---\nAlpha independent text\n")
-        config = BuildConfig(
-            "test", "uuid", (),
-            ("parsed_text", "title", "labels", "aliases", "tags", "number", "flag", "day", "moment", "mapping", "blank", "missing"),
-        )
+        config = build_config(fields=("parsed_text", "title", "labels", "aliases", "tags", "number", "flag", "day", "moment", "mapping", "blank", "missing"))
         parsed = parse_vault(root, config)
         materialized = materialize_context(parsed)
         resolved = resolve_relations(materialized)

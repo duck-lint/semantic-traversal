@@ -12,6 +12,7 @@ from ugh_parser import (
     parse_vault,
     resolve_relations,
 )
+from tests._test_helpers import build_config
 from ugh_parser.vault import CorpusFailure
 
 
@@ -29,7 +30,7 @@ class ResolutionTests(unittest.TestCase):
         root = Path(directory.name)
         for relative, source in files.items():
             self._write(root, relative, source)
-        config = BuildConfig("test", "uuid", (), fields)
+        config = build_config(fields=fields)
         materialized = materialize_context(parse_vault(root, config))
         return directory, materialized
 
@@ -228,7 +229,7 @@ class ResolutionTests(unittest.TestCase):
             directory.cleanup()
 
     def test_invalid_corpus_and_unexpected_errors_do_not_get_resolved(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         invalid_parse = VaultParseResult((), (CorpusFailure("parse", "bad", ("bad.md",)),), config)
         invalid_materialized = MaterializedCorpus(invalid_parse, ())
         with self.assertRaises(ResolutionError):

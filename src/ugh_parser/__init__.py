@@ -2,6 +2,7 @@
 
 from .parser import (
     BuildConfig,
+    SemanticIdentifierDeclaration,
     Embed,
     FrontmatterField,
     HeadingRegion,
@@ -26,6 +27,7 @@ from .vector import EmbeddingContract, EmbeddingProviderError, OllamaEmbeddingPr
 __all__ = [
     "FrontmatterField",
     "BuildConfig",
+    "SemanticIdentifierDeclaration",
     "Embed",
     "HeadingRegion",
     "NoteParseError",

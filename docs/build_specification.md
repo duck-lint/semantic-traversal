@@ -1,11 +1,11 @@
 ## 1. Build configuration
-### 1.1 Semantic-identifier admission list
-The build configuration contains a mutable list of frontmatter fields that are admitted as semantic identifiers on ingest. 
+### 1.1 Semantic-identifier declarations
+The build configuration contains an ordered mapping of frontmatter fields admitted as semantic identifiers on ingest. Each declaration includes one non-empty authored description of the semantic identifier's meaning. The declaration key controls admission and the description supplies the authored semantic meaning used downstream.
 [[Build Config Seed]] 
 ### 1.2 UUID is identity, not a semantic identifier
 `uuid` identifies the semantic object. It is not a semantic identifier merely because it appears in frontmatter. Duplicate or missing `uuid` on ingest is hard fail.
 ### 1.3 Build and runtime configuration are separate concerns
-The semantic-identifier admission list belongs to build configuration because changing the YAML schema changes ingest behavior. A runtime configuration is expected separately.
+The semantic-identifier declarations belong to build configuration because changing the YAML schema changes ingest behavior. A runtime configuration is expected separately. The exact effective build configuration that produces a completed build supplies the semantic-identifier meanings for that build; future manifest state records that configuration provenance.
 ## 2. Read and parse one Markdown note
 ### 2.1 One Markdown note is one semantic object
 Each `.md` note is one semantic object. If the Markdown note is renamed/moved while retaining its UUID, it must remain the same semantic object.
@@ -350,9 +350,11 @@ The capability catalog uses a hybrid structured representation:
 | graph | node discovery, relation occurrence lookup, inbound traversal, outbound traversal |
 
 **SPEC:** defines the rule that generates relation types
-**BUILD CONFIG:** defines which semantic-identifier fields are admitted
+**BUILD CONFIG:** defines which semantic-identifier fields are admitted and supplies one authored description for each admitted field
 **CORPUS:** supplies the actual values and wikilink targets
 **BUILT CAPABILITY CATALOG:** contains the concrete available field classes and field names, represented value domains/shapes, node classes, relation classes and relation names, retrieval surfaces, and operators; it does not enumerate corpus-instance values merely because those values exist.
+
+Every semantic-identifier declaration requires a non-empty authored description regardless of whether the completed corpus represents that field. Catalog membership remains dependent on completed-build capability facts: an admitted and described field appears only when represented by the completed build. The catalog uses descriptions from the same effective build configuration that produced that build.
 ### 11.3 Control-plane boundary
 The retrieval control plane is the deterministic execution boundary between a model-selected retrieval request and the retrieval surfaces exposed by a completed build. The capability catalog declares which retrieval field classes, fields, relations, operators, and surface capabilities are available in that build. Model 1 may select only operations exposed by the capability catalog.
 The control plane must:

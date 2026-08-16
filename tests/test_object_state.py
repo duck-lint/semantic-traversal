@@ -14,6 +14,7 @@ from ugh_parser import (
     resolve_relations,
     write_completed_ingest,
 )
+from tests._test_helpers import build_config
 
 
 class CanonicalObjectStateTests(unittest.TestCase):
@@ -23,10 +24,7 @@ class CanonicalObjectStateTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
 
     def _build(self):
-        config = BuildConfig(
-            "test", "uuid", (),
-            ("score", "tags", "related", "other", "duplicate", "blank", "missing"),
-        )
+        config = build_config(fields=("score", "tags", "related", "other", "duplicate", "blank", "missing"))
         directory = TemporaryDirectory()
         root = Path(directory.name)
         self._write(root, "source.md", """---

@@ -9,6 +9,7 @@ from ugh_parser import (
     materialize_context,
     parse_vault,
 )
+from tests._test_helpers import build_config
 from ugh_parser.vault import CorpusFailure
 
 
@@ -19,7 +20,7 @@ class ContextMaterializationTests(unittest.TestCase):
         return path
 
     def test_inherits_states_and_materializes_distinct_frontmatter_and_body_reasons(self):
-        config = BuildConfig("test", "uuid", (), ("admitted", "blank", "missing"))
+        config = build_config(fields=("admitted", "blank", "missing"))
         source = """---
 uuid: object
 admitted: "[[Object#Region|front label]]"
@@ -48,7 +49,7 @@ no link here
         self.assertEqual(materialized.units[1].relations[0].relation_name, "admitted")
 
     def test_non_admitted_frontmatter_wikilink_is_not_materialized(self):
-        config = BuildConfig("test", "uuid", (), ("admitted",))
+        config = build_config(fields=("admitted",))
         source = "---\nuuid: object\nadmitted: \"[[admitted]]\"\nnot_admitted: \"[[ignored]]\"\n---\ntext\n"
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -57,7 +58,7 @@ no link here
         self.assertEqual([(r.relation_name, r.target) for r in materialized.units[0].relations], [("admitted", "admitted")])
 
     def test_heading_wikilinks_are_region_structure_not_body_relations(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         source = "---\nuuid: object\n---\n# [[Target|Visible]]\nbody text\n"
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -68,7 +69,7 @@ no link here
         self.assertEqual(materialized.parsed_corpus.notes[0].regions[0].address_text, "Target Visible")
 
     def test_list_valued_frontmatter_and_embeds_remain_structured(self):
-        config = BuildConfig("test", "uuid", (), ("book_read_today",))
+        config = build_config(fields=("book_read_today",))
         source = "---\nuuid: object\nbook_read_today:\n  - \"[[Book#Chapter|book label]]\"\n---\n![[assets/image.png]]\n"
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -82,13 +83,13 @@ no link here
         self.assertFalse(any(relation.origin == "body" for relation in unit.relations))
 
     def test_invalid_corpus_is_rejected_before_materialization(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         invalid = VaultParseResult((), (CorpusFailure("missing_uuid", "missing", ("bad.md",)),), config)
         with self.assertRaises(MaterializationError):
             materialize_context(invalid)
 
     def test_no_global_unit_id_is_introduced(self):
-        config = BuildConfig("test", "uuid", (), ())
+        config = build_config()
         source = "---\nuuid: object\n---\ntext\n"
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -97,8 +98,8 @@ no link here
         self.assertFalse(hasattr(materialized.units[0], "unit_id"))
 
     def test_parsed_configuration_is_bound_and_retained_by_reference(self):
-        config = BuildConfig("test", "uuid", (), ("admitted",))
-        other = BuildConfig("other", "identity", (), ("different",))
+        config = build_config(fields=("admitted",))
+        other = build_config("other", "identity", fields=("different",))
         source = "---\nuuid: object\nadmitted: value\n---\ntext\n"
         with TemporaryDirectory() as directory:
             root = Path(directory)
