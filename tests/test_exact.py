@@ -4,7 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig, build_exact_index, canonicalize_ingest, exact_lookup,
     hydrate_unit, materialize_context, parse_vault, resolve_relations,
     write_completed_ingest,

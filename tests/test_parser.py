@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ugh_parser import BuildConfig, NoteParseError, SemanticIdentifierDeclaration, load_build_config, parse_note
+from semantic_traversal import BuildConfig, NoteParseError, SemanticIdentifierDeclaration, load_build_config, parse_note
 from tests._test_helpers import build_config
 
 

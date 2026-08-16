@@ -5,6 +5,8 @@ agent_harness/private/
 __pycache__/
 *.py[cod]
 build/
+!src/semantic_traversal/build/
+!src/semantic_traversal/build/*.py
 dist/
 output/
 .runtime_deps/

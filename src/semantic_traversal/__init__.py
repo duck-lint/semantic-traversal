@@ -1,6 +1,6 @@
 """Single-note parsing for the build's first implementation stage."""
 
-from .parser import (
+from .build.parser import (
     BuildConfig,
     SemanticIdentifierDeclaration,
     Embed,
@@ -14,15 +14,15 @@ from .parser import (
     load_build_config,
     parse_note,
 )
-from .vault import CorpusFailure, VaultParseResult, discover_markdown_notes, parse_vault
-from .materialize import MaterializedCorpus, MaterializedObject, MaterializedUnit, MaterializationError, RelationCandidate, materialize_context
-from .resolve import ResolutionError, ResolutionFailure, ResolutionResult, ResolvedObjectRelation, ResolvedRelation, ObjectTarget, RegionTarget, resolve_relations
-from .canonical import CanonicalObject, CanonicalObjectRelation, CanonicalRegion, CanonicalRegionReference, CanonicalRelation, CanonicalUnit, CanonicalizationError, CompletedIngest, canonicalize_ingest
-from .substrate import SubstrateError, foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
-from .exact import exact_lookup, build_exact_index
-from .lexical import LexicalHit, build_lexical_index, lexical_integrity_check, lexical_lookup
-from .graph import GraphDiscoveryHit, GraphEdgeOccurrence, GraphError, GraphHandle, GraphTraversalHit, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
-from .vector import EmbeddingContract, EmbeddingProviderError, OllamaEmbeddingProvider, VectorError, VectorHit, VectorTarget, build_vector_index, segment_and_embed, validate_vector_index, vector_eligible_targets, vector_lookup
+from .build.vault import CorpusFailure, VaultParseResult, discover_markdown_notes, parse_vault
+from .build.materialize import MaterializedCorpus, MaterializedObject, MaterializedUnit, MaterializationError, RelationCandidate, materialize_context
+from .build.resolve import ResolutionError, ResolutionFailure, ResolutionResult, ResolvedObjectRelation, ResolvedRelation, ObjectTarget, RegionTarget, resolve_relations
+from .build.canonical import CanonicalObject, CanonicalObjectRelation, CanonicalRegion, CanonicalRegionReference, CanonicalRelation, CanonicalUnit, CanonicalizationError, CompletedIngest, canonicalize_ingest
+from .projection.substrate import SubstrateError, foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
+from .projection.exact import exact_lookup, build_exact_index
+from .projection.lexical import LexicalHit, build_lexical_index, lexical_integrity_check, lexical_lookup
+from .projection.graph import GraphDiscoveryHit, GraphEdgeOccurrence, GraphError, GraphHandle, GraphTraversalHit, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
+from .projection.vector import EmbeddingContract, EmbeddingProviderError, OllamaEmbeddingProvider, VectorError, VectorHit, VectorTarget, build_vector_index, segment_and_embed, validate_vector_index, vector_eligible_targets, vector_lookup
 
 __all__ = [
     "FrontmatterField",

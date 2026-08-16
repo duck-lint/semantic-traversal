@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from dataclasses import replace
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig,
     CanonicalizationError,
     canonicalize_ingest,

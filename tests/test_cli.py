@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from ugh_parser import EmbeddingContract, EmbeddingProviderError, GraphHandle, vector_eligible_targets
-from ugh_parser.cli import _graph_traverse, main
+from semantic_traversal import EmbeddingContract, EmbeddingProviderError, GraphHandle, vector_eligible_targets
+from semantic_traversal.cli import _graph_traverse, main
 
 
 class CliProvider:
@@ -75,7 +75,7 @@ class CliTests(unittest.TestCase):
             vault, config = self._fixture(root)
             source_before = {path.relative_to(vault): path.read_bytes() for path in vault.rglob("*") if path.is_file()}
             output = root / "build"
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", CliProvider):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", CliProvider):
                 code, stdout, stderr = self._run("build", "--vault", str(vault), "--config", str(config), "--output", str(output), "--json")
             self.assertEqual(code, 0)
             self.assertEqual(set(json.loads(stdout)), {"substrate", "vectors"})
@@ -109,7 +109,7 @@ class CliTests(unittest.TestCase):
             root = Path(directory)
             vault, config = self._fixture(root)
             output = root / "build"
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", CliProvider):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", CliProvider):
                 self.assertEqual(self._run("build", "--vault", str(vault), "--config", str(config), "--output", str(output))[0], 0)
                 code, stdout, _ = self._run("inspect", "counts", "--build", str(output), "--json")
                 self.assertEqual(code, 0)
@@ -150,7 +150,7 @@ class CliTests(unittest.TestCase):
             root = Path(directory)
             vault, config = self._fixture(root)
             output = root / "build"
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", CliProvider):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", CliProvider):
                 self.assertEqual(self._run("build", "--vault", str(vault), "--config", str(config), "--output", str(output))[0], 0)
 
             code, stdout, _ = self._run("lexical", "terms", "--build", str(output), "--field-class", "intrinsic", "--field-name", "parsed_text", "--term", "target", "--json")
@@ -173,12 +173,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(json.loads(stdout)), 1)
 
             query_provider = CliProvider()
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", return_value=query_provider):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", return_value=query_provider):
                 code, stdout, _ = self._run("vector", "--build", str(output), "--query", "query text", "--json")
             self.assertEqual(code, 0)
             self.assertEqual(len(json.loads(stdout)), 3)
             self.assertEqual(query_provider.calls, [("query text", False)])
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", return_value=CliProvider(model="other")):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", return_value=CliProvider(model="other")):
                 self.assertNotEqual(self._run("vector", "--build", str(output), "--query", "query text", "--json")[0], 0)
 
     def test_counts_use_python_strip_for_non_sqlite_whitespace(self):
@@ -186,7 +186,7 @@ class CliTests(unittest.TestCase):
             root = Path(directory)
             vault, config = self._fixture(root)
             output = root / "build"
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", CliProvider):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", CliProvider):
                 self.assertEqual(self._run("build", "--vault", str(vault), "--config", str(config), "--output", str(output))[0], 0)
             connection = sqlite3.connect(output / "substrate.sqlite3")
             connection.execute("UPDATE canonical_units SET parsed_text = ? WHERE unit_id = 1", ("\t\n",))
@@ -220,8 +220,8 @@ class CliTests(unittest.TestCase):
     def test_graph_handle_json_decodes_nested_identity_shapes(self):
         captured = []
         connection = sqlite3.connect(":memory:")
-        with patch("ugh_parser.cli._connection", return_value=connection), patch(
-            "ugh_parser.cli.graph_traverse", side_effect=lambda _c, handle, *_args: captured.append(handle) or ()
+        with patch("semantic_traversal.cli._connection", return_value=connection), patch(
+            "semantic_traversal.cli.graph_traverse", side_effect=lambda _c, handle, *_args: captured.append(handle) or ()
         ):
             for raw, expected in (
                 ({"node_kind": "semantic_object", "identity": ["u"]}, ("u",)),
@@ -239,7 +239,7 @@ class CliTests(unittest.TestCase):
             root = Path(directory)
             vault, config = self._fixture(root)
             output = root / "build"
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", CliProvider):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", CliProvider):
                 self.assertEqual(self._run("build", "--vault", str(vault), "--config", str(config), "--output", str(output))[0], 0)
             artifact = output / "substrate.sqlite3"
             before = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -264,7 +264,7 @@ class CliTests(unittest.TestCase):
 
             (vault / "Source.md").write_text("---\nuuid: source\nrelation: \"[[Target]]\"\n---\nsource body\n", encoding="utf-8")
             output = root / "provider-build"
-            with patch("ugh_parser.cli.OllamaEmbeddingProvider", side_effect=EmbeddingProviderError("provider down")):
+            with patch("semantic_traversal.cli.OllamaEmbeddingProvider", side_effect=EmbeddingProviderError("provider down")):
                 code, _, stderr = self._run("build", "--vault", str(vault), "--config", str(config), "--output", str(output))
             self.assertNotEqual(code, 0)
             self.assertIn("provider down", stderr)

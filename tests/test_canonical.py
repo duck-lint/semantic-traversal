@@ -3,7 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig,
     CanonicalizationError,
     ResolutionFailure,

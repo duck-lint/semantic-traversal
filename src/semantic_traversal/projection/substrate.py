@@ -12,7 +12,7 @@ import sqlite3
 from datetime import date, datetime
 from typing import Any
 
-from .canonical import (
+from ..build.canonical import (
     CanonicalObject,
     CanonicalObjectRelation,
     CanonicalRelation,
@@ -20,7 +20,7 @@ from .canonical import (
     CanonicalUnit,
     CompletedIngest,
 )
-from .parser import Embed, FrontmatterField
+from ..build.parser import Embed, FrontmatterField
 
 
 class SubstrateError(ValueError):
@@ -448,7 +448,7 @@ def hydrate_object(connection: sqlite3.Connection, source_object_uuid: str) -> C
         (source_object_uuid,),
     ).fetchall():
         reference = _region_reference(connection, source_object_uuid, path_json)
-        from .canonical import CanonicalRegion
+        from ..build.canonical import CanonicalRegion
         regions.append(CanonicalRegion(reference, level, raw, parsed_text, address_text, parent_region_id))
     return CanonicalObject(source_object_uuid, source_path, path_hierarchy,
                            fields, tuple(relations), tuple(regions))

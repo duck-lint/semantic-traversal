@@ -14,18 +14,18 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .canonical import canonicalize_ingest
-from .catalog import generate_catalog
-from .capability_facts import human_capability_facts, observe_capability_facts
-from .exact import exact_lookup, build_exact_index
-from .graph import GraphHandle, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
-from .lexical import build_lexical_index, lexical_integrity_check, lexical_lookup
-from .materialize import materialize_context
-from .parser import _missing_semantic_identifier_descriptions, load_build_config
-from .resolve import resolve_relations
-from .substrate import foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
-from .vault import parse_vault
-from .vector import OllamaEmbeddingProvider, build_vector_index, validate_vector_index, vector_eligible_targets, vector_lookup
+from .build.canonical import canonicalize_ingest
+from .projection.catalog import generate_catalog
+from .projection.capability_facts import human_capability_facts, observe_capability_facts
+from .projection.exact import exact_lookup, build_exact_index
+from .projection.graph import GraphHandle, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
+from .projection.lexical import build_lexical_index, lexical_integrity_check, lexical_lookup
+from .build.materialize import materialize_context
+from .build.parser import _missing_semantic_identifier_descriptions, load_build_config
+from .build.resolve import resolve_relations
+from .projection.substrate import foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
+from .build.vault import parse_vault
+from .projection.vector import OllamaEmbeddingProvider, build_vector_index, validate_vector_index, vector_eligible_targets, vector_lookup
 
 
 class CliError(ValueError):

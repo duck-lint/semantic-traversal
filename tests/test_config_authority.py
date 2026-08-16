@@ -1,9 +1,9 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import ugh_parser
+import semantic_traversal
 
-from ugh_parser import (
+from semantic_traversal import (
     NoteParseError,
     SemanticIdentifierDeclaration,
     load_build_config,
@@ -78,8 +78,8 @@ class ConfigAuthorityTests(unittest.TestCase):
                 load_build_config(path)
 
     def test_homework_artifact_api_is_not_public(self):
-        self.assertFalse(hasattr(ugh_parser, "semantic_identifier_homework"))
-        self.assertFalse(hasattr(ugh_parser, "write_semantic_identifier_homework"))
+        self.assertFalse(hasattr(semantic_traversal, "semantic_identifier_homework"))
+        self.assertFalse(hasattr(semantic_traversal, "write_semantic_identifier_homework"))
 
     def test_adding_or_removing_a_declaration_changes_admission_without_touching_values(self):
         with TemporaryDirectory() as directory:

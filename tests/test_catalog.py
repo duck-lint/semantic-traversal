@@ -7,8 +7,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from ugh_parser.catalog import CatalogGenerationError, generate_catalog
-from ugh_parser.cli import main
+from semantic_traversal.projection.catalog import CatalogGenerationError, generate_catalog
+from semantic_traversal.cli import main
 
 
 class CatalogTests(unittest.TestCase):
@@ -278,7 +278,7 @@ class CatalogTests(unittest.TestCase):
             config = self._config(root, descriptions)
             output = root / "catalog.json"
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch("ugh_parser.cli._connection"), patch("ugh_parser.cli.observe_capability_facts", return_value=self._facts()):
+            with patch("semantic_traversal.cli._connection"), patch("semantic_traversal.cli.observe_capability_facts", return_value=self._facts()):
                 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                     code = main([
                         "catalog", "generate", "--build", str(root / "completed-build"),
@@ -303,7 +303,7 @@ class CatalogTests(unittest.TestCase):
             output = root / "catalog.json"
             output.write_text("sentinel", encoding="utf-8")
             stderr = io.StringIO()
-            with patch("ugh_parser.cli.observe_capability_facts", side_effect=AssertionError("must not observe incomplete config")):
+            with patch("semantic_traversal.cli.observe_capability_facts", side_effect=AssertionError("must not observe incomplete config")):
                 with contextlib.redirect_stderr(stderr):
                     code = main([
                         "catalog", "generate", "--build", str(root / "completed-build"),

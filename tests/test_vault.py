@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig,
     NoteParseError,
     discover_markdown_notes,
@@ -76,7 +76,7 @@ class WholeVaultParsingTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, "note.md", "---\nuuid: note\n---\nnote\n")
-            with patch("ugh_parser.vault.parse_note", side_effect=RuntimeError("implementation defect")):
+            with patch("semantic_traversal.build.vault.parse_note", side_effect=RuntimeError("implementation defect")):
                 with self.assertRaisesRegex(RuntimeError, "implementation defect"):
                     parse_vault(root, config)
 

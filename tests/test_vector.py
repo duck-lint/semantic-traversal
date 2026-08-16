@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-from ugh_parser import (
+from semantic_traversal import (
     EmbeddingContract,
     EmbeddingProviderError,
     OllamaEmbeddingProvider,
@@ -19,7 +19,7 @@ from ugh_parser import (
     vector_eligible_targets,
     vector_lookup,
 )
-from ugh_parser.substrate import SCHEMA
+from semantic_traversal.projection.substrate import SCHEMA
 
 
 class ProviderDouble:
@@ -227,7 +227,7 @@ class VectorProjectionTests(unittest.TestCase):
         ]
         for message, expected_capacity, status in cases:
             with self.subTest(message=message):
-                with patch("ugh_parser.vector._post_json", side_effect=EmbeddingProviderError(message, status=status)):
+                with patch("semantic_traversal.projection.vector._post_json", side_effect=EmbeddingProviderError(message, status=status)):
                     with self.assertRaises(EmbeddingProviderError) as raised:
                         provider.embed("x", truncate=False)
                 self.assertEqual(raised.exception.capacity_exceeded, expected_capacity)
@@ -262,7 +262,7 @@ class VectorProjectionTests(unittest.TestCase):
                     raise OSError("injected matrix promotion failure")
                 return real_replace(source, destination)
 
-            with patch("ugh_parser.vector.os.replace", side_effect=fail_new_promotion):
+            with patch("semantic_traversal.projection.vector.os.replace", side_effect=fail_new_promotion):
                 with self.assertRaises(OSError):
                     build_vector_index(connection, matrix_path, provider)
             self.assertEqual(matrix_path.read_bytes(), old_bytes)

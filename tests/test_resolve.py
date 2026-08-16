@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig,
     MaterializedCorpus,
     ResolutionError,
@@ -13,7 +13,7 @@ from ugh_parser import (
     resolve_relations,
 )
 from tests._test_helpers import build_config
-from ugh_parser.vault import CorpusFailure
+from semantic_traversal.build.vault import CorpusFailure
 
 
 class ResolutionTests(unittest.TestCase):
@@ -237,7 +237,7 @@ class ResolutionTests(unittest.TestCase):
 
         directory, corpus = self._resolve({"source.md": self._note("source", "text")})
         try:
-            with patch("ugh_parser.resolve._build_index", side_effect=RuntimeError("implementation defect")):
+            with patch("semantic_traversal.build.resolve._build_index", side_effect=RuntimeError("implementation defect")):
                 with self.assertRaisesRegex(RuntimeError, "implementation defect"):
                     resolve_relations(corpus)
         finally:
