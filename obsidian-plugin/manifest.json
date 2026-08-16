@@ -1,9 +1,0 @@
-{
-  "id": "semantic-traversal",
-  "name": "Semantic traversal",
-  "version": "0.1.0",
-  "minAppVersion": "1.7.2",
-  "description": "A small Obsidian interface for the semantic-traversal conversational runtime.",
-  "author": "duck-lint",
-  "isDesktopOnly": true
-}
