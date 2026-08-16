@@ -39,7 +39,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
 
     def catalog(self, directory):
         path = Path(directory) / "capability_catalog.json"
-        content = json.dumps({"catalog_schema_version": "1", "semantic_dimensions": [], "graph": {"node_kinds": [], "discovery": [], "relations": []}, "vector": {"operator": "vector.semantic_similarity", "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False}, "targets": []}, "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}}}, separators=(",", ":"))
+        content = json.dumps({"catalog_schema_version": "1", "semantic_dimensions": [], "graph": {"node_kinds": [], "discovery": [], "relations": []}, "vector": {"operator": "vector.semantic_similarity", "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False}, "targets": []}, "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}, "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"}}}, separators=(",", ":"))
         path.write_bytes(content.encode("utf-8"))
         return path, content
 

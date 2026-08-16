@@ -32,10 +32,10 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
             "graph": {"node_kinds": [], "discovery": [], "relations": []},
             "vector": {
                 "operator": "vector.semantic_similarity",
-                "query": {"shape": "string", "requirement": "one string", "segmentation": False, "truncation": False, "deterministic_enrichment": False},
+                "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False},
                 "targets": [],
             },
-            "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}},
+            "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}, "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"}},
         }
 
     def _prepare(self, directory):

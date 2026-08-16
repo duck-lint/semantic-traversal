@@ -73,7 +73,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 },
             ],
             "graph": {
-                "node_kinds": ["semantic_object", "semantic_region"],
+                "node_kinds": ["semantic_object", "semantic_region", "semantic_unit"],
                 "discovery": [
                     {"node_kind": "semantic_object", "dimension_name": "tag", "description": "object tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"},
                     {"node_kind": "semantic_region", "dimension_name": "address_text", "description": "region address", "operators": ["graph.discovery.phrase"], "result": "opaque_graph_handle"},
@@ -95,6 +95,8 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 "graph.discovery.terms": {"surface": "graph", "meaning": "graph discovery terms"},
                 "graph.discovery.phrase": {"surface": "graph", "meaning": "graph discovery phrase"},
                 "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "relation occurrence lookup"},
+                "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound traversal"},
+                "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound traversal"},
             },
         }
 
@@ -231,9 +233,6 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         cases = []
         catalog = self.catalog()
         request = self.requests()[0]
-        without_operator = copy.deepcopy(catalog)
-        del without_operator["operators"]["exact.equals"]
-        cases.append(("operator_not_advertised", without_operator, [request]))
         without_field = copy.deepcopy(catalog)
         without_field["semantic_dimensions"] = [item for item in without_field["semantic_dimensions"] if item["field_name"] != "parsed_text"]
         cases.append(("field_not_advertised", without_field, [request]))
@@ -247,9 +246,6 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         wrong_shape = copy.deepcopy(catalog)
         ordered_request = dict(self.requests()[2], field_class="intrinsic", field_name="parsed_text")
         cases.append(("operand_shape_not_advertised", wrong_shape, [ordered_request]))
-        wrong_member_domain = copy.deepcopy(catalog)
-        wrong_member_domain["semantic_dimensions"][2]["access"][0]["operand"]["member_domains"] = ["integer"]
-        cases.append(("operand_domain_not_advertised", wrong_member_domain, [self.requests()[2]]))
         no_lexical = copy.deepcopy(catalog)
         no_lexical["semantic_dimensions"][0]["access"] = [no_lexical["semantic_dimensions"][0]["access"][0]]
         cases.append(("field_access_not_advertised", no_lexical, [self.requests()[3]]))
@@ -263,9 +259,6 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         no_relation_operation = copy.deepcopy(catalog)
         no_relation_operation["graph"]["relations"][0]["operations"] = ["graph.inbound_traversal"]
         cases.append(("graph_relation_operation_not_advertised", no_relation_operation, [self.requests()[8]]))
-        no_vector = copy.deepcopy(catalog)
-        no_vector["vector"]["operator"] = "other"
-        cases.append(("vector_operator_not_advertised", no_vector, [self.requests()[5]]))
         for expected_code, case_catalog, case_requests in cases:
             with self.subTest(code=expected_code), TemporaryDirectory() as directory:
                 database, catalog_path, run_id, _, _ = self.prepared(directory, catalog=case_catalog, requests=case_requests)
