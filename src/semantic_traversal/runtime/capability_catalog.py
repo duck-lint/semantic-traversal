@@ -46,6 +46,27 @@ _GLOBAL_OPERATOR_SURFACES = {
     "graph.inbound_traversal": "graph",
     "graph.outbound_traversal": "graph",
 }
+_FIELD_CLASSES = frozenset({"intrinsic", "semantic_identifier", "region", "semantic_path"})
+_FIXED_VALUE_MODELS = {
+    ("intrinsic", "raw_markdown"): {"scalar": ("string",)},
+    ("intrinsic", "parsed_text"): {"scalar": ("string",)},
+    ("region", "region_path"): {"ordered_sequence": ("string",)},
+    ("region", "region_text"): {"scalar": ("string",)},
+    ("semantic_path", "path_component"): {"scalar": ("string",)},
+    ("semantic_path", "path_hierarchy"): {"ordered_sequence": ("string",)},
+}
+_GRAPH_DISCOVERY_IDENTITIES = frozenset({
+    ("semantic_object", "address_text"),
+    ("semantic_object", "tag"),
+    ("semantic_region", "address_text"),
+})
+_RELATION_ENDPOINTS = {
+    ("body_wikilink", "linked_to"): (("semantic_unit",), ("semantic_object", "semantic_region")),
+    ("structural", "contains_scope"): (("scope",), ("scope",)),
+    ("structural", "contains_object"): (("scope",), ("semantic_object",)),
+    ("structural", "contains_region"): (("semantic_object", "semantic_region"), ("semantic_region",)),
+    ("structural", "contains_unit"): (("semantic_object", "semantic_region"), ("semantic_unit",)),
+}
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -126,7 +147,7 @@ def _validate_value(value: Any, label: str) -> dict[str, tuple[str, ...]]:
     return models
 
 
-def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[str, ...]]) -> tuple[str, str]:
+def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[str, ...]], field_class: str, field_name: str) -> tuple[str, str]:
     if not isinstance(access, dict) or "operator" not in access or "target" not in access:
         raise CapabilityCatalogError(f"{label} is malformed")
     operator = _text(access["operator"], f"{label}.operator")
@@ -150,7 +171,7 @@ def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[s
             if expected_shape not in value_models or "string" not in value_models[expected_shape]:
                 raise CapabilityCatalogError(f"{label} is inconsistent with its value model")
         else:
-            if operator != "vector.semantic_similarity" or target != "complete_value" or domains != ("string",) or "scalar" not in value_models or "string" not in value_models["scalar"]:
+            if operator != "vector.semantic_similarity" or field_class != "intrinsic" or field_name != "parsed_text" or target != "complete_value" or domains != ("string",) or "scalar" not in value_models or "string" not in value_models["scalar"]:
                 raise CapabilityCatalogError(f"{label} is an illegal vector access")
     elif "operand" in access:
         entry = _mapping(access, {"operator", "target", "operand"}, label)
@@ -175,17 +196,28 @@ def _validate_semantic_dimensions(value: Any) -> set[str]:
     for index, item in enumerate(value):
         label = f"semantic_dimensions[{index}]"
         entry = _mapping(item, {"field_class", "field_name", "description", "value", "access"}, label)
-        identity = (_text(entry["field_class"], f"{label}.field_class"), _text(entry["field_name"], f"{label}.field_name"))
+        field_class = _text(entry["field_class"], f"{label}.field_class")
+        field_name = _text(entry["field_name"], f"{label}.field_name")
+        identity = (field_class, field_name)
+        if field_class not in _FIELD_CLASSES:
+            raise CapabilityCatalogError(f"{label}.field_class is unsupported")
+        if field_class != "semantic_identifier" and identity not in _FIXED_VALUE_MODELS:
+            raise CapabilityCatalogError(f"{label} has an unsupported fixed field identity")
         if identity in identities:
             raise CapabilityCatalogError("semantic_dimensions contains duplicate identities")
         identities.add(identity)
         _text(entry["description"], f"{label}.description")
         value_models = _validate_value(entry["value"], f"{label}.value")
+        if field_class == "semantic_identifier":
+            if "ordered_sequence" in value_models:
+                raise CapabilityCatalogError(f"{label} semantic identifiers cannot use ordered_sequence")
+        elif value_models != _FIXED_VALUE_MODELS[identity]:
+            raise CapabilityCatalogError(f"{label} has an incompatible fixed value model")
         if not isinstance(entry["access"], list):
             raise CapabilityCatalogError(f"{label}.access must be an array")
         access_identities: set[tuple[str, str]] = set()
         for access_index, access in enumerate(entry["access"]):
-            access_identity = _validate_access(access, f"{label}.access[{access_index}]", value_models)
+            access_identity = _validate_access(access, f"{label}.access[{access_index}]", value_models, field_class, field_name)
             if access_identity in access_identities:
                 raise CapabilityCatalogError(f"{label}.access contains duplicate identities")
             access_identities.add(access_identity)
@@ -210,12 +242,14 @@ def _validate_graph(value: Any) -> set[str]:
         if identity in discovery_ids:
             raise CapabilityCatalogError("graph.discovery contains duplicate identities")
         discovery_ids.add(identity)
+        if identity not in _GRAPH_DISCOVERY_IDENTITIES:
+            raise CapabilityCatalogError(f"{label} has an unsupported schema-1 discovery identity")
         if identity[0] not in node_kinds:
             raise CapabilityCatalogError(f"{label}.node_kind is not admitted by graph.node_kinds")
         _text(entry["description"], f"{label}.description")
         operators = _text_list(entry["operators"], f"{label}.operators", nonempty=True)
-        if any(operator not in _GRAPH_DISCOVERY_OPERATORS for operator in operators):
-            raise CapabilityCatalogError(f"{label}.operators contains an unsupported operation")
+        if set(operators) != _GRAPH_DISCOVERY_OPERATORS:
+            raise CapabilityCatalogError(f"{label}.operators does not match the schema-1 discovery grammar")
         references.update(operators)
         if _text(entry["result"], f"{label}.result") != "opaque_graph_handle":
             raise CapabilityCatalogError(f"{label}.result is unsupported")
@@ -227,14 +261,25 @@ def _validate_graph(value: Any) -> set[str]:
         if identity in relation_ids:
             raise CapabilityCatalogError("graph.relations contains duplicate identities")
         relation_ids.add(identity)
+        relation_class, relation_name = identity
+        if relation_class == "semantic_identifier":
+            if relation_name == "tags":
+                raise CapabilityCatalogError("semantic_identifier/tags is not graph topology")
+            expected_endpoints = (("semantic_object",), ("semantic_object", "semantic_region"))
+        elif identity in _RELATION_ENDPOINTS:
+            expected_endpoints = _RELATION_ENDPOINTS[identity]
+        else:
+            raise CapabilityCatalogError(f"{label} has an unsupported schema-1 relation identity")
         _text(entry["description"], f"{label}.description")
         source_kinds = _text_list(entry["source_kinds"], f"{label}.source_kinds", nonempty=True)
         target_kinds = _text_list(entry["target_kinds"], f"{label}.target_kinds", nonempty=True)
+        if (source_kinds, target_kinds) != expected_endpoints:
+            raise CapabilityCatalogError(f"{label} has incompatible schema-1 endpoints")
         if any(kind not in node_kinds for kind in (*source_kinds, *target_kinds)):
             raise CapabilityCatalogError(f"{label} references a node kind not admitted by graph.node_kinds")
         operations = _text_list(entry["operations"], f"{label}.operations", nonempty=True)
-        if any(operation not in _GRAPH_RELATION_OPERATIONS for operation in operations):
-            raise CapabilityCatalogError(f"{label}.operations contains an unsupported operation")
+        if set(operations) != _GRAPH_RELATION_OPERATIONS:
+            raise CapabilityCatalogError(f"{label}.operations does not match the schema-1 relation grammar")
         references.update(operations)
     return references
 
@@ -279,6 +324,8 @@ def _validate_operators(value: Any, references: set[str]) -> None:
         if _text(entry["surface"], f"operators[{name!r}].surface") != _GLOBAL_OPERATOR_SURFACES[name]:
             raise CapabilityCatalogError(f"operator {name!r} has an incompatible surface")
         _text(entry["meaning"], f"operators[{name!r}].meaning")
+    if set(value) != set(_GLOBAL_OPERATOR_SURFACES):
+        raise CapabilityCatalogError("operators does not match the exact schema-1 operator set")
     missing = sorted(references.difference(value))
     if missing:
         raise CapabilityCatalogError(f"referenced operator is absent from operators: {missing[0]}")

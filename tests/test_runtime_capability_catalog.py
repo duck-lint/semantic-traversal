@@ -27,8 +27,8 @@ class CatalogAdmissionTests(unittest.TestCase):
             }],
             "graph": {
                 "node_kinds": ["semantic_object", "semantic_region", "semantic_unit"],
-                "discovery": [{"node_kind": "semantic_object", "dimension_name": "tag", "description": "tag", "operators": ["graph.discovery.terms"], "result": "opaque_graph_handle"}],
-                "relations": [{"relation_class": "body_wikilink", "relation_name": "linked_to", "description": "body link", "source_kinds": ["semantic_unit"], "target_kinds": ["semantic_object"], "operations": ["graph.relation_occurrence_lookup"]}],
+                "discovery": [{"node_kind": "semantic_object", "dimension_name": "tag", "description": "tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"}],
+                "relations": [{"relation_class": "body_wikilink", "relation_name": "linked_to", "description": "body link", "source_kinds": ["semantic_unit"], "target_kinds": ["semantic_object", "semantic_region"], "operations": ["graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"]}],
             },
             "vector": {
                 "operator": "vector.semantic_similarity",
@@ -37,8 +37,13 @@ class CatalogAdmissionTests(unittest.TestCase):
             },
             "operators": {
                 "exact.equals": {"surface": "exact", "meaning": "typed exact equality"},
+                "lexical.terms": {"surface": "lexical", "meaning": "lexical terms"},
+                "lexical.phrase": {"surface": "lexical", "meaning": "lexical phrase"},
                 "graph.discovery.terms": {"surface": "graph", "meaning": "graph discovery"},
+                "graph.discovery.phrase": {"surface": "graph", "meaning": "graph discovery phrase"},
                 "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "relation lookup"},
+                "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound traversal"},
+                "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound traversal"},
                 "vector.semantic_similarity": {"surface": "vector", "meaning": "similarity"},
             },
         }
@@ -143,6 +148,71 @@ class CatalogAdmissionTests(unittest.TestCase):
         missing_referenced_operator = copy.deepcopy(base)
         del missing_referenced_operator["operators"]["graph.relation_occurrence_lookup"]
         cases["referenced operator absent"] = json.dumps(missing_referenced_operator, separators=(",", ":"))
+        unknown_class = copy.deepcopy(base)
+        unknown_class["semantic_dimensions"][0]["field_class"] = "unknown"
+        cases["unknown field class"] = json.dumps(unknown_class, separators=(",", ":"))
+        for field_class, label in (("intrinsic", "intrinsic invented field"), ("region", "region invented field"), ("semantic_path", "semantic path invented field")):
+            invented = copy.deepcopy(base)
+            invented["semantic_dimensions"][0]["field_class"] = field_class
+            invented["semantic_dimensions"][0]["field_name"] = "invented_field"
+            cases[label] = json.dumps(invented, separators=(",", ":"))
+        semantic_ordered = copy.deepcopy(base)
+        semantic_ordered["semantic_dimensions"][0]["field_class"] = "semantic_identifier"
+        semantic_ordered["semantic_dimensions"][0]["field_name"] = "authored"
+        semantic_ordered["semantic_dimensions"][0]["value"] = {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]}
+        cases["semantic identifier ordered sequence"] = json.dumps(semantic_ordered, separators=(",", ":"))
+        fixed_sequence = copy.deepcopy(base)
+        fixed_sequence["semantic_dimensions"][0]["value"] = {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]}
+        cases["fixed field sequence shape"] = json.dumps(fixed_sequence, separators=(",", ":"))
+        fixed_ordered = copy.deepcopy(base)
+        fixed_ordered["semantic_dimensions"][0]["value"] = {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]}
+        cases["fixed scalar ordered shape"] = json.dumps(fixed_ordered, separators=(",", ":"))
+        semantic_vector = copy.deepcopy(base)
+        semantic_vector["semantic_dimensions"].append({"field_class": "semantic_identifier", "field_name": "title", "description": "title", "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]}, "access": [{"operator": "vector.semantic_similarity", "target": "complete_value", "domains": ["string"]}]})
+        cases["vector access semantic identifier"] = json.dumps(semantic_vector, separators=(",", ":"))
+        region_vector = copy.deepcopy(base)
+        region_vector["semantic_dimensions"].append({"field_class": "region", "field_name": "region_text", "description": "region text", "value": {"shapes": [{"shape": "scalar", "domains": ["string"]}]}, "access": [{"operator": "vector.semantic_similarity", "target": "complete_value", "domains": ["string"]}]})
+        cases["vector access region text"] = json.dumps(region_vector, separators=(",", ":"))
+        unsupported_discovery_identity = copy.deepcopy(base)
+        unsupported_discovery_identity["graph"]["discovery"][0]["dimension_name"] = "arbitrary"
+        cases["unsupported discovery identity"] = json.dumps(unsupported_discovery_identity, separators=(",", ":"))
+        missing_discovery_operation = copy.deepcopy(base)
+        missing_discovery_operation["graph"]["discovery"][0]["operators"] = ["graph.discovery.terms"]
+        cases["missing discovery operation"] = json.dumps(missing_discovery_operation, separators=(",", ":"))
+        unknown_relation_class = copy.deepcopy(base)
+        unknown_relation_class["graph"]["relations"][0]["relation_class"] = "unknown"
+        cases["unknown relation class"] = json.dumps(unknown_relation_class, separators=(",", ":"))
+        invented_body_relation = copy.deepcopy(base)
+        invented_body_relation["graph"]["relations"][0]["relation_name"] = "invented_relation"
+        cases["invented body relation"] = json.dumps(invented_body_relation, separators=(",", ":"))
+        invented_structural_relation = copy.deepcopy(base)
+        invented_structural_relation["graph"]["relations"][0]["relation_class"] = "structural"
+        invented_structural_relation["graph"]["relations"][0]["relation_name"] = "invented_relation"
+        cases["invented structural relation"] = json.dumps(invented_structural_relation, separators=(",", ":"))
+        tags_relation = copy.deepcopy(base)
+        tags_relation["graph"]["relations"][0]["relation_class"] = "semantic_identifier"
+        tags_relation["graph"]["relations"][0]["relation_name"] = "tags"
+        cases["semantic identifier tags relation"] = json.dumps(tags_relation, separators=(",", ":"))
+        wrong_body_source = copy.deepcopy(base)
+        wrong_body_source["graph"]["relations"][0]["source_kinds"] = ["semantic_object"]
+        cases["wrong body relation source"] = json.dumps(wrong_body_source, separators=(",", ":"))
+        wrong_structural_target = copy.deepcopy(base)
+        wrong_structural_target["graph"]["relations"][0]["relation_class"] = "structural"
+        wrong_structural_target["graph"]["relations"][0]["relation_name"] = "contains_scope"
+        wrong_structural_target["graph"]["relations"][0]["source_kinds"] = ["scope"]
+        wrong_structural_target["graph"]["relations"][0]["target_kinds"] = ["semantic_object"]
+        cases["wrong structural relation target"] = json.dumps(wrong_structural_target, separators=(",", ":"))
+        wrong_semantic_identifier_endpoints = copy.deepcopy(base)
+        wrong_semantic_identifier_endpoints["graph"]["relations"][0]["relation_class"] = "semantic_identifier"
+        wrong_semantic_identifier_endpoints["graph"]["relations"][0]["relation_name"] = "arbitrary_relation"
+        wrong_semantic_identifier_endpoints["graph"]["relations"][0]["source_kinds"] = ["semantic_unit"]
+        cases["wrong semantic identifier endpoints"] = json.dumps(wrong_semantic_identifier_endpoints, separators=(",", ":"))
+        missing_relation_operation = copy.deepcopy(base)
+        missing_relation_operation["graph"]["relations"][0]["operations"] = ["graph.relation_occurrence_lookup", "graph.inbound_traversal"]
+        cases["missing relation operation"] = json.dumps(missing_relation_operation, separators=(",", ":"))
+        missing_global_operator = copy.deepcopy(base)
+        del missing_global_operator["operators"]["graph.outbound_traversal"]
+        cases["missing global operator"] = json.dumps(missing_global_operator, separators=(",", ":"))
         return cases
     def _write(self, directory, text):
         path = Path(directory) / "capability_catalog.json"
@@ -178,6 +248,35 @@ class CatalogAdmissionTests(unittest.TestCase):
             self.assertEqual(artifact.sha256, "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest())
             self.assertEqual(artifact.text, text)
 
+    def test_authored_semantic_identifier_names_remain_open(self):
+        with TemporaryDirectory() as directory:
+            catalog = copy.deepcopy(self.catalog())
+            catalog["semantic_dimensions"].extend([
+                {
+                    "field_class": "semantic_identifier",
+                    "field_name": "arbitrary_authored_field_a",
+                    "description": "authored A",
+                    "value": {"shapes": [{"shape": "scalar", "domains": ["date"]}]},
+                    "access": [{"operator": "exact.equals", "target": "complete_value", "domains": ["date"]}],
+                },
+                {
+                    "field_class": "semantic_identifier",
+                    "field_name": "arbitrary_authored_field_b",
+                    "description": "authored B",
+                    "value": {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]},
+                    "access": [{"operator": "exact.equals", "target": "member", "domains": ["string"]}],
+                },
+            ])
+            catalog["graph"]["relations"].append({
+                "relation_class": "semantic_identifier",
+                "relation_name": "arbitrary_relation_name",
+                "description": "authored relation",
+                "source_kinds": ["semantic_object"],
+                "target_kinds": ["semantic_object", "semantic_region"],
+                "operations": ["graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"],
+            })
+            path = self._write(directory, json.dumps(catalog, separators=(",", ":")))
+            load_capability_catalog(path)
     def test_malformed_catalogs_fail_at_shared_admission(self):
         for label, text in self.malformed_catalogs().items():
             with self.subTest(label=label), TemporaryDirectory() as directory:

@@ -35,7 +35,7 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
                 "query": {"shape": "string", "requirement": "exactly one non-empty string", "segmentation": False, "truncation": False, "deterministic_enrichment": False},
                 "targets": [],
             },
-            "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}, "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"}},
+            "operators": {"exact.equals": {"surface": "exact", "meaning": "typed exact equality"}, "lexical.terms": {"surface": "lexical", "meaning": "terms"}, "lexical.phrase": {"surface": "lexical", "meaning": "phrase"}, "vector.semantic_similarity": {"surface": "vector", "meaning": "vector similarity"}, "graph.discovery.terms": {"surface": "graph", "meaning": "discovery terms"}, "graph.discovery.phrase": {"surface": "graph", "meaning": "discovery phrase"}, "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "lookup"}, "graph.inbound_traversal": {"surface": "graph", "meaning": "inbound"}, "graph.outbound_traversal": {"surface": "graph", "meaning": "outbound"}},
         }
 
     def _prepare(self, directory):

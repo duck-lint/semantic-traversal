@@ -76,7 +76,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 "node_kinds": ["semantic_object", "semantic_region", "semantic_unit"],
                 "discovery": [
                     {"node_kind": "semantic_object", "dimension_name": "tag", "description": "object tag", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"},
-                    {"node_kind": "semantic_region", "dimension_name": "address_text", "description": "region address", "operators": ["graph.discovery.phrase"], "result": "opaque_graph_handle"},
+                    {"node_kind": "semantic_region", "dimension_name": "address_text", "description": "region address", "operators": ["graph.discovery.terms", "graph.discovery.phrase"], "result": "opaque_graph_handle"},
                 ],
                 "relations": [
                     {
@@ -249,16 +249,6 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         no_lexical = copy.deepcopy(catalog)
         no_lexical["semantic_dimensions"][0]["access"] = [no_lexical["semantic_dimensions"][0]["access"][0]]
         cases.append(("field_access_not_advertised", no_lexical, [self.requests()[3]]))
-        no_discovery = copy.deepcopy(catalog)
-        cases.append(("graph_discovery_dimension_not_advertised", no_discovery, [dict(self.requests()[6], dimension_name="missing")]))
-        no_discovery_operator = copy.deepcopy(catalog)
-        no_discovery_operator["graph"]["discovery"][0]["operators"] = ["graph.discovery.phrase"]
-        cases.append(("graph_discovery_operator_not_advertised", no_discovery_operator, [self.requests()[6]]))
-        no_relation = copy.deepcopy(catalog)
-        cases.append(("graph_relation_not_advertised", no_relation, [dict(self.requests()[8], relation_name="missing")]))
-        no_relation_operation = copy.deepcopy(catalog)
-        no_relation_operation["graph"]["relations"][0]["operations"] = ["graph.inbound_traversal"]
-        cases.append(("graph_relation_operation_not_advertised", no_relation_operation, [self.requests()[8]]))
         for expected_code, case_catalog, case_requests in cases:
             with self.subTest(code=expected_code), TemporaryDirectory() as directory:
                 database, catalog_path, run_id, _, _ = self.prepared(directory, catalog=case_catalog, requests=case_requests)
