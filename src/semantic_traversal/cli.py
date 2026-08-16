@@ -20,14 +20,15 @@ from .build.canonical import canonicalize_ingest
 from .projection.catalog import generate_catalog
 from .projection.capability_facts import human_capability_facts, observe_capability_facts
 from .projection.exact import exact_lookup, build_exact_index
-from .projection.graph import GraphHandle, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
-from .projection.lexical import build_lexical_index, lexical_integrity_check, lexical_lookup
+from .projection.graph import GraphHandle, build_graph, graph_discover, graph_relation_lookup, graph_traverse
+from .projection.lexical import build_lexical_index, lexical_lookup
 from .build.materialize import materialize_context
 from .build.parser import _missing_semantic_identifier_descriptions, load_build_config
 from .build.resolve import resolve_relations
-from .projection.substrate import foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
+from .projection.substrate import hydrate_object, hydrate_unit, write_completed_ingest
 from .build.vault import parse_vault
-from .projection.vector import OllamaEmbeddingProvider, build_vector_index, validate_vector_index, vector_eligible_targets, vector_lookup
+from .projection.vector import OllamaEmbeddingProvider, build_vector_index, vector_eligible_targets, vector_lookup
+from .projection.verification import verify_completed_build
 from .runtime.config import load_runtime_config
 from .runtime.control_plane import conform_retrieval
 from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
@@ -147,14 +148,7 @@ def _build(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _verify_connection(connection: sqlite3.Connection, vector_path: Path) -> None:
-    failures = foreign_key_check(connection) + lexical_integrity_check(connection) + graph_integrity_check(connection)
-    validate_vector_index(connection, vector_path)
-    if failures:
-        raise CliError(f"completed build integrity failures: {failures!r}")
-    for (uuid,) in connection.execute("SELECT source_object_uuid FROM canonical_objects ORDER BY canonical_ordinal"):
-        hydrate_object(connection, uuid)
-    for (unit_id,) in connection.execute("SELECT unit_id FROM canonical_units ORDER BY unit_id"):
-        hydrate_unit(connection, unit_id)
+    verify_completed_build(connection, vector_path)
 
 
 def _inspect_artifacts(args: argparse.Namespace) -> None:

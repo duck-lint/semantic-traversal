@@ -68,7 +68,7 @@ def _package_id(*, substrate_sha256: str, vectors_sha256: str, capability_catalo
 def load_retrieval_package(build_path: str | Path) -> RetrievalPackage:
     """Load the fixed retrieval artifact package from one completed-build directory."""
 
-    build = Path(build_path)
+    build = Path(build_path).resolve()
     substrate_path = build / "substrate.sqlite3"
     vectors_path = build / "vectors.npy"
     capability_catalog_path = build / "capability_catalog.json"
@@ -99,6 +99,28 @@ def load_retrieval_package(build_path: str | Path) -> RetrievalPackage:
     )
 
 
+def require_current_package_identity(package: RetrievalPackage) -> None:
+    """Require the loaded package paths to still contain its exact artifacts."""
+
+    substrate_sha256 = _sha256_bytes(_read_required(package.substrate_path, "substrate"))
+    vectors_sha256 = _sha256_bytes(_read_required(package.vectors_path, "vectors"))
+    try:
+        catalog = load_capability_catalog(package.capability_catalog_path)
+    except CapabilityCatalogError as exc:
+        raise RetrievalPackageError(f"current capability catalog admission failed: {exc}") from exc
+    package_id = _package_id(
+        substrate_sha256=substrate_sha256,
+        vectors_sha256=vectors_sha256,
+        capability_catalog_sha256=catalog.sha256,
+    )
+    if (
+        substrate_sha256 != package.identity.substrate_sha256
+        or vectors_sha256 != package.identity.vectors_sha256
+        or catalog.sha256 != package.identity.capability_catalog_sha256
+        or package_id != package.identity.package_id
+    ):
+        raise RetrievalPackageError("retrieval package artifacts no longer match their loaded identity")
+
 def require_catalog_binding(
     package: RetrievalPackage,
     expected_capability_catalog_sha256: str,
@@ -118,4 +140,5 @@ __all__ = [
     "RetrievalPackageIdentity",
     "load_retrieval_package",
     "require_catalog_binding",
+    "require_current_package_identity",
 ]

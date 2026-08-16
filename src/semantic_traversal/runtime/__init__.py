@@ -12,9 +12,13 @@ from .config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime
 from .retrieval import RetrievalInferenceResult, RuntimeRetrievalError, infer_retrieval
 from .retrieval_package import (
     IDENTITY_VERSION, RetrievalPackage, RetrievalPackageError, RetrievalPackageIdentity,
-    load_retrieval_package, require_catalog_binding,
+    load_retrieval_package, require_catalog_binding, require_current_package_identity,
 )
 from .router import RouterResult, RuntimeRouterError, route_conversation
+from .retrieval_package_verification import (
+    VERIFICATION_CONTRACT_VERSION, RetrievalPackageVerificationError, VerifiedRetrievalPackage,
+    verify_retrieval_package,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -22,6 +26,8 @@ __all__ = [
     "RuntimeConfig", "RuntimeConfigError", "load_runtime_config", "RetrievalInferenceResult",
     "RuntimeRetrievalError", "infer_retrieval", "RouterResult", "RuntimeRouterError", "route_conversation",
     "IDENTITY_VERSION", "RetrievalPackage", "RetrievalPackageError", "RetrievalPackageIdentity",
-    "load_retrieval_package", "require_catalog_binding",
+    "load_retrieval_package", "require_catalog_binding", "require_current_package_identity",
+    "VERIFICATION_CONTRACT_VERSION", "RetrievalPackageVerificationError", "VerifiedRetrievalPackage",
+    "verify_retrieval_package",
     "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
 ]
