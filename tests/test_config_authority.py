@@ -1,14 +1,13 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import ugh_parser
 
 from ugh_parser import (
     NoteParseError,
     SemanticIdentifierDeclaration,
     load_build_config,
     parse_note,
-    semantic_identifier_homework,
-    write_semantic_identifier_homework,
 )
 
 
@@ -66,7 +65,7 @@ class ConfigAuthorityTests(unittest.TestCase):
                 with self.assertRaises(NoteParseError):
                     load_build_config(self._write_config(Path(directory), declarations))
 
-    def test_homework_uses_all_configured_keys_and_is_sorted(self):
+    def test_incomplete_declarations_remain_validation_failures(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             path = self._write_config(
@@ -75,20 +74,12 @@ class ConfigAuthorityTests(unittest.TestCase):
                 "  unrepresented:\n    description: ''\n"
                 "  absent_description: {}\n",
             )
-            self.assertEqual(
-                semantic_identifier_homework(path),
-                ("absent_description", "unrepresented"),
-            )
-            homework = root / "config-homework.yaml"
-            write_semantic_identifier_homework(homework, semantic_identifier_homework(path))
-            self.assertEqual(homework.read_text(encoding="utf-8"), """semantic_identifiers:
-  absent_description:
-    description: ''
-  unrepresented:
-    description: ''
-""")
             with self.assertRaises(NoteParseError):
                 load_build_config(path)
+
+    def test_homework_artifact_api_is_not_public(self):
+        self.assertFalse(hasattr(ugh_parser, "semantic_identifier_homework"))
+        self.assertFalse(hasattr(ugh_parser, "write_semantic_identifier_homework"))
 
     def test_adding_or_removing_a_declaration_changes_admission_without_touching_values(self):
         with TemporaryDirectory() as directory:

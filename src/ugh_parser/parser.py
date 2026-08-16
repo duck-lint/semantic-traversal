@@ -135,8 +135,8 @@ def _semantic_identifier_declarations(
     return tuple(declarations)
 
 
-def semantic_identifier_homework(path: str | Path) -> tuple[str, ...]:
-    """Return configured declarations whose authored meaning is incomplete."""
+def _missing_semantic_identifier_descriptions(path: str | Path) -> tuple[str, ...]:
+    """Return all incomplete meanings for catalog-command validation."""
 
     values = _load_config_values(path)
     declarations = _semantic_identifier_declarations(values, allow_incomplete=True)
@@ -145,24 +145,6 @@ def semantic_identifier_homework(path: str | Path) -> tuple[str, ...]:
         for declaration in declarations
         if not declaration.description.strip()
     ))
-
-
-def write_semantic_identifier_homework(path: str | Path, field_names: Iterable[str]) -> None:
-    """Write deterministic blank declarations for an incomplete config."""
-
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    yaml = YAML()
-    yaml.default_flow_style = False
-    yaml.sort_base_mapping_type_on_output = False
-    document = {
-        "semantic_identifiers": {
-            field_name: {"description": ""}
-            for field_name in sorted(set(field_names))
-        }
-    }
-    with output.open("w", encoding="utf-8", newline="\n") as stream:
-        yaml.dump(document, stream)
 
 
 def load_build_config(path: str | Path) -> BuildConfig:

@@ -164,17 +164,15 @@ class CatalogTests(unittest.TestCase):
             self.assertNotIn("operand_domains", json.dumps(catalog))
             self.assertNotIn("unit_id", json.dumps(catalog))
 
-    def test_missing_descriptions_write_only_sorted_homework_and_preserve_catalog(self):
+    def test_missing_descriptions_preserve_existing_catalog_without_artifact(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             descriptions = {"sequence_string": "ok"}
             output = root / "capability-catalog.json"
             output.write_text("sentinel", encoding="utf-8")
-            homework = root / "homework.yaml"
             with self.assertRaisesRegex(CatalogGenerationError, "graph_only, mixed_integer_string, scalar_integer"):
                 generate_catalog(self._facts(), descriptions, output)
             self.assertEqual(output.read_text(encoding="utf-8"), "sentinel")
-            self.assertFalse(homework.exists())
 
     def test_blank_description_is_missing_and_unknown_config_key_does_not_create_dimension(self):
         with TemporaryDirectory() as directory:
@@ -219,32 +217,39 @@ class CatalogTests(unittest.TestCase):
                 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                     code = main([
                         "catalog", "generate", "--build", str(root / "completed-build"),
-                        "--config", str(config), "--output", str(output),
-                        "--missing-output", str(root / "homework.yaml"), "--json",
+                        "--config", str(config), "--output", str(output), "--json",
                     ])
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertEqual(json.loads(stdout.getvalue()), {"catalog": str(output.resolve())})
             self.assertTrue(output.is_file())
 
-    def test_cli_incomplete_config_writes_all_config_homework_before_observation(self):
+    def test_catalog_generate_help_has_no_homework_option(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as raised:
+            main(["catalog", "generate", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertNotIn("missing-output", stdout.getvalue())
+        self.assertNotIn("homework", stdout.getvalue().lower())
+
+    def test_cli_incomplete_config_reports_all_missing_keys_before_observation(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            config = self._config(root, {"represented": "", "unrepresented": ""})
+            config = self._config(root, {"z_missing": "", "a_missing": ""})
             output = root / "catalog.json"
+            output.write_text("sentinel", encoding="utf-8")
+            stderr = io.StringIO()
             with patch("ugh_parser.cli.observe_capability_facts", side_effect=AssertionError("must not observe incomplete config")):
-                code = main([
-                    "catalog", "generate", "--build", str(root / "completed-build"),
-                    "--config", str(config), "--output", str(output),
-                    "--missing-output", str(root / "config-homework.yaml"),
-                ])
+                with contextlib.redirect_stderr(stderr):
+                    code = main([
+                        "catalog", "generate", "--build", str(root / "completed-build"),
+                        "--config", str(config), "--output", str(output),
+                    ])
             self.assertNotEqual(code, 0)
-            self.assertFalse(output.exists())
-            self.assertEqual((root / "config-homework.yaml").read_text(encoding="utf-8"), """semantic_identifiers:
-  represented:
-    description: ''
-  unrepresented:
-    description: ''
-""")
+            self.assertEqual(output.read_text(encoding="utf-8"), "sentinel")
+            diagnostic = stderr.getvalue()
+            self.assertLess(diagnostic.index("a_missing"), diagnostic.index("z_missing"))
+            self.assertNotIn("homework", diagnostic.lower())
+            self.assertEqual(list(root.glob("*.yaml")), [config])
 
     def test_unsupported_observer_facts_fail_closed(self):
         with TemporaryDirectory() as directory:

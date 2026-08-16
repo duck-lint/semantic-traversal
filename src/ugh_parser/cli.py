@@ -21,7 +21,7 @@ from .exact import exact_lookup, build_exact_index
 from .graph import GraphHandle, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
 from .lexical import build_lexical_index, lexical_integrity_check, lexical_lookup
 from .materialize import materialize_context
-from .parser import load_build_config, semantic_identifier_homework, write_semantic_identifier_homework
+from .parser import _missing_semantic_identifier_descriptions, load_build_config
 from .resolve import resolve_relations
 from .substrate import foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
 from .vault import parse_vault
@@ -216,10 +216,12 @@ def _inspect_capability_facts(args: argparse.Namespace) -> None:
 
 
 def _catalog_generate(args: argparse.Namespace) -> None:
-    missing = semantic_identifier_homework(args.config)
+    missing = _missing_semantic_identifier_descriptions(args.config)
     if missing:
-        write_semantic_identifier_homework(args.missing_output, missing)
-        raise CliError("missing authored semantic identifier descriptions: " + ", ".join(sorted(missing)))
+        raise CliError(
+            "missing authored semantic identifier descriptions:\n"
+            + "\n".join(f"- {field_name}" for field_name in missing)
+        )
     config = load_build_config(args.config)
     connection = _connection(args.build)
     try:
@@ -358,7 +360,7 @@ def _parser() -> argparse.ArgumentParser:
     a = isub.add_parser("unit"); _add_build_ref(a); a.add_argument("--unit-id", required=True, type=int); a.set_defaults(handler=_inspect_unit)
     catalog = sub.add_parser("catalog"); csub = catalog.add_subparsers(dest="catalog_command", required=True)
     a = csub.add_parser("generate", help="generate a model-facing capability catalog from accepted facts")
-    _add_build_ref(a); a.add_argument("--config", required=True); a.add_argument("--output", required=True); a.add_argument("--missing-output", required=True); a.set_defaults(handler=_catalog_generate)
+    _add_build_ref(a); a.add_argument("--config", required=True); a.add_argument("--output", required=True); a.set_defaults(handler=_catalog_generate)
     e = sub.add_parser("exact"); _add_build_ref(e); e.add_argument("--field-class", required=True); e.add_argument("--field-name", required=True); e.add_argument("--value-type", choices=["string","int","float","bool","date","datetime","null"]); e.add_argument("--value"); e.add_argument("--component", action="append"); e.set_defaults(handler=_exact)
     lexical = sub.add_parser("lexical"); lsub = lexical.add_subparsers(dest="operator", required=True)
     for op in ("terms", "phrase"):

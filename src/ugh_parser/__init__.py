@@ -12,8 +12,6 @@ from .parser import (
     SemanticUnit,
     Wikilink,
     load_build_config,
-    semantic_identifier_homework,
-    write_semantic_identifier_homework,
     parse_note,
 )
 from .vault import CorpusFailure, VaultParseResult, discover_markdown_notes, parse_vault
@@ -38,8 +36,6 @@ __all__ = [
     "SemanticUnit",
     "Wikilink",
     "load_build_config",
-    "semantic_identifier_homework",
-    "write_semantic_identifier_homework",
     "parse_note",
     "CorpusFailure",
     "VaultParseResult",
