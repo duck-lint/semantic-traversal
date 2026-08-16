@@ -139,8 +139,17 @@ def _identifier_shapes(
         domain = _value_domain(value)
         domains.add(domain)
         if isinstance(value, list):
-            member_domains.update(_value_domain(member) for member in value)
+            value_member_domains = {_value_domain(member) for member in value}
+            if "mapping" in value_member_domains:
+                raise CapabilityObservationError(
+                    f"exact surface cannot represent mapping semantic identifier: {field_name!r}"
+                )
+            member_domains.update(value_member_domains)
         else:
+            if domain == "mapping":
+                raise CapabilityObservationError(
+                    f"exact surface cannot represent mapping semantic identifier: {field_name!r}"
+                )
             scalar_domains.add(domain)
     if not domains:
         raise CapabilityObservationError(

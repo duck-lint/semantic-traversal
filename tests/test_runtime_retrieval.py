@@ -18,6 +18,7 @@ from semantic_traversal.runtime.openai_provider import (
 )
 from semantic_traversal.runtime.prompts import prompt_version
 from semantic_traversal.runtime.retrieval import RuntimeRetrievalError, infer_retrieval
+from semantic_traversal.runtime.retrieval_requests import RetrievalRequestError, canonicalize_retrieval_request
 from semantic_traversal.runtime.router import route_conversation
 
 
@@ -53,6 +54,15 @@ class RuntimeRetrievalTests(unittest.TestCase):
         router = route_conversation(database, self.config(), conversation.conversation_id, provider=router_provider)
         return database, conversation, router
 
+    def test_mapping_is_not_a_legal_exact_request_domain(self):
+        with self.assertRaises(RetrievalRequestError):
+            canonicalize_retrieval_request({
+                "operator": "exact.equals",
+                "field_class": "semantic_identifier",
+                "field_name": "mapping_field",
+                "target": "complete_value",
+                "operand": {"shape": "scalar", "domain": "mapping", "value": {"label": "value"}},
+            })
     def test_config_has_two_exact_model_sections_and_hashes_exact_prompt_bytes(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"

@@ -26,7 +26,7 @@ class _DuplicateObjectKey(ValueError):
     pass
 
 
-_DOMAIN_VALUES = frozenset({"null", "boolean", "integer", "float", "date", "datetime", "string", "mapping"})
+_DOMAIN_VALUES = frozenset({"null", "boolean", "integer", "float", "date", "datetime", "string"})
 _FIELD_ACCESS_OPERATORS = frozenset({"exact.equals", "lexical.terms", "lexical.phrase", "vector.semantic_similarity"})
 _GRAPH_DISCOVERY_OPERATORS = frozenset({"graph.discovery.terms", "graph.discovery.phrase"})
 _GRAPH_RELATION_OPERATIONS = frozenset({"graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"})

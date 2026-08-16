@@ -358,6 +358,16 @@ class CatalogAdmissionTests(unittest.TestCase):
     def test_semantic_identifier_access_erasure_fails_closed(self):
         cases = [
             (
+                "mapping_scalar_rejected",
+                {"shapes": [{"shape": "scalar", "domains": ["mapping"]}]},
+                [{"operator": "exact.equals", "target": "complete_value", "domains": ["mapping"]}],
+            ),
+            (
+                "mapping_member_rejected",
+                {"shapes": [{"shape": "sequence", "member_domains": ["mapping"]}]},
+                [{"operator": "exact.equals", "target": "member", "domains": ["mapping"]}],
+            ),
+            (
                 "scalar_exact_omitted",
                 {"shapes": [{"shape": "scalar", "domains": ["date"]}]},
                 [],

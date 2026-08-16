@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from semantic_traversal import (
-    BuildConfig, build_exact_index, canonicalize_ingest, exact_lookup,
+    BuildConfig, SubstrateError, build_exact_index, canonicalize_ingest, exact_lookup,
     hydrate_unit, materialize_context, parse_vault, resolve_relations,
     write_completed_ingest,
 )
@@ -138,5 +138,26 @@ class ExactRetrievalTests(unittest.TestCase):
             directory.cleanup()
 
 
+    def test_mapping_identifier_cannot_complete_exact_index(self):
+        for authored_value in ("mapping: {label: HiddenMapping}", "mapping: [{label: HiddenMapping}]"):
+            with self.subTest(authored_value=authored_value):
+                directory = TemporaryDirectory()
+                root = Path(directory.name)
+                self._write(root, "mapping.md", f"---\nuuid: mapping-uuid\n{authored_value}\n---\ntext\n")
+                config = build_config(fields=("mapping",))
+                parsed = parse_vault(root, config)
+                materialized = materialize_context(parsed)
+                resolved = resolve_relations(materialized)
+                ingest = canonicalize_ingest(resolved)
+                connection = sqlite3.connect(":memory:")
+                try:
+                    write_completed_ingest(connection, ingest)
+                    with self.assertRaisesRegex(TypeError, "mapping"):
+                        exact_lookup(connection, "semantic_identifier", "mapping", {"label": "HiddenMapping"})
+                    with self.assertRaisesRegex(SubstrateError, "structured sequence member"):
+                        build_exact_index(connection)
+                finally:
+                    connection.close()
+                    directory.cleanup()
 if __name__ == "__main__":
     unittest.main()
