@@ -1,4 +1,4 @@
-"""Durable, append-only conversation storage for the first runtime seam."""
+"""Durable, append-only conversation storage for runtime schema v3."""
 
 from __future__ import annotations
 
@@ -12,8 +12,11 @@ from uuid import uuid4
 
 
 LEGACY_SCHEMA_VERSION = 1
-SCHEMA_VERSION = 2
+ROUTER_SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ALLOWED_ROLES = frozenset({"user", "synthesis"})
+HISTORICAL_ROUTER_V1_PROMPT_VERSION = "router-v1"
+HISTORICAL_ROUTER_V1_PROMPT_SHA256 = "sha256:32abaecb56571dd80b6915ac2b6c01a0e02cbbec0487dc3aa1e6aeb74d0ca352"
 Clock = Callable[[], dt.datetime]
 
 
@@ -40,7 +43,7 @@ class Conversation:
 
 _CONVERSATION_COLUMNS = ("conversation_id", "created_at")
 _MESSAGE_COLUMNS = ("message_id", "conversation_id", "ordinal", "role", "content", "created_at")
-_EXPECTED_COLUMN_DEFINITIONS = {
+_BASE_DEFINITIONS = {
     "conversations": {
         "conversation_id": ("TEXT", 0, None, 1),
         "created_at": ("TEXT", 1, None, 0),
@@ -53,29 +56,55 @@ _EXPECTED_COLUMN_DEFINITIONS = {
         "content": ("TEXT", 1, None, 0),
         "created_at": ("TEXT", 1, None, 0),
     },
-    "model_runs": {
-        "run_id": ("TEXT", 0, None, 1),
-        "conversation_id": ("TEXT", 1, None, 0),
-        "trigger_message_id": ("INTEGER", 1, None, 0),
-        "run_kind": ("TEXT", 1, None, 0),
-        "provider": ("TEXT", 1, None, 0),
-        "model": ("TEXT", 1, None, 0),
-        "prompt_version": ("TEXT", 1, None, 0),
-        "status": ("TEXT", 1, None, 0),
-        "started_at": ("TEXT", 1, None, 0),
-        "completed_at": ("TEXT", 0, None, 0),
-        "provider_response_id": ("TEXT", 0, None, 0),
-        "output_json": ("TEXT", 0, None, 0),
-        "error_type": ("TEXT", 0, None, 0),
-        "error_message": ("TEXT", 0, None, 0),
-        "input_tokens": ("INTEGER", 0, None, 0),
-        "cached_input_tokens": ("INTEGER", 0, None, 0),
-        "output_tokens": ("INTEGER", 0, None, 0),
-        "reasoning_tokens": ("INTEGER", 0, None, 0),
-        "total_tokens": ("INTEGER", 0, None, 0),
-    },
 }
-_MODEL_RUN_COLUMNS = tuple(_EXPECTED_COLUMN_DEFINITIONS["model_runs"])
+_V2_MODEL_RUN_COLUMNS = (
+    "run_id", "conversation_id", "trigger_message_id", "run_kind", "provider", "model",
+    "prompt_version", "status", "started_at", "completed_at", "provider_response_id",
+    "output_json", "error_type", "error_message", "input_tokens", "cached_input_tokens",
+    "output_tokens", "reasoning_tokens", "total_tokens",
+)
+_V3_MODEL_RUN_COLUMNS = (
+    "run_id", "conversation_id", "trigger_message_id", "run_kind", "parent_run_id",
+    "capability_catalog_sha256", "provider", "model", "prompt_version", "status", "started_at",
+    "completed_at", "provider_response_id", "output_json", "error_type", "error_message",
+    "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
+)
+_MODEL_RUN_DEFINITIONS = {
+    "run_id": ("TEXT", 0, None, 1),
+    "conversation_id": ("TEXT", 1, None, 0),
+    "trigger_message_id": ("INTEGER", 1, None, 0),
+    "run_kind": ("TEXT", 1, None, 0),
+    "parent_run_id": ("TEXT", 0, None, 0),
+    "capability_catalog_sha256": ("TEXT", 0, None, 0),
+    "provider": ("TEXT", 1, None, 0),
+    "model": ("TEXT", 1, None, 0),
+    "prompt_version": ("TEXT", 1, None, 0),
+    "status": ("TEXT", 1, None, 0),
+    "started_at": ("TEXT", 1, None, 0),
+    "completed_at": ("TEXT", 0, None, 0),
+    "provider_response_id": ("TEXT", 0, None, 0),
+    "output_json": ("TEXT", 0, None, 0),
+    "error_type": ("TEXT", 0, None, 0),
+    "error_message": ("TEXT", 0, None, 0),
+    "input_tokens": ("INTEGER", 0, None, 0),
+    "cached_input_tokens": ("INTEGER", 0, None, 0),
+    "output_tokens": ("INTEGER", 0, None, 0),
+    "reasoning_tokens": ("INTEGER", 0, None, 0),
+    "total_tokens": ("INTEGER", 0, None, 0),
+}
+
+
+def _definitions(schema_version: int) -> dict[str, dict[str, tuple[str, int, str | None, int]]]:
+    definitions = {name: dict(values) for name, values in _BASE_DEFINITIONS.items()}
+    if schema_version == ROUTER_SCHEMA_VERSION:
+        definitions["model_runs"] = {
+            key: _MODEL_RUN_DEFINITIONS[key]
+            for key in _V2_MODEL_RUN_COLUMNS
+            if key not in {"parent_run_id", "capability_catalog_sha256"}
+        }
+    elif schema_version == SCHEMA_VERSION:
+        definitions["model_runs"] = dict(_MODEL_RUN_DEFINITIONS)
+    return definitions
 
 
 def _path(database_path: str | Path) -> Path:
@@ -98,14 +127,7 @@ def _timestamp(clock: Clock | None) -> str:
 def _create_schema(connection: sqlite3.Connection) -> None:
     connection.execute("BEGIN IMMEDIATE")
     try:
-        connection.execute(
-            """
-            CREATE TABLE conversations (
-                conversation_id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
+        connection.execute("CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
         connection.execute(
             """
             CREATE TABLE messages (
@@ -121,8 +143,9 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             """
         )
         _create_model_runs_table(connection)
-        connection.execute("PRAGMA user_version = 2")
+        connection.execute("PRAGMA user_version = 3")
         _validate_schema(connection, SCHEMA_VERSION)
+        connection.commit()
     except Exception:
         connection.rollback()
         raise
@@ -135,7 +158,9 @@ def _create_model_runs_table(connection: sqlite3.Connection) -> None:
             run_id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL,
             trigger_message_id INTEGER NOT NULL,
-            run_kind TEXT NOT NULL CHECK (run_kind IN ('router')),
+            run_kind TEXT NOT NULL CHECK (run_kind IN ('router', 'retrieval_inference')),
+            parent_run_id TEXT,
+            capability_catalog_sha256 TEXT,
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
             prompt_version TEXT NOT NULL,
@@ -151,8 +176,14 @@ def _create_model_runs_table(connection: sqlite3.Connection) -> None:
             output_tokens INTEGER,
             reasoning_tokens INTEGER,
             total_tokens INTEGER,
+            CHECK (
+                (run_kind = 'router' AND parent_run_id IS NULL AND capability_catalog_sha256 IS NULL)
+                OR
+                (run_kind = 'retrieval_inference' AND parent_run_id IS NOT NULL AND capability_catalog_sha256 IS NOT NULL)
+            ),
             FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
-            FOREIGN KEY (trigger_message_id) REFERENCES messages(message_id)
+            FOREIGN KEY (trigger_message_id) REFERENCES messages(message_id),
+            FOREIGN KEY (parent_run_id) REFERENCES model_runs(run_id)
         )
         """
     )
@@ -163,65 +194,61 @@ def _table_info(connection: sqlite3.Connection, table: str) -> tuple[sqlite3.Row
 
 
 def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> None:
+    expected_tables = set(_definitions(schema_version))
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    expected_tables = {"conversations", "messages"}
-    if schema_version == SCHEMA_VERSION:
-        expected_tables.add("model_runs")
     if tables != expected_tables:
         raise RuntimeConversationError(f"runtime database schema-v{schema_version} tables are incompatible")
-    expected_table_columns = [("conversations", _CONVERSATION_COLUMNS), ("messages", _MESSAGE_COLUMNS)]
-    if schema_version == SCHEMA_VERSION:
-        expected_table_columns.append(("model_runs", _MODEL_RUN_COLUMNS))
-    for table, expected_columns in expected_table_columns:
+    for table, expected_definitions in _definitions(schema_version).items():
+        expected_columns = _CONVERSATION_COLUMNS if table == "conversations" else _MESSAGE_COLUMNS if table == "messages" else _V2_MODEL_RUN_COLUMNS if schema_version == ROUTER_SCHEMA_VERSION else _V3_MODEL_RUN_COLUMNS
         info = _table_info(connection, table)
         if tuple(row[1] for row in info) != expected_columns:
             raise RuntimeConversationError(f"runtime {table} schema is incompatible")
-        expected_definitions = _EXPECTED_COLUMN_DEFINITIONS[table]
         for row in info:
             expected_type, expected_not_null, expected_default, expected_primary_key = expected_definitions[row[1]]
-            if (
-                row[2].upper(),
-                row[3],
-                row[4],
-                row[5],
-            ) != (expected_type, expected_not_null, expected_default, expected_primary_key):
+            if (row[2].upper(), row[3], row[4], row[5]) != (expected_type, expected_not_null, expected_default, expected_primary_key):
                 raise RuntimeConversationError(f"runtime {table}.{row[1]} definition is incompatible")
 
-    foreign_keys = {
-        (row[2], row[3], row[4])
-        for row in connection.execute("PRAGMA foreign_key_list(messages)")
-    }
-    if ("conversations", "conversation_id", "conversation_id") not in foreign_keys:
+    message_foreign_keys = {(row[2], row[3], row[4]) for row in connection.execute("PRAGMA foreign_key_list(messages)")}
+    if ("conversations", "conversation_id", "conversation_id") not in message_foreign_keys:
         raise RuntimeConversationError("runtime message foreign key is incompatible")
-
     unique_pairs = set()
     for index in connection.execute("PRAGMA index_list(messages)"):
         if index[2]:
             unique_pairs.add(tuple(row[2] for row in connection.execute(f"PRAGMA index_info([{index[1]}])")))
     if ("conversation_id", "ordinal") not in unique_pairs:
         raise RuntimeConversationError("runtime message ordering constraint is incompatible")
-
-    messages_sql = connection.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
-    ).fetchone()[0]
+    messages_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'").fetchone()[0]
     if not re.search(r"CHECK\s*\(\s*role\s+IN\s*\(\s*'user'\s*,\s*'synthesis'\s*\)\s*\)", messages_sql, re.IGNORECASE):
         raise RuntimeConversationError("runtime message role constraint is incompatible")
-    if schema_version == SCHEMA_VERSION:
-        model_runs_sql = connection.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_runs'"
-        ).fetchone()[0]
-        if not re.search(r"CHECK\s*\(\s*run_kind\s+IN\s*\(\s*'router'\s*\)\s*\)", model_runs_sql, re.IGNORECASE):
+
+    if schema_version in {ROUTER_SCHEMA_VERSION, SCHEMA_VERSION}:
+        model_runs_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_runs'").fetchone()[0]
+        run_kind = r"'router'\s*\)" if schema_version == ROUTER_SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*\)"
+        if not re.search(rf"CHECK\s*\(\s*run_kind\s+IN\s*\(\s*{run_kind}", model_runs_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime model-run kind constraint is incompatible")
         if not re.search(r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)", model_runs_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime model-run status constraint is incompatible")
-        model_run_foreign_keys = {
-            (row[2], row[3], row[4])
-            for row in connection.execute("PRAGMA foreign_key_list(model_runs)")
-        }
-        if {
+        if schema_version == SCHEMA_VERSION and not (
+            re.search(
+                r"run_kind\s*=\s*'router'\s+AND\s+parent_run_id\s+IS\s+NULL\s+AND\s+capability_catalog_sha256\s+IS\s+NULL",
+                model_runs_sql,
+                re.IGNORECASE,
+            )
+            and re.search(
+                r"run_kind\s*=\s*'retrieval_inference'\s+AND\s+parent_run_id\s+IS\s+NOT\s+NULL\s+AND\s+capability_catalog_sha256\s+IS\s+NOT\s+NULL",
+                model_runs_sql,
+                re.IGNORECASE,
+            )
+        ):
+            raise RuntimeConversationError("runtime model-run lineage constraint is incompatible")
+        model_run_foreign_keys = {(row[2], row[3], row[4]) for row in connection.execute("PRAGMA foreign_key_list(model_runs)")}
+        required = {
             ("conversations", "conversation_id", "conversation_id"),
             ("messages", "trigger_message_id", "message_id"),
-        } - model_run_foreign_keys:
+        }
+        if schema_version == SCHEMA_VERSION:
+            required.add(("model_runs", "parent_run_id", "run_id"))
+        if required - model_run_foreign_keys:
             raise RuntimeConversationError("runtime model-run foreign keys are incompatible")
 
 
@@ -231,10 +258,7 @@ def _open_connection(database_path: str | Path, *, allow_create: bool) -> sqlite
         raise RuntimeConversationError(f"runtime database does not exist: {path}")
     connection: sqlite3.Connection | None = None
     try:
-        if allow_create:
-            connection = sqlite3.connect(str(path))
-        else:
-            connection = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=rw", uri=True)
+        connection = sqlite3.connect(str(path)) if allow_create else sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=rw", uri=True)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
@@ -253,11 +277,13 @@ def _runtime_schema_state(connection: sqlite3.Connection, *, initialize_empty: b
     tables = tuple(connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall())
     if version == 0 and not tables and initialize_empty:
         _create_schema(connection)
-        connection.commit()
         return
     if version == LEGACY_SCHEMA_VERSION:
         _validate_schema(connection, LEGACY_SCHEMA_VERSION)
         raise RuntimeConversationError("runtime schema v1 is older and requires explicit migration")
+    if version == ROUTER_SCHEMA_VERSION:
+        _validate_schema(connection, ROUTER_SCHEMA_VERSION)
+        raise RuntimeConversationError("runtime schema v2 is older and requires explicit migration")
     if version != SCHEMA_VERSION:
         raise RuntimeConversationError(f"unsupported runtime schema version: {version}")
     _validate_schema(connection, SCHEMA_VERSION)
@@ -275,7 +301,6 @@ def _connect_runtime(database_path: str | Path) -> sqlite3.Connection:
 
 def initialize_runtime(database_path: str | Path) -> None:
     """Create or validate the current runtime schema at the explicit path."""
-
     connection = _open_connection(database_path, allow_create=True)
     try:
         _runtime_schema_state(connection, initialize_empty=True)
@@ -285,9 +310,33 @@ def initialize_runtime(database_path: str | Path) -> None:
     connection.close()
 
 
-def migrate_runtime(database_path: str | Path) -> None:
-    """Explicitly migrate the one supported legacy schema from v1 to v2."""
+def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("SELECT run_id, prompt_version FROM model_runs").fetchall()
+    if any(row[1] != HISTORICAL_ROUTER_V1_PROMPT_VERSION for row in rows):
+        raise RuntimeConversationError("runtime v2 contains an unknown historical router prompt identity")
+    connection.execute("ALTER TABLE model_runs RENAME TO model_runs_v2_legacy")
+    _create_model_runs_table(connection)
+    connection.execute(
+        """
+        INSERT INTO model_runs (
+            run_id, conversation_id, trigger_message_id, run_kind, parent_run_id,
+            capability_catalog_sha256, provider, model, prompt_version, status, started_at,
+            completed_at, provider_response_id, output_json, error_type, error_message,
+            input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens
+        )
+        SELECT run_id, conversation_id, trigger_message_id, run_kind, NULL, NULL, provider,
+               model, ?, status, started_at, completed_at, provider_response_id, output_json,
+               error_type, error_message, input_tokens, cached_input_tokens, output_tokens,
+               reasoning_tokens, total_tokens
+        FROM model_runs_v2_legacy
+        """,
+        (HISTORICAL_ROUTER_V1_PROMPT_SHA256,),
+    )
+    connection.execute("DROP TABLE model_runs_v2_legacy")
 
+
+def migrate_runtime(database_path: str | Path) -> None:
+    """Explicitly migrate the supported legacy schemas to schema v3."""
     connection = _open_connection(database_path, allow_create=False)
     transaction_started = False
     try:
@@ -297,7 +346,17 @@ def migrate_runtime(database_path: str | Path) -> None:
             connection.execute("BEGIN IMMEDIATE")
             transaction_started = True
             _create_model_runs_table(connection)
-            connection.execute("PRAGMA user_version = 2")
+            connection.execute("PRAGMA user_version = 3")
+            _validate_schema(connection, SCHEMA_VERSION)
+            connection.commit()
+            transaction_started = False
+            return
+        if version == ROUTER_SCHEMA_VERSION:
+            _validate_schema(connection, ROUTER_SCHEMA_VERSION)
+            connection.execute("BEGIN IMMEDIATE")
+            transaction_started = True
+            _migrate_v2_to_v3(connection)
+            connection.execute("PRAGMA user_version = 3")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             transaction_started = False
@@ -319,17 +378,12 @@ def migrate_runtime(database_path: str | Path) -> None:
 
 
 def create_conversation(database_path: str | Path, *, clock: Clock | None = None) -> Conversation:
-    """Create one empty conversation with a generated UUID."""
-
     conversation_id = str(uuid4())
     created_at = _timestamp(clock)
     connection = _connect_runtime(database_path)
     try:
         connection.execute("BEGIN")
-        connection.execute(
-            "INSERT INTO conversations (conversation_id, created_at) VALUES (?, ?)",
-            (conversation_id, created_at),
-        )
+        connection.execute("INSERT INTO conversations (conversation_id, created_at) VALUES (?, ?)", (conversation_id, created_at))
         connection.commit()
         return Conversation(conversation_id=conversation_id, created_at=created_at)
     except sqlite3.Error as exc:
@@ -346,46 +400,21 @@ def _validate_message(role: str, content: str) -> None:
         raise RuntimeConversationError("conversation message content must be nonblank text")
 
 
-def append_message(
-    database_path: str | Path,
-    conversation_id: str,
-    role: str,
-    content: str,
-    *,
-    clock: Clock | None = None,
-) -> Message:
-    """Append one validated message in a transactionally assigned ordinal."""
-
+def append_message(database_path: str | Path, conversation_id: str, role: str, content: str, *, clock: Clock | None = None) -> Message:
     _validate_message(role, content)
     created_at = _timestamp(clock)
     connection = _connect_runtime(database_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
-        conversation = connection.execute(
-            "SELECT 1 FROM conversations WHERE conversation_id = ?", (conversation_id,)
-        ).fetchone()
-        if conversation is None:
+        if connection.execute("SELECT 1 FROM conversations WHERE conversation_id = ?", (conversation_id,)).fetchone() is None:
             raise RuntimeConversationError(f"conversation does not exist: {conversation_id}")
-        ordinal = connection.execute(
-            "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM messages WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()[0]
+        ordinal = connection.execute("SELECT COALESCE(MAX(ordinal), -1) + 1 FROM messages WHERE conversation_id = ?", (conversation_id,)).fetchone()[0]
         cursor = connection.execute(
-            """
-            INSERT INTO messages (conversation_id, ordinal, role, content, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
+            "INSERT INTO messages (conversation_id, ordinal, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
             (conversation_id, ordinal, role, content, created_at),
         )
         connection.commit()
-        return Message(
-            message_id=cursor.lastrowid,
-            conversation_id=conversation_id,
-            ordinal=ordinal,
-            role=role,
-            content=content,
-            created_at=created_at,
-        )
+        return Message(cursor.lastrowid, conversation_id, ordinal, role, content, created_at)
     except RuntimeConversationError:
         connection.rollback()
         raise
@@ -397,37 +426,19 @@ def append_message(
 
 
 def get_conversation(database_path: str | Path, conversation_id: str) -> Conversation:
-    """Return the complete exact transcript ordered by its persisted ordinal."""
-
     connection = _connect_runtime(database_path)
     try:
-        row = connection.execute(
-            "SELECT conversation_id, created_at FROM conversations WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()
+        row = connection.execute("SELECT conversation_id, created_at FROM conversations WHERE conversation_id = ?", (conversation_id,)).fetchone()
         if row is None:
             raise RuntimeConversationError(f"conversation does not exist: {conversation_id}")
-        messages: list[Message] = []
+        messages = []
         for message in connection.execute(
-            """
-            SELECT message_id, conversation_id, ordinal, role, content, created_at
-            FROM messages WHERE conversation_id = ? ORDER BY ordinal ASC
-            """,
+            "SELECT message_id, conversation_id, ordinal, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY ordinal ASC",
             (conversation_id,),
         ):
-            role = message["role"]
-            if role not in ALLOWED_ROLES:
-                raise RuntimeConversationError(f"malformed persisted conversation role: {role!r}")
-            messages.append(
-                Message(
-                    message_id=message["message_id"],
-                    conversation_id=message["conversation_id"],
-                    ordinal=message["ordinal"],
-                    role=role,
-                    content=message["content"],
-                    created_at=message["created_at"],
-                )
-            )
+            if message["role"] not in ALLOWED_ROLES:
+                raise RuntimeConversationError(f"malformed persisted conversation role: {message['role']!r}")
+            messages.append(Message(message["message_id"], message["conversation_id"], message["ordinal"], message["role"], message["content"], message["created_at"]))
         return Conversation(row["conversation_id"], row["created_at"], tuple(messages))
     except RuntimeConversationError:
         raise
@@ -438,12 +449,6 @@ def get_conversation(database_path: str | Path, conversation_id: str) -> Convers
 
 
 __all__ = [
-    "Conversation",
-    "Message",
-    "RuntimeConversationError",
-    "append_message",
-    "create_conversation",
-    "get_conversation",
-    "initialize_runtime",
-    "migrate_runtime",
+    "Conversation", "Message", "RuntimeConversationError",
+    "append_message", "create_conversation", "get_conversation", "initialize_runtime", "migrate_runtime",
 ]

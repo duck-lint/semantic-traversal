@@ -30,6 +30,7 @@ from .projection.vector import OllamaEmbeddingProvider, build_vector_index, vali
 from .runtime.config import load_runtime_config
 from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
 from .runtime.router import route_conversation
+from .runtime.retrieval import infer_retrieval
 
 
 class CliError(ValueError):
@@ -365,13 +366,22 @@ def _runtime_conversation_show(args: argparse.Namespace) -> None:
     _emit(get_conversation(args.database, args.conversation_id), args)
 
 
-def _runtime_router_infer(args: argparse.Namespace) -> None:
-    config = load_runtime_config(args.config)
+def _load_model_execution_dotenv() -> None:
     dotenv_path = Path.cwd() / ".env"
     if dotenv_path.is_file():
         load_dotenv(dotenv_path, override=False)
+
+
+def _runtime_router_infer(args: argparse.Namespace) -> None:
+    config = load_runtime_config(args.config)
+    _load_model_execution_dotenv()
     _emit(route_conversation(args.database, config, args.conversation_id), args)
 
+
+def _runtime_retrieval_infer(args: argparse.Namespace) -> None:
+    config = load_runtime_config(args.config)
+    _load_model_execution_dotenv()
+    _emit(infer_retrieval(args.database, config, args.catalog, args.router_run_id), args)
 
 def _add_build(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--vault", required=True); parser.add_argument("--config", required=True); parser.add_argument("--output", required=True); parser.add_argument("--ollama-url", default="http://127.0.0.1:11434"); parser.add_argument("--json", action="store_true")
@@ -416,6 +426,8 @@ def _parser() -> argparse.ArgumentParser:
     a = msub.add_parser("append"); a.add_argument("--database", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--role", choices=["user", "synthesis"], required=True); a.add_argument("--content", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_message_append)
     router = rsub.add_parser("router"); rrouter = router.add_subparsers(dest="router_command", required=True)
     a = rrouter.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_router_infer)
+    retrieval = rsub.add_parser("retrieval-inference"); rretrieval = retrieval.add_subparsers(dest="retrieval_command", required=True)
+    a = rretrieval.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--catalog", required=True); a.add_argument("--router-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_retrieval_infer)
     return p
 
 

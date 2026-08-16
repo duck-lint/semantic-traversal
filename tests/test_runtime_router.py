@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from semantic_traversal.cli import main
 from semantic_traversal.runtime.config import (
-    RouterConfig,
+    ModelConfig,
     RuntimeConfig,
     RuntimeConfigError,
     load_runtime_config,
@@ -25,12 +25,15 @@ from semantic_traversal.runtime.openai_provider import (
     ProviderUsage,
 )
 from semantic_traversal.runtime.router import (
-    ROUTER_PROMPT_V1,
-    ROUTER_PROMPT_VERSION,
     RouterResult,
     RuntimeRouterError,
     route_conversation,
 )
+from semantic_traversal.runtime.prompts import prompt_version
+
+ROUTER_PROMPT_V1 = load_runtime_config(Path(__file__).parents[1] / "docs" / "runtime_config.yaml").router.prompt
+ROUTER_PROMPT_VERSION = prompt_version(ROUTER_PROMPT_V1)
+
 
 
 class ProviderDouble:
@@ -39,8 +42,8 @@ class ProviderDouble:
         self.error = error
         self.calls = []
 
-    def infer(self, config, prompt, messages):
-        self.calls.append((config, prompt, tuple(messages)))
+    def infer_router(self, config, messages):
+        self.calls.append((config, config.prompt, tuple(messages)))
         if self.error is not None:
             raise self.error
         return self.inference
@@ -48,7 +51,10 @@ class ProviderDouble:
 
 class RuntimeRouterTests(unittest.TestCase):
     def _config(self):
-        return RuntimeConfig(RouterConfig("openai", "explicit-model-id", 7.5))
+        return RuntimeConfig(
+            ModelConfig("openai", "explicit-model-id", 7.5, ROUTER_PROMPT_V1),
+            ModelConfig("openai", "retrieval-model", 8.5, "retrieval test prompt"),
+        )
 
     def _clock(self, seconds=0):
         return lambda: datetime(2026, 1, 1, 0, 0, seconds, tzinfo=timezone.utc)
@@ -83,20 +89,22 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: explicit-model-id\n  timeout_seconds: 7.5\n",
+                "router:\n  provider: openai\n  model: explicit-model-id\n  timeout_seconds: 7.5\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 8.5\n  prompt: retrieval prompt\n",
                 encoding="utf-8",
             )
-            self.assertEqual(load_runtime_config(path), self._config())
+            loaded = load_runtime_config(path)
+            self.assertEqual(loaded.router.provider, "openai")
+            self.assertEqual(loaded.router.prompt, "router prompt")
+            self.assertEqual(loaded.retrieval_inference.prompt, "retrieval prompt")
             for invalid in (
-                "router:\n  provider: other\n  model: x\n  timeout_seconds: 1\n",
-                "router:\n  provider: openai\n  model: ''\n  timeout_seconds: 1\n",
-                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 0\n",
-                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\nextra: {}\n",
+                "router: {}\nretrieval_inference: {}\n",
+                "router:\n  provider: other\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\n",
+                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\n",
+                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 0\n  prompt: p\n",
             ):
                 path.write_text(invalid, encoding="utf-8")
                 with self.subTest(invalid=invalid), self.assertRaises(RuntimeConfigError):
                     load_runtime_config(path)
-
     def test_router_inserts_before_provider_and_persists_success_without_message(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
@@ -114,7 +122,7 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertEqual(result.trigger_message_id, trigger.message_id)
             self.assertEqual(len(provider.calls), 1)
             config, prompt, messages = provider.calls[0]
-            self.assertEqual(config, self._config())
+            self.assertEqual(config, self._config().router)
             self.assertEqual(prompt, ROUTER_PROMPT_V1)
             self.assertEqual([message.role for message in messages], ["user", "synthesis", "user"])
             self.assertEqual([message.content for message in messages], ["hello  ", "hi\nthere", "What is in my notes?"])
@@ -181,7 +189,7 @@ class RuntimeRouterTests(unittest.TestCase):
 
                 with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
                     with self.assertRaises(OpenAIProviderError) as raised:
-                        OpenAIResponsesProvider().infer(self._config(), ROUTER_PROMPT_V1, ())
+                        OpenAIResponsesProvider().infer_router(self._config().router, ())
                 self.assertEqual(raised.exception.error_type, expected_error)
 
     def test_invalid_provider_json_creates_failed_run_without_touching_messages(self):
@@ -323,7 +331,7 @@ class RuntimeRouterTests(unittest.TestCase):
                 self.responses = Responses()
 
         with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
-            result = OpenAIResponsesProvider().infer(self._config(), ROUTER_PROMPT_V1, messages)
+            result = OpenAIResponsesProvider().infer_router(self._config().router, messages)
         self.assertEqual(result.route, "direct")
         self.assertEqual(captured["client"], {"max_retries": 0, "timeout": 7.5})
         request = captured["request"]
@@ -341,12 +349,12 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
             config = Path(directory) / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\n", encoding="utf-8")
             initialize_runtime(database)
             conversation = create_conversation(database)
             append_message(database, conversation.conversation_id, "user", "hello")
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch("semantic_traversal.runtime.router.OpenAIResponsesProvider.infer", return_value=ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage())), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with patch("semantic_traversal.runtime.router.OpenAIResponsesProvider.infer_router", return_value=ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage())), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 code = main(["runtime", "router", "infer", "--database", str(database), "--config", str(config), "--conversation-id", conversation.conversation_id, "--json"])
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertEqual(json.loads(stdout.getvalue())["route"], "direct")
@@ -355,7 +363,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cwd = Path(directory)
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\n", encoding="utf-8")
             (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
             with patch.dict(os.environ, {"OPENAI_API_KEY": "process-key"}), patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.route_conversation", return_value=self._stub_router_result()):
                 code = main(["runtime", "router", "infer", "--database", str(cwd / "runtime.sqlite3"), "--config", str(config), "--conversation-id", "conversation", "--json"])
@@ -366,7 +374,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cwd = Path(directory)
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\n", encoding="utf-8")
             (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
@@ -381,7 +389,7 @@ class RuntimeRouterTests(unittest.TestCase):
             cwd = parent / "child"
             cwd.mkdir()
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\n", encoding="utf-8")
             (parent / ".env").write_text("OPENAI_API_KEY=parent-key\n", encoding="utf-8")
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
