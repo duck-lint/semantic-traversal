@@ -307,16 +307,36 @@ class CatalogAdmissionTests(unittest.TestCase):
                 ],
             ),
             (
-                "arbitrary_mixed",
+                "arbitrary_sequence_permuted",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string", "integer"]}]},
+                [
+                    {"operator": "exact.equals", "target": "member", "domains": ["integer", "string"]},
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "arbitrary_scalar_permuted",
+                {"shapes": [{"shape": "scalar", "domains": ["date", "string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["string", "date"]},
+                    {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
+                ],
+            ),
+            (
+                "arbitrary_mixed_permuted",
                 {
                     "shapes": [
-                        {"shape": "scalar", "domains": ["date"]},
-                        {"shape": "sequence", "member_domains": ["string"]},
+                        {"shape": "scalar", "domains": ["date", "string"]},
+                        {"shape": "sequence", "member_domains": ["string", "integer"]},
                     ]
                 },
                 [
-                    {"operator": "exact.equals", "target": "complete_value", "domains": ["date"]},
-                    {"operator": "exact.equals", "target": "member", "domains": ["string"]},
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["string", "date"]},
+                    {"operator": "exact.equals", "target": "member", "domains": ["integer", "string"]},
+                    {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
                     {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
                     {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
                 ],
@@ -402,6 +422,29 @@ class CatalogAdmissionTests(unittest.TestCase):
                 [{"operator": "exact.equals", "target": "member", "domains": ["string"]}],
             ),
             (
+                "missing_exact_domain",
+                {"shapes": [{"shape": "sequence", "member_domains": ["string", "integer"]}]},
+                [
+                    {"operator": "exact.equals", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.terms", "target": "member", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "member", "domains": ["string"]},
+                ],
+            ),
+            (
+                "extra_exact_domain",
+                {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
+                [
+                    {"operator": "exact.equals", "target": "complete_value", "domains": ["string", "integer"]},
+                    {"operator": "lexical.terms", "target": "complete_value", "domains": ["string"]},
+                    {"operator": "lexical.phrase", "target": "complete_value", "domains": ["string"]},
+                ],
+            ),
+            (
+                "duplicate_value_domain",
+                {"shapes": [{"shape": "scalar", "domains": ["string", "string"]}]},
+                [{"operator": "exact.equals", "target": "complete_value", "domains": ["string"]}],
+            ),
+            (
                 "vector_access",
                 {"shapes": [{"shape": "scalar", "domains": ["string"]}]},
                 [{"operator": "vector.semantic_similarity", "target": "complete_value", "domains": ["string"]}],
@@ -420,6 +463,7 @@ class CatalogAdmissionTests(unittest.TestCase):
                 text = json.dumps(catalog, separators=(",", ":"))
                 with self.assertRaises(CapabilityCatalogError):
                     load_capability_catalog(self._write(directory, text))
+
     def test_authored_semantic_identifier_names_remain_open(self):
         with TemporaryDirectory() as directory:
             catalog = copy.deepcopy(self.catalog())

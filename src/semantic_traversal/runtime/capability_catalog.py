@@ -180,7 +180,7 @@ def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[s
         domains = _domain_list(entry["domains"], f"{label}.domains", nonempty=True)
         if operator == "exact.equals":
             expected_shape = "scalar" if target == "complete_value" else "sequence"
-            if expected_shape not in value_models or value_models[expected_shape] != domains:
+            if expected_shape not in value_models or set(value_models[expected_shape]) != set(domains):
                 raise CapabilityCatalogError(f"{label} is inconsistent with its value model")
         elif operator in {"lexical.terms", "lexical.phrase"}:
             if domains != ("string",):
@@ -199,7 +199,7 @@ def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[s
         if operand["shape"] != "ordered_sequence":
             raise CapabilityCatalogError(f"{label}.operand.shape is unsupported")
         member_domains = _domain_list(operand["member_domains"], f"{label}.operand.member_domains", nonempty=True)
-        if value_models.get("ordered_sequence") != member_domains:
+        if set(value_models.get("ordered_sequence", ())) != set(member_domains):
             raise CapabilityCatalogError(f"{label} is inconsistent with its value model")
     else:
         raise CapabilityCatalogError(f"{label} has no accepted operand representation")
