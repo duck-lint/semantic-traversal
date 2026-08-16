@@ -3,5 +3,5 @@
 # to the operator/account. Credentials are supplied only through OPENAI_API_KEY.
 router:
   provider: openai
-  model: YOUR_EXPLICIT_OPENAI_MODEL_ID
+  model: gpt-5.6-luna
   timeout_seconds: 30
