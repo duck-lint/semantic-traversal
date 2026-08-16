@@ -8,6 +8,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -18,6 +19,26 @@ from .retrieval_requests import RetrievalRequestError, canonicalize_retrieval_re
 
 CATALOG_CONFORMANCE_CONTRACT_VERSION = CONFORMANCE_CONTRACT_VERSION
 Clock = Callable[[], dt.datetime]
+
+
+
+
+def _immutable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _immutable(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_immutable(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_immutable(item) for item in value)
+    return value
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    return value
 
 
 class RetrievalConformanceError(ValueError):
@@ -198,11 +219,16 @@ def _request_violations(catalog: Mapping[str, Any], request: Mapping[str, Any]) 
     return (_violation("operator_not_advertised", operator=operator),)
 
 
+def _request_result(ordinal: int, request: Mapping[str, Any], catalog: Mapping[str, Any]) -> ConformanceRequestResult:
+    violations = tuple(_immutable(item) for item in _request_violations(catalog, request))
+    return ConformanceRequestResult(ordinal, "invalid" if violations else "valid", violations)
+
+
 def _result_payload(status: str, requests: tuple[ConformanceRequestResult, ...]) -> dict[str, Any]:
     return {
         "status": status,
         "requests": [
-            {"ordinal": result.ordinal, "status": result.status, "violations": list(result.violations)}
+            {"ordinal": result.ordinal, "status": result.status, "violations": [_json_value(item) for item in result.violations]}
             for result in requests
         ]
     }
@@ -212,7 +238,7 @@ def _result_from_row(row: sqlite3.Row) -> RetrievalConformanceResult:
     try:
         payload = json.loads(row["result_json"])
         request_results = tuple(
-            ConformanceRequestResult(item["ordinal"], item["status"], tuple(item["violations"]))
+            ConformanceRequestResult(item["ordinal"], item["status"], tuple(_immutable(item) for item in item["violations"]))
             for item in payload["requests"]
         )
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
@@ -265,11 +291,7 @@ def conform_retrieval(
         requests, canonical_output_json = _canonical_persisted_proposal(run["output_json"])
         proposal_sha = "sha256:" + hashlib.sha256(canonical_output_json.encode("utf-8")).hexdigest()
         results = tuple(
-            ConformanceRequestResult(
-                ordinal=ordinal,
-                status="invalid" if (violations := _request_violations(catalog.parsed, request)) else "valid",
-                violations=violations,
-            )
+            _request_result(ordinal, request, catalog.parsed)
             for ordinal, request in enumerate(requests)
         )
         overall_status = "invalid" if any(result.status == "invalid" for result in results) else "valid"
