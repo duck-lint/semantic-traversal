@@ -28,6 +28,7 @@ from .projection.substrate import foreign_key_check, hydrate_object, hydrate_uni
 from .build.vault import parse_vault
 from .projection.vector import OllamaEmbeddingProvider, build_vector_index, validate_vector_index, vector_eligible_targets, vector_lookup
 from .runtime.config import load_runtime_config
+from .runtime.control_plane import conform_retrieval
 from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
 from .runtime.router import route_conversation
 from .runtime.retrieval import infer_retrieval
@@ -378,6 +379,9 @@ def _runtime_router_infer(args: argparse.Namespace) -> None:
     _emit(route_conversation(args.database, config, args.conversation_id), args)
 
 
+def _runtime_control_plane_conform(args: argparse.Namespace) -> None:
+    _emit(conform_retrieval(args.database, args.catalog, args.retrieval_run_id), args)
+
 def _runtime_retrieval_infer(args: argparse.Namespace) -> None:
     config = load_runtime_config(args.config)
     _load_model_execution_dotenv()
@@ -428,6 +432,8 @@ def _parser() -> argparse.ArgumentParser:
     a = rrouter.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_router_infer)
     retrieval = rsub.add_parser("retrieval-inference"); rretrieval = retrieval.add_subparsers(dest="retrieval_command", required=True)
     a = rretrieval.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--catalog", required=True); a.add_argument("--router-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_retrieval_infer)
+    control_plane = rsub.add_parser("control-plane"); cpsub = control_plane.add_subparsers(dest="control_plane_command", required=True)
+    a = cpsub.add_parser("conform"); a.add_argument("--database", required=True); a.add_argument("--catalog", required=True); a.add_argument("--retrieval-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_control_plane_conform)
     return p
 
 
