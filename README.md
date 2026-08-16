@@ -25,9 +25,6 @@ artifacts. They do not become a replacement ontology for the vault.
 
 ## Current implementation
 
-The `import` branch contains an executable substrate build and the first
-runtime seam. It is not yet the complete conversational traversal system.
-
 Implemented now:
 
 - deterministic whole-vault Markdown discovery;
@@ -54,9 +51,8 @@ Implemented now:
 
 Not implemented in this branch:
 
-- the full problem-space control plane;
+- the full conversational control plane;
 - projection activation and semantic-access planning;
-- a temporal retrieval surface;
 - retrieval-plan execution and multi-surface fusion;
 - retrieval packets and frontier synthesis;
 - a user-facing conversational application;
@@ -343,7 +339,7 @@ exists in this repository at the current implementation boundary.
 
 ## Status
 
-This is an active reconstruction project. The canonical substrate and the
+This is an active rebuild of a research project. The canonical substrate and the
 first runtime control seam are executable and tested. The full traversal loop
 from a user turn through planning, multi-surface execution, evidence packet
 assembly, and frontier synthesis remains to be implemented and verified.
