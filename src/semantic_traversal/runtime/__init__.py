@@ -19,6 +19,10 @@ from .retrieval_package_verification import (
     VERIFICATION_CONTRACT_VERSION, RetrievalPackageVerificationError, VerifiedRetrievalPackage,
     verify_retrieval_package,
 )
+from .retrieval_execution import (
+    EXECUTION_CONTRACT_VERSION, RetrievalExecutionError,
+    RetrievalExecutionRequestResult, RetrievalExecutionResult, execute_retrieval,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -29,5 +33,7 @@ __all__ = [
     "load_retrieval_package", "require_catalog_binding", "require_current_package_identity",
     "VERIFICATION_CONTRACT_VERSION", "RetrievalPackageVerificationError", "VerifiedRetrievalPackage",
     "verify_retrieval_package",
+    "EXECUTION_CONTRACT_VERSION", "RetrievalExecutionError", "RetrievalExecutionRequestResult",
+    "RetrievalExecutionResult", "execute_retrieval",
     "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
 ]
