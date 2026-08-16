@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from .capability_catalog import CapabilityCatalogError, load_capability_catalog
 from .config import RuntimeConfig
 from .conversation import Conversation, Message, RuntimeConversationError, _connect_runtime, _timestamp
 from .model_runs import complete_retrieval_run, fail_retrieval_run, insert_retrieval_run
@@ -47,20 +47,10 @@ class RetrievalInferenceResult:
 
 def _catalog(path: str | Path) -> tuple[str, str]:
     try:
-        raw = Path(path).read_bytes()
-    except OSError as exc:
-        raise RuntimeRetrievalError(f"could not read capability catalog: {exc}") from exc
-    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-    try:
-        text = raw.decode("utf-8")
-        parsed = json.loads(text)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeRetrievalError(f"capability catalog is not valid UTF-8 JSON: {exc}") from exc
-    if not isinstance(parsed, dict) or parsed.get("catalog_schema_version") != "1":
-        raise RuntimeRetrievalError("capability catalog schema version is unsupported")
-    if not {"semantic_dimensions", "graph", "vector", "operators"}.issubset(parsed):
-        raise RuntimeRetrievalError("capability catalog envelope is incomplete")
-    return text, digest
+        artifact = load_capability_catalog(path)
+    except CapabilityCatalogError as exc:
+        raise RuntimeRetrievalError(str(exc)) from exc
+    return artifact.text, artifact.sha256
 
 
 def _conversation(connection: sqlite3.Connection, conversation_id: str) -> Conversation:

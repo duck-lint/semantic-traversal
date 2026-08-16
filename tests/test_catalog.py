@@ -212,6 +212,24 @@ class CatalogTests(unittest.TestCase):
             )
             self.assertFalse(any(item["operator"] == "vector.semantic_similarity" for item in parsed_text["access"]))
 
+    def test_mapping_domain_is_not_generated_as_exact_capability(self):
+        with TemporaryDirectory() as directory:
+            facts = copy.deepcopy(self._facts())
+            field = next(item for item in facts["field_capabilities"] if item["field_name"] == "scalar_integer")
+            field["field_name"] = "mapping_field"
+            field["canonical_shapes"] = ["mapping"]
+            field["scalar_domains"] = ["mapping"]
+            with self.assertRaises(CatalogGenerationError):
+                generate_catalog(
+                    facts,
+                    {
+                        "mapping_field": "mapping",
+                        "sequence_string": "sequence",
+                        "graph_only": "relation",
+                        "mixed_integer_string": "mixed",
+                    },
+                    Path(directory) / "catalog.json",
+                )
     def test_inconsistent_vector_target_fails_closed(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

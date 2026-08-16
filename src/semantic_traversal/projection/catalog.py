@@ -18,7 +18,7 @@ class CatalogGenerationError(ValueError):
     """The effective config or accepted facts cannot produce a catalog."""
 
 
-_DOMAIN_ORDER = ("null", "boolean", "integer", "float", "date", "datetime", "string", "mapping")
+_DOMAIN_ORDER = ("null", "boolean", "integer", "float", "date", "datetime", "string")
 _DOMAIN_RANK = {name: index for index, name in enumerate(_DOMAIN_ORDER)}
 _FIXED_DESCRIPTIONS = {
     ("intrinsic", "raw_markdown"): "authored Markdown of a semantic unit",

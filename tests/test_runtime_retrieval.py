@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.catalog_fixtures import minimum_catalog
 from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import (
@@ -17,6 +18,7 @@ from semantic_traversal.runtime.openai_provider import (
 )
 from semantic_traversal.runtime.prompts import prompt_version
 from semantic_traversal.runtime.retrieval import RuntimeRetrievalError, infer_retrieval
+from semantic_traversal.runtime.retrieval_requests import RetrievalRequestError, canonicalize_retrieval_request
 from semantic_traversal.runtime.router import route_conversation
 
 
@@ -39,7 +41,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
 
     def catalog(self, directory):
         path = Path(directory) / "capability_catalog.json"
-        content = '{"catalog_schema_version":"1","semantic_dimensions":[],"graph":{},"vector":{},"operators":{}}'
+        content = json.dumps(minimum_catalog(), separators=(",", ":"))
         path.write_bytes(content.encode("utf-8"))
         return path, content
 
@@ -52,6 +54,15 @@ class RuntimeRetrievalTests(unittest.TestCase):
         router = route_conversation(database, self.config(), conversation.conversation_id, provider=router_provider)
         return database, conversation, router
 
+    def test_mapping_is_not_a_legal_exact_request_domain(self):
+        with self.assertRaises(RetrievalRequestError):
+            canonicalize_retrieval_request({
+                "operator": "exact.equals",
+                "field_class": "semantic_identifier",
+                "field_name": "mapping_field",
+                "target": "complete_value",
+                "operand": {"shape": "scalar", "domain": "mapping", "value": {"label": "value"}},
+            })
     def test_config_has_two_exact_model_sections_and_hashes_exact_prompt_bytes(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
@@ -285,7 +296,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
             from semantic_traversal.runtime.conversation import migrate_runtime
             migrate_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
             self.assertEqual(connection.execute("SELECT prompt_version, parent_run_id, capability_catalog_sha256 FROM model_runs").fetchone(), ("sha256:32abaecb56571dd80b6915ac2b6c01a0e02cbbec0487dc3aa1e6aeb74d0ca352", None, None))
             self.assertEqual(connection.execute("SELECT run_id, conversation_id, trigger_message_id, run_kind, provider, model, status, started_at FROM model_runs").fetchone(), (before[0][0], before[0][1], before[0][2], before[0][3], before[0][4], before[0][5], before[0][7], before[0][8]))
             connection.close()

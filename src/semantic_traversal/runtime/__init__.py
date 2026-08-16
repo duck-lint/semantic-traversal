@@ -1,5 +1,9 @@
 """Mutable runtime state for durable conversational threads and inference runs."""
 
+from .control_plane import (
+    ConformanceRequestResult, RetrievalConformanceError, RetrievalConformanceResult,
+    conform_retrieval,
+)
 from .conversation import (
     Conversation, Message, RuntimeConversationError, append_message, create_conversation,
     get_conversation, initialize_runtime, migrate_runtime,
@@ -13,4 +17,5 @@ __all__ = [
     "get_conversation", "initialize_runtime", "migrate_runtime", "ModelConfig",
     "RuntimeConfig", "RuntimeConfigError", "load_runtime_config", "RetrievalInferenceResult",
     "RuntimeRetrievalError", "infer_retrieval", "RouterResult", "RuntimeRouterError", "route_conversation",
+    "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
 ]
