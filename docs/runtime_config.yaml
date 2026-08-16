@@ -1,0 +1,7 @@
+# Secret-free runtime configuration for the implemented router seam.
+# Replace the model value with the exact OpenAI API model identifier available
+# to the operator/account. Credentials are supplied only through OPENAI_API_KEY.
+router:
+  provider: openai
+  model: YOUR_EXPLICIT_OPENAI_MODEL_ID
+  timeout_seconds: 30

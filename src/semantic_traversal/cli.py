@@ -26,7 +26,9 @@ from .build.resolve import resolve_relations
 from .projection.substrate import foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
 from .build.vault import parse_vault
 from .projection.vector import OllamaEmbeddingProvider, build_vector_index, validate_vector_index, vector_eligible_targets, vector_lookup
-from .runtime.conversation import append_message, create_conversation, get_conversation, initialize_runtime
+from .runtime.config import load_runtime_config
+from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
+from .runtime.router import route_conversation
 
 
 class CliError(ValueError):
@@ -342,7 +344,12 @@ def _vector(args: argparse.Namespace) -> None:
 
 def _runtime_init(args: argparse.Namespace) -> None:
     initialize_runtime(args.database)
-    _emit({"database": str(Path(args.database).resolve()), "schema_version": 1}, args)
+    _emit({"database": str(Path(args.database).resolve()), "schema_version": SCHEMA_VERSION}, args)
+
+
+def _runtime_migrate(args: argparse.Namespace) -> None:
+    migrate_runtime(args.database)
+    _emit({"database": str(Path(args.database).resolve()), "schema_version": SCHEMA_VERSION}, args)
 
 
 def _runtime_conversation_create(args: argparse.Namespace) -> None:
@@ -355,6 +362,11 @@ def _runtime_message_append(args: argparse.Namespace) -> None:
 
 def _runtime_conversation_show(args: argparse.Namespace) -> None:
     _emit(get_conversation(args.database, args.conversation_id), args)
+
+
+def _runtime_router_infer(args: argparse.Namespace) -> None:
+    config = load_runtime_config(args.config)
+    _emit(route_conversation(args.database, config, args.conversation_id), args)
 
 
 def _add_build(parser: argparse.ArgumentParser) -> None:
@@ -392,11 +404,14 @@ def _parser() -> argparse.ArgumentParser:
     v = sub.add_parser("vector"); _add_build_ref(v); v.add_argument("--query", required=True); v.add_argument("--ollama-url", default="http://127.0.0.1:11434"); v.set_defaults(handler=_vector)
     runtime = sub.add_parser("runtime"); rsub = runtime.add_subparsers(dest="runtime_command", required=True)
     a = rsub.add_parser("init"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_init)
+    a = rsub.add_parser("migrate"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_migrate)
     conversation = rsub.add_parser("conversation"); csub = conversation.add_subparsers(dest="conversation_command", required=True)
     a = csub.add_parser("create"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_conversation_create)
     a = csub.add_parser("show"); a.add_argument("--database", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_conversation_show)
     message = rsub.add_parser("message"); msub = message.add_subparsers(dest="message_command", required=True)
     a = msub.add_parser("append"); a.add_argument("--database", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--role", choices=["user", "synthesis"], required=True); a.add_argument("--content", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_message_append)
+    router = rsub.add_parser("router"); rrouter = router.add_subparsers(dest="router_command", required=True)
+    a = rrouter.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_router_infer)
     return p
 
 
