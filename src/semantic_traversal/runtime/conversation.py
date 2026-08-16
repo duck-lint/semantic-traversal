@@ -96,29 +96,36 @@ def _timestamp(clock: Clock | None) -> str:
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        CREATE TABLE conversations (
-            conversation_id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE messages (
-            message_id INTEGER PRIMARY KEY,
-            conversation_id TEXT NOT NULL,
-            ordinal INTEGER NOT NULL,
-            role TEXT NOT NULL CHECK (role IN ('user', 'synthesis')),
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
-            UNIQUE (conversation_id, ordinal)
-        );
-
-        PRAGMA user_version = 2;
-        """
-    )
-    _create_model_runs_table(connection)
-    connection.execute("PRAGMA user_version = 2")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(
+            """
+            CREATE TABLE conversations (
+                conversation_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE messages (
+                message_id INTEGER PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('user', 'synthesis')),
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
+                UNIQUE (conversation_id, ordinal)
+            )
+            """
+        )
+        _create_model_runs_table(connection)
+        connection.execute("PRAGMA user_version = 2")
+        _validate_schema(connection, SCHEMA_VERSION)
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def _create_model_runs_table(connection: sqlite3.Connection) -> None:
@@ -291,9 +298,9 @@ def migrate_runtime(database_path: str | Path) -> None:
             transaction_started = True
             _create_model_runs_table(connection)
             connection.execute("PRAGMA user_version = 2")
+            _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             transaction_started = False
-            _validate_schema(connection, SCHEMA_VERSION)
             return
         if version == SCHEMA_VERSION:
             _validate_schema(connection, SCHEMA_VERSION)

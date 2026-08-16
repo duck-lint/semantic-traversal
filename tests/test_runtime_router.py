@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sqlite3
 import unittest
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ from semantic_traversal.runtime.openai_provider import (
 from semantic_traversal.runtime.router import (
     ROUTER_PROMPT_V1,
     ROUTER_PROMPT_VERSION,
+    RouterResult,
     RuntimeRouterError,
     route_conversation,
 )
@@ -58,6 +60,24 @@ class RuntimeRouterTests(unittest.TestCase):
         append_message(database, conversation.conversation_id, "synthesis", "hi\nthere", clock=self._clock(3))
         trigger = append_message(database, conversation.conversation_id, "user", "What is in my notes?", clock=self._clock(4))
         return conversation, trigger
+
+    def _stub_router_result(self):
+        return RouterResult(
+            run_id="run",
+            conversation_id="conversation",
+            trigger_message_id=1,
+            route="direct",
+            provider="openai",
+            model="model",
+            prompt_version="router-v1",
+            status="succeeded",
+            provider_response_id=None,
+            input_tokens=None,
+            cached_input_tokens=None,
+            output_tokens=None,
+            reasoning_tokens=None,
+            total_tokens=None,
+        )
 
     def test_runtime_config_is_exact_and_secret_free(self):
         with TemporaryDirectory() as directory:
@@ -107,6 +127,121 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 3)
             connection.close()
 
+    def test_direct_and_retrieval_routes_succeed_with_distinct_run_ids(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, _ = self._conversation_with_latest_user(database)
+            provider = ProviderDouble(ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage()))
+            first = route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            append_message(database, conversation.conversation_id, "user", "What is in my notes?")
+            provider.inference = ProviderInference("semantic_retrieval", '{"route":"semantic_retrieval"}', None, ProviderUsage())
+            second = route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            self.assertEqual(first.route, "direct")
+            self.assertEqual(second.route, "semantic_retrieval")
+            self.assertNotEqual(first.run_id, second.run_id)
+            connection = sqlite3.connect(database)
+            self.assertEqual(
+                [row[0] for row in connection.execute("SELECT output_json FROM model_runs ORDER BY started_at")],
+                ['{"route":"direct"}', '{"route":"semantic_retrieval"}'],
+            )
+            connection.close()
+
+    def test_invalid_provider_route_values_fail_as_durable_runtime_validation(self):
+        for invalid_route in ("code_work", "retrieval", None):
+            with self.subTest(invalid_route=invalid_route), TemporaryDirectory() as directory:
+                database = Path(directory) / "runtime.sqlite3"
+                conversation, _ = self._conversation_with_latest_user(database)
+                provider = ProviderDouble(ProviderInference(invalid_route, "ignored", None, ProviderUsage()))
+                with self.assertRaisesRegex(RuntimeRouterError, "runtime_validation"):
+                    route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+                connection = sqlite3.connect(database)
+                run = connection.execute("SELECT status, output_json, error_type FROM model_runs").fetchone()
+                self.assertEqual(run, ("failed", None, "runtime_validation"))
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 3)
+                connection.close()
+
+    def test_provider_json_output_failures_keep_structured_output_vs_runtime_validation(self):
+        cases = (
+            ('{"route":"direct","reason":"extra"}', "runtime_validation"),
+            ('"direct"', "runtime_validation"),
+            ("arbitrary prose", "structured_output"),
+        )
+        for raw_output, expected_error in cases:
+            with self.subTest(raw_output=raw_output):
+                captured = {}
+
+                class Responses:
+                    def create(self, **kwargs):
+                        captured["request"] = kwargs
+                        return SimpleNamespace(id="response", output_text=raw_output, usage=None)
+
+                class Client:
+                    def __init__(self, **kwargs):
+                        self.responses = Responses()
+
+                with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
+                    with self.assertRaises(OpenAIProviderError) as raised:
+                        OpenAIResponsesProvider().infer(self._config(), ROUTER_PROMPT_V1, ())
+                self.assertEqual(raised.exception.error_type, expected_error)
+
+    def test_invalid_provider_json_creates_failed_run_without_touching_messages(self):
+        cases = (
+            ('{"route":"code_work"}', "runtime_validation"),
+            ('{"route":"retrieval"}', "runtime_validation"),
+            ('{"route":null}', "runtime_validation"),
+            ('{"route":"direct","reason":"extra"}', "runtime_validation"),
+            ('"direct"', "runtime_validation"),
+            ("arbitrary prose", "structured_output"),
+        )
+        for raw_output, expected_error in cases:
+            with self.subTest(raw_output=raw_output), TemporaryDirectory() as directory:
+                database = Path(directory) / "runtime.sqlite3"
+                conversation, _ = self._conversation_with_latest_user(database)
+
+                class Responses:
+                    def create(self, **kwargs):
+                        return SimpleNamespace(id="response", output_text=raw_output, usage=None)
+
+                class Client:
+                    def __init__(self, **kwargs):
+                        self.responses = Responses()
+
+                with patch("semantic_traversal.runtime.openai_provider.openai.OpenAI", Client):
+                    with self.assertRaisesRegex(RuntimeRouterError, expected_error):
+                        route_conversation(database, self._config(), conversation.conversation_id)
+                connection = sqlite3.connect(database)
+                self.assertEqual(connection.execute("SELECT status, error_type, output_json FROM model_runs").fetchone(), ("failed", expected_error, None))
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 3)
+                connection.close()
+
+    def test_router_against_unmigrated_v1_fails_before_provider_contact(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.executescript(
+                """
+                CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+                CREATE TABLE messages (
+                    message_id INTEGER PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'synthesis')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
+                    UNIQUE (conversation_id, ordinal)
+                );
+                INSERT INTO conversations VALUES ('legacy', 'created');
+                INSERT INTO messages(conversation_id, ordinal, role, content, created_at) VALUES ('legacy', 0, 'user', 'hello', 'created');
+                PRAGMA user_version = 1;
+                """
+            )
+            connection.close()
+            provider = ProviderDouble(ProviderInference("direct", '{}', None, ProviderUsage()))
+            with self.assertRaises(RuntimeRouterError):
+                route_conversation(database, self._config(), "legacy", provider=provider)
+            self.assertEqual(provider.calls, [])
+
     def test_router_provider_failure_is_terminal_and_does_not_append_message(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
@@ -123,6 +258,20 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertIsNone(row[4])
             self.assertEqual(row[5:], ("timeout", "provider timed out"))
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 3)
+            connection.close()
+
+    def test_local_terminal_persistence_failure_is_runtime_validation_not_provider_status(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, _ = self._conversation_with_latest_user(database)
+            provider = ProviderDouble(ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage()))
+            with patch(
+                "semantic_traversal.runtime.router.complete_router_run",
+                side_effect=sqlite3.OperationalError("local persistence failed"),
+            ), self.assertRaisesRegex(RuntimeRouterError, "runtime_validation"):
+                route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT status, error_type FROM model_runs").fetchone(), ("failed", "runtime_validation"))
             connection.close()
 
     def test_router_requires_latest_user_and_does_not_create_run(self):
@@ -201,6 +350,55 @@ class RuntimeRouterTests(unittest.TestCase):
                 code = main(["runtime", "router", "infer", "--database", str(database), "--config", str(config), "--conversation-id", conversation.conversation_id, "--json"])
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertEqual(json.loads(stdout.getvalue())["route"], "direct")
+
+    def test_router_cli_dotenv_process_key_wins_over_exact_cwd_file(self):
+        with TemporaryDirectory() as directory:
+            cwd = Path(directory)
+            config = cwd / "runtime.yaml"
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "process-key"}), patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.route_conversation", return_value=self._stub_router_result()):
+                code = main(["runtime", "router", "infer", "--database", str(cwd / "runtime.sqlite3"), "--config", str(config), "--conversation-id", "conversation", "--json"])
+                self.assertEqual(code, 0)
+                self.assertEqual(os.environ["OPENAI_API_KEY"], "process-key")
+
+    def test_router_cli_dotenv_loads_only_exact_cwd_file_when_process_key_absent(self):
+        with TemporaryDirectory() as directory:
+            cwd = Path(directory)
+            config = cwd / "runtime.yaml"
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("OPENAI_API_KEY", None)
+                with patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.route_conversation", return_value=self._stub_router_result()):
+                    code = main(["runtime", "router", "infer", "--database", str(cwd / "runtime.sqlite3"), "--config", str(config), "--conversation-id", "conversation", "--json"])
+                self.assertEqual(code, 0)
+                self.assertEqual(os.environ["OPENAI_API_KEY"], "dotenv-key")
+
+    def test_router_cli_does_not_search_parent_dotenv(self):
+        with TemporaryDirectory() as directory:
+            parent = Path(directory)
+            cwd = parent / "child"
+            cwd.mkdir()
+            config = cwd / "runtime.yaml"
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n", encoding="utf-8")
+            (parent / ".env").write_text("OPENAI_API_KEY=parent-key\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("OPENAI_API_KEY", None)
+                with patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.route_conversation", return_value=self._stub_router_result()):
+                    code = main(["runtime", "router", "infer", "--database", str(cwd / "runtime.sqlite3"), "--config", str(config), "--conversation-id", "conversation", "--json"])
+                self.assertEqual(code, 0)
+                self.assertNotIn("OPENAI_API_KEY", os.environ)
+
+    def test_non_model_cli_commands_do_not_load_dotenv(self):
+        with TemporaryDirectory() as directory:
+            cwd = Path(directory)
+            (cwd / ".env").write_text("OPENAI_API_KEY=must-not-load\n", encoding="utf-8")
+            database = cwd / "runtime.sqlite3"
+            with patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.load_dotenv") as loader:
+                self.assertEqual(main(["runtime", "init", "--database", str(database)]), 0)
+                self.assertEqual(main(["runtime", "conversation", "create", "--database", str(database)]), 0)
+                loader.assert_not_called()
 
 
 if __name__ == "__main__":

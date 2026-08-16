@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from uuid import UUID
 
 from semantic_traversal.cli import main
@@ -133,7 +134,8 @@ class RuntimeConversationTests(unittest.TestCase):
                 ),
             )
             connection.commit()
-            before = tuple(connection.execute("SELECT * FROM messages ORDER BY ordinal"))
+            before_conversations = tuple(connection.execute("SELECT * FROM conversations ORDER BY conversation_id"))
+            before_messages = tuple(connection.execute("SELECT * FROM messages ORDER BY conversation_id, ordinal"))
             connection.close()
 
             with self.assertRaisesRegex(RuntimeConversationError, "requires explicit migration"):
@@ -142,7 +144,10 @@ class RuntimeConversationTests(unittest.TestCase):
                 initialize_runtime(database)
             migrate_runtime(database)
             restored = get_conversation(database, "legacy-conversation")
-            self.assertEqual(tuple((row.message_id, row.conversation_id, row.ordinal, row.role, row.content, row.created_at) for row in restored.messages), before)
+            connection = sqlite3.connect(database)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM conversations ORDER BY conversation_id")), before_conversations)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM messages ORDER BY conversation_id, ordinal")), before_messages)
+            connection.close()
 
             connection = sqlite3.connect(database)
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
@@ -162,6 +167,43 @@ class RuntimeConversationTests(unittest.TestCase):
             connection = sqlite3.connect(database)
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='model_runs'").fetchone(), None)
+            connection.close()
+
+    def test_injected_candidate_v2_validation_failure_rolls_back_to_v1(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database)
+            connection = sqlite3.connect(database)
+            connection.execute("INSERT INTO conversations VALUES (?, ?)", ("legacy", "created"))
+            connection.execute("INSERT INTO messages(conversation_id, ordinal, role, content, created_at) VALUES (?, ?, ?, ?, ?)", ("legacy", 0, "user", "content", "created"))
+            connection.commit()
+            before_conversations = tuple(connection.execute("SELECT * FROM conversations"))
+            before_messages = tuple(connection.execute("SELECT * FROM messages"))
+            connection.close()
+            with patch(
+                "semantic_traversal.runtime.conversation._validate_schema",
+                side_effect=[None, RuntimeConversationError("injected candidate-v2 validation failure")],
+            ), self.assertRaisesRegex(RuntimeConversationError, "injected candidate-v2"):
+                migrate_runtime(database)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM conversations")), before_conversations)
+            self.assertEqual(tuple(connection.execute("SELECT * FROM messages")), before_messages)
+            self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='model_runs'").fetchone())
+            connection.close()
+
+    def test_injected_v2_construction_failure_rolls_back_new_initialization(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            with patch(
+                "semantic_traversal.runtime.conversation._create_model_runs_table",
+                side_effect=sqlite3.OperationalError("injected schema-construction failure"),
+            ), self.assertRaisesRegex(sqlite3.OperationalError, "injected schema-construction"):
+                initialize_runtime(database)
+            self.assertTrue(database.exists())
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(tuple(connection.execute("SELECT name FROM sqlite_master WHERE type='table'")), ())
             connection.close()
 
     def test_non_init_operations_never_create_missing_or_empty_databases(self):

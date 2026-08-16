@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
+from dotenv import load_dotenv
 
 from .build.canonical import canonicalize_ingest
 from .projection.catalog import generate_catalog
@@ -366,6 +367,9 @@ def _runtime_conversation_show(args: argparse.Namespace) -> None:
 
 def _runtime_router_infer(args: argparse.Namespace) -> None:
     config = load_runtime_config(args.config)
+    dotenv_path = Path.cwd() / ".env"
+    if dotenv_path.is_file():
+        load_dotenv(dotenv_path, override=False)
     _emit(route_conversation(args.database, config, args.conversation_id), args)
 
 

@@ -102,7 +102,7 @@ def _canonical_output(route: str) -> str:
 def _provider_failure(error: Exception) -> tuple[str, str]:
     if isinstance(error, OpenAIProviderError):
         return error.error_type, str(error)
-    if isinstance(error, RuntimeRouterError):
+    if isinstance(error, (RuntimeRouterError, RuntimeConversationError, sqlite3.Error)):
         return "runtime_validation", str(error)
     return "provider_status", str(error)
 
@@ -188,6 +188,7 @@ def route_conversation(
     except Exception as exc:
         error_type, error_message = _provider_failure(exc)
         try:
+            connection.rollback()
             connection.execute("BEGIN IMMEDIATE")
             fail_router_run(
                 connection,
