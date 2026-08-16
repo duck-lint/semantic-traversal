@@ -249,12 +249,12 @@ def _operators(facts: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def generate_catalog(
+def catalog_from_facts(
     facts: Mapping[str, Any],
     semantic_identifier_descriptions: Mapping[str, str],
-    output_path: str | Path,
 ) -> dict[str, Any]:
-    """Generate one deterministic catalog from an effective BuildConfig mapping."""
+    """Build the in-memory schema-1 catalog representation from accepted facts."""
+
     descriptions = semantic_identifier_descriptions
     if not isinstance(descriptions, Mapping):
         raise CatalogGenerationError("catalog descriptions must come from effective BuildConfig")
@@ -269,17 +269,27 @@ def generate_catalog(
             + ", ".join(missing)
         )
     vector = _vector(facts)
-    catalog = {
+    return {
         "catalog_schema_version": "1",
         "semantic_dimensions": _semantic_dimensions(facts, descriptions, vector),
         "graph": _graph(facts, descriptions),
         "vector": vector,
         "operators": _operators(facts),
     }
+
+
+def generate_catalog(
+    facts: Mapping[str, Any],
+    semantic_identifier_descriptions: Mapping[str, str],
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Generate one deterministic catalog from an effective BuildConfig mapping."""
+
+    catalog = catalog_from_facts(facts, semantic_identifier_descriptions)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return catalog
 
 
-__all__ = ["CatalogGenerationError", "generate_catalog"]
+__all__ = ["CatalogGenerationError", "catalog_from_facts", "generate_catalog"]
