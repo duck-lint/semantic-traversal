@@ -36,3 +36,6 @@ stage unless the specification explicitly makes it a dependency.
 Do not modify source corpus/vault data unless the task explicitly authorizes it.
 Do not treat diagnostic output as authority over source data until the
 implementation producing it has been accepted as conformant.
+
+# Litmus Test
+Each transformation/layer may change the representation of meaning without changing the meaning represented.
