@@ -1,0 +1,251 @@
+import json
+import contextlib
+import copy
+import io
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from ruamel.yaml import YAML
+
+from ugh_parser.catalog import CatalogGenerationError, generate_catalog
+from ugh_parser.cli import main
+
+
+class CatalogTests(unittest.TestCase):
+    def _facts(self):
+        return {
+            "field_capabilities": [
+                {
+                    "field_class": "intrinsic",
+                    "field_name": "parsed_text",
+                    "canonical_shapes": ["string"],
+                    "surfaces": {
+                        "exact": {"operators": ["equals"]},
+                        "lexical": {"operators": ["terms", "phrase"]},
+                    },
+                },
+                {
+                    "field_class": "region",
+                    "field_name": "region_path",
+                    "canonical_shapes": ["sequence"],
+                    "surfaces": {"exact": {"operators": ["equals"]}},
+                },
+                {
+                    "field_class": "semantic_path",
+                    "field_name": "path_hierarchy",
+                    "canonical_shapes": ["sequence"],
+                    "surfaces": {"exact": {"operators": ["equals"]}},
+                },
+                {
+                    "field_class": "semantic_identifier",
+                    "field_name": "scalar_integer",
+                    "canonical_shapes": ["integer"],
+                    "scalar_domains": ["integer"],
+                    "surfaces": {"exact": {"operators": ["equals"]}},
+                },
+                {
+                    "field_class": "semantic_identifier",
+                    "field_name": "sequence_string",
+                    "canonical_shapes": ["sequence"],
+                    "scalar_domains": [],
+                    "sequence_member_domains": ["string"],
+                    "surfaces": {
+                        "exact": {"operators": ["equals"], "sequence_behavior": "member_equality"},
+                        "lexical": {"operators": ["terms", "phrase"], "operand_domains": ["string"]},
+                    },
+                },
+                {
+                    "field_class": "semantic_identifier",
+                    "field_name": "mixed_integer_string",
+                    "canonical_shapes": ["integer", "sequence"],
+                    "scalar_domains": ["integer"],
+                    "sequence_member_domains": ["string"],
+                    "surfaces": {"exact": {"operators": ["equals"]}, "lexical": {"operators": ["terms", "phrase"]}},
+                },
+            ],
+            "graph_discovery_capabilities": [
+                {"node_kind": "semantic_object", "dimension_name": "tag", "operators": ["terms", "phrase"]},
+            ],
+            "graph_relation_capabilities": [
+                {
+                    "relation_class": "semantic_identifier",
+                    "relation_name": "sequence_string",
+                    "source_kinds": ["semantic_object"],
+                    "target_kinds": ["semantic_object", "semantic_region"],
+                    "operations": ["relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"],
+                },
+                {
+                    "relation_class": "semantic_identifier",
+                    "relation_name": "graph_only",
+                    "source_kinds": ["semantic_object"],
+                    "target_kinds": ["semantic_object", "semantic_region"],
+                    "operations": ["relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"],
+                },
+                {
+                    "relation_class": "structural",
+                    "relation_name": "contains_scope",
+                    "source_kinds": ["scope"],
+                    "target_kinds": ["scope"],
+                    "operations": ["relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"],
+                },
+            ],
+            "graph_node_classes": ["scope", "semantic_object", "semantic_region", "semantic_unit"],
+            "vector_capability": {
+                "operations": ["semantic_similarity"],
+                "query_operand": {
+                    "shape": "string",
+                    "requirement": "exactly one non-empty string",
+                    "segmentation": False,
+                    "truncation": False,
+                    "deterministic_enrichment": False,
+                },
+                "represented_target_kinds": [
+                    {"target_kind": "semantic_unit", "input_dimension": "exact_canonical_parsed_text"},
+                    {"target_kind": "semantic_object", "input_dimension": "canonical_authored_object_name_for_zero_unit_object"},
+                ],
+            },
+            "surface_operation_grammar": {
+                "exact": ["equals"],
+                "lexical": ["terms", "phrase"],
+                "vector": ["semantic_similarity"],
+                "graph": ["node_discovery", "relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"],
+            },
+        }
+
+    def _vocabulary(self, root: Path, descriptions: dict[str, str]) -> Path:
+        path = root / "semantic-vocabulary.yaml"
+        yaml = YAML()
+        with path.open("w", encoding="utf-8", newline="\n") as stream:
+            yaml.dump({"semantic_identifiers": {name: {"description": value} for name, value in descriptions.items()}}, stream)
+        return path
+
+    def test_success_presents_value_shapes_access_and_reused_authored_description(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            description = "  authored meaning, preserved exactly  "
+            vocabulary = self._vocabulary(root, {
+                "sequence_string": description,
+                "graph_only": "graph-only meaning",
+                "mixed_integer_string": "mixed meaning",
+                "scalar_integer": "integer meaning",
+            })
+            output = root / "capability-catalog.json"
+            catalog = generate_catalog(self._facts(), vocabulary, output, root / "homework.yaml")
+            self.assertEqual(catalog, json.loads(output.read_text(encoding="utf-8")))
+            self.assertEqual(list(catalog), ["catalog_schema_version", "semantic_dimensions", "graph", "vector", "operators"])
+
+            dimensions = {(item["field_class"], item["field_name"]): item for item in catalog["semantic_dimensions"]}
+            sequence = dimensions[("semantic_identifier", "sequence_string")]
+            self.assertEqual(sequence["value"], {"shapes": [{"shape": "sequence", "member_domains": ["string"]}]})
+            self.assertEqual(sequence["description"], description)
+            self.assertEqual([(item["operator"], item["target"]) for item in sequence["access"]], [
+                ("exact.equals", "member"), ("lexical.terms", "member"), ("lexical.phrase", "member")
+            ])
+
+            mixed = dimensions[("semantic_identifier", "mixed_integer_string")]
+            self.assertEqual(mixed["value"], {"shapes": [
+                {"shape": "scalar", "domains": ["integer"]},
+                {"shape": "sequence", "member_domains": ["string"]},
+            ]})
+            self.assertEqual([(item["operator"], item["target"], item["domains"]) for item in mixed["access"]], [
+                ("exact.equals", "complete_value", ["integer"]),
+                ("exact.equals", "member", ["string"]),
+                ("lexical.terms", "member", ["string"]),
+                ("lexical.phrase", "member", ["string"]),
+            ])
+            self.assertEqual(dimensions[("semantic_path", "path_hierarchy")]["value"], {"shapes": [{"shape": "ordered_sequence", "domains": ["string"]}]})
+
+            relations = {(item["relation_class"], item["relation_name"]): item for item in catalog["graph"]["relations"]}
+            self.assertEqual(relations[("semantic_identifier", "sequence_string")]["description"], description)
+            self.assertEqual(relations[("semantic_identifier", "graph_only")]["description"], "graph-only meaning")
+            self.assertNotIn("scalar_domains", json.dumps(catalog))
+            self.assertNotIn("sequence_member_domains", json.dumps(catalog))
+            self.assertNotIn("operand_domains", json.dumps(catalog))
+            self.assertNotIn("unit_id", json.dumps(catalog))
+
+    def test_missing_descriptions_write_only_sorted_homework_and_preserve_catalog(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            vocabulary = self._vocabulary(root, {"sequence_string": "ok"})
+            output = root / "capability-catalog.json"
+            output.write_text("sentinel", encoding="utf-8")
+            homework = root / "homework.yaml"
+            with self.assertRaisesRegex(CatalogGenerationError, "graph_only, mixed_integer_string, scalar_integer"):
+                generate_catalog(self._facts(), vocabulary, output, homework)
+            self.assertEqual(output.read_text(encoding="utf-8"), "sentinel")
+            document = YAML(typ="safe", pure=True).load(homework.read_text(encoding="utf-8"))
+            self.assertEqual(list(document["semantic_identifiers"]), ["graph_only", "mixed_integer_string", "scalar_integer"])
+            self.assertEqual(document["semantic_identifiers"], {
+                "graph_only": {"description": ""},
+                "mixed_integer_string": {"description": ""},
+                "scalar_integer": {"description": ""},
+            })
+
+    def test_blank_description_is_missing_and_unknown_vocabulary_does_not_create_dimension(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            vocabulary = self._vocabulary(root, {"sequence_string": " ", "unknown": "not represented"})
+            with self.assertRaisesRegex(CatalogGenerationError, "sequence_string"):
+                generate_catalog(self._facts(), vocabulary, root / "catalog.json", root / "homework.yaml")
+            complete = self._vocabulary(root, {
+                "sequence_string": "sequence",
+                "graph_only": "relation",
+                "mixed_integer_string": "mixed",
+                "scalar_integer": "integer",
+            })
+            catalog = generate_catalog(self._facts(), complete, root / "catalog.json", root / "homework-2.yaml")
+            names = {(item["field_class"], item["field_name"]) for item in catalog["semantic_dimensions"]}
+            self.assertNotIn(("semantic_identifier", "unknown"), names)
+            self.assertNotIn("unknown", json.dumps(catalog))
+
+    def test_catalog_bytes_are_deterministic(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts = self._facts()
+            first = root / "first.json"
+            second = root / "second.json"
+            generate_catalog(facts, self._vocabulary(root, {"graph_only": "g", "sequence_string": "s", "mixed_integer_string": "m", "scalar_integer": "i"}), first, root / "h1.yaml")
+            generate_catalog(facts, self._vocabulary(root, {"scalar_integer": "i", "mixed_integer_string": "m", "sequence_string": "s", "graph_only": "g"}), second, root / "h2.yaml")
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_cli_catalog_generate_delegates_to_accepted_observer(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            vocabulary = self._vocabulary(root, {
+                "sequence_string": "sequence",
+                "graph_only": "relation",
+                "mixed_integer_string": "mixed",
+                "scalar_integer": "integer",
+            })
+            output = root / "catalog.json"
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch("ugh_parser.cli._connection"), patch("ugh_parser.cli.observe_capability_facts", return_value=self._facts()):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main([
+                        "catalog", "generate", "--build", str(root / "completed-build"),
+                        "--vocabulary", str(vocabulary), "--output", str(output),
+                        "--missing-output", str(root / "homework.yaml"), "--json",
+                    ])
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertEqual(json.loads(stdout.getvalue()), {"catalog": str(output.resolve())})
+            self.assertTrue(output.is_file())
+
+    def test_unsupported_observer_facts_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            vocabulary = self._vocabulary(root, {
+                "sequence_string": "sequence",
+                "graph_only": "relation",
+                "mixed_integer_string": "mixed",
+                "scalar_integer": "integer",
+            })
+            facts = copy.deepcopy(self._facts())
+            facts["graph_discovery_capabilities"][0]["dimension_name"] = "unsupported"
+            with self.assertRaises(CatalogGenerationError):
+                generate_catalog(facts, vocabulary, root / "catalog.json", root / "homework.yaml")
+
+
+if __name__ == "__main__":
+    unittest.main()

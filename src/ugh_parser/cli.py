@@ -15,6 +15,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .canonical import canonicalize_ingest
+from .catalog import generate_catalog
 from .capability_facts import human_capability_facts, observe_capability_facts
 from .exact import exact_lookup, build_exact_index
 from .graph import GraphHandle, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
@@ -214,6 +215,16 @@ def _inspect_capability_facts(args: argparse.Namespace) -> None:
         connection.close()
 
 
+def _catalog_generate(args: argparse.Namespace) -> None:
+    connection = _connection(args.build)
+    try:
+        facts = observe_capability_facts(connection, Path(args.build).resolve() / "vectors.npy")
+    finally:
+        connection.close()
+    generate_catalog(facts, args.vocabulary, args.output, args.missing_output)
+    _emit({"catalog": str(Path(args.output).resolve())}, args)
+
+
 def _inspect_object(args: argparse.Namespace) -> None:
     if bool(args.path) == bool(args.uuid):
         raise CliError("exactly one of --path or --uuid is required")
@@ -340,6 +351,9 @@ def _parser() -> argparse.ArgumentParser:
     a = isub.add_parser("capability-facts", help="observe diagnostic facts from a completed build"); _add_build_ref(a); a.set_defaults(handler=_inspect_capability_facts)
     a = isub.add_parser("object"); _add_build_ref(a); object_address = a.add_mutually_exclusive_group(required=True); object_address.add_argument("--path"); object_address.add_argument("--uuid"); a.set_defaults(handler=_inspect_object)
     a = isub.add_parser("unit"); _add_build_ref(a); a.add_argument("--unit-id", required=True, type=int); a.set_defaults(handler=_inspect_unit)
+    catalog = sub.add_parser("catalog"); csub = catalog.add_subparsers(dest="catalog_command", required=True)
+    a = csub.add_parser("generate", help="generate a model-facing capability catalog from accepted facts")
+    _add_build_ref(a); a.add_argument("--vocabulary", required=True); a.add_argument("--output", required=True); a.add_argument("--missing-output", required=True); a.set_defaults(handler=_catalog_generate)
     e = sub.add_parser("exact"); _add_build_ref(e); e.add_argument("--field-class", required=True); e.add_argument("--field-name", required=True); e.add_argument("--value-type", choices=["string","int","float","bool","date","datetime","null"]); e.add_argument("--value"); e.add_argument("--component", action="append"); e.set_defaults(handler=_exact)
     lexical = sub.add_parser("lexical"); lsub = lexical.add_subparsers(dest="operator", required=True)
     for op in ("terms", "phrase"):
