@@ -12,7 +12,7 @@ from uuid import UUID
 from semantic_traversal.cli import main
 from semantic_traversal.runtime.conversation import (
     RuntimeConversationError,
-    _connect,
+    _connect_runtime,
     append_message,
     create_conversation,
     get_conversation,
@@ -29,6 +29,44 @@ class RuntimeConversationTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = main(list(argv))
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def _write_schema(
+        self,
+        database: Path,
+        *,
+        conversation_created_at="TEXT NOT NULL",
+        message_id="INTEGER PRIMARY KEY",
+        message_conversation_id="TEXT NOT NULL",
+        message_ordinal="INTEGER NOT NULL",
+        message_role="TEXT NOT NULL CHECK (role IN ('user', 'synthesis'))",
+        message_content="TEXT NOT NULL",
+        message_created_at="TEXT NOT NULL",
+        foreign_key=True,
+        unique_order=True,
+    ):
+        foreign_key_sql = ", FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)" if foreign_key else ""
+        unique_sql = ", UNIQUE (conversation_id, ordinal)" if unique_order else ""
+        connection = sqlite3.connect(database)
+        connection.executescript(
+            f"""
+            CREATE TABLE conversations (
+                conversation_id TEXT PRIMARY KEY,
+                created_at {conversation_created_at}
+            );
+            CREATE TABLE messages (
+                message_id {message_id},
+                conversation_id {message_conversation_id},
+                ordinal {message_ordinal},
+                role {message_role},
+                content {message_content},
+                created_at {message_created_at}
+                {foreign_key_sql}
+                {unique_sql}
+            );
+            PRAGMA user_version = 1;
+            """
+        )
+        connection.close()
 
     def test_new_database_schema_is_v1_foreign_keyed_and_idempotent(self):
         with TemporaryDirectory() as directory:
@@ -49,11 +87,12 @@ class RuntimeConversationTests(unittest.TestCase):
             self.assertIn("CHECK", connection.execute("SELECT sql FROM sqlite_master WHERE name='messages'").fetchone()[0])
             connection.close()
 
+            initialize_runtime(database)
             conversation = create_conversation(database)
             initialize_runtime(database)
             self.assertEqual(get_conversation(database, conversation.conversation_id), conversation)
 
-            runtime_connection = _connect(database)
+            runtime_connection = _connect_runtime(database)
             self.assertEqual(runtime_connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
             runtime_connection.close()
 
@@ -67,6 +106,73 @@ class RuntimeConversationTests(unittest.TestCase):
             with self.assertRaises(RuntimeConversationError):
                 initialize_runtime(database)
 
+    def test_non_init_operations_never_create_missing_or_empty_databases(self):
+        for operation in ("create", "append", "get"):
+            with self.subTest(operation=operation), TemporaryDirectory() as directory:
+                database = Path(directory) / "runtime.sqlite3"
+                with self.assertRaises(RuntimeConversationError):
+                    if operation == "create":
+                        create_conversation(database)
+                    elif operation == "append":
+                        append_message(database, "missing", "user", "content")
+                    else:
+                        get_conversation(database, "missing")
+                self.assertFalse(database.exists())
+
+                sqlite3.connect(database).close()
+                with self.assertRaises(RuntimeConversationError):
+                    if operation == "create":
+                        create_conversation(database)
+                    elif operation == "append":
+                        append_message(database, "missing", "user", "content")
+                    else:
+                        get_conversation(database, "missing")
+                connection = sqlite3.connect(database)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                self.assertEqual(
+                    {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
+                    set(),
+                )
+                connection.close()
+                initialize_runtime(database)
+                connection = sqlite3.connect(database)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+                connection.close()
+
+    def test_schema_v1_column_type_must_match(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database, conversation_created_at="INTEGER NOT NULL")
+            with self.assertRaises(RuntimeConversationError):
+                initialize_runtime(database)
+
+    def test_schema_v1_required_not_null_must_match(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database, message_content="TEXT")
+            with self.assertRaises(RuntimeConversationError):
+                initialize_runtime(database)
+
+    def test_schema_v1_primary_key_must_match(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            self._write_schema(database, message_id="INTEGER")
+            with self.assertRaises(RuntimeConversationError):
+                initialize_runtime(database)
+
+    def test_schema_v1_foreign_key_unique_and_role_check_must_match(self):
+        variants = (
+            {"foreign_key": False},
+            {"unique_order": False},
+            {"message_role": "TEXT NOT NULL CHECK (role IN ('user'))"},
+        )
+        for variant in variants:
+            with self.subTest(variant=variant), TemporaryDirectory() as directory:
+                database = Path(directory) / "runtime.sqlite3"
+                self._write_schema(database, **variant)
+                with self.assertRaises(RuntimeConversationError):
+                    initialize_runtime(database)
+
     def test_no_execution_tables_are_created(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
@@ -79,6 +185,7 @@ class RuntimeConversationTests(unittest.TestCase):
     def test_conversation_identity_is_uuid_and_timestamps_are_utc_facts(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
+            initialize_runtime(database)
             first = create_conversation(database, clock=self._clock(1))
             second = create_conversation(database, clock=self._clock(2))
             UUID(first.conversation_id)
@@ -90,6 +197,7 @@ class RuntimeConversationTests(unittest.TestCase):
     def test_roles_and_content_are_strictly_admitted_without_rewriting(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
+            initialize_runtime(database)
             conversation = create_conversation(database)
             for role in ("assistant", "router", "retrieval_inference", "system", "tool"):
                 with self.subTest(role=role), self.assertRaises(RuntimeConversationError):
@@ -104,6 +212,7 @@ class RuntimeConversationTests(unittest.TestCase):
     def test_append_is_linear_ordinal_zero_and_failed_append_is_empty(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
+            initialize_runtime(database)
             first = create_conversation(database)
             second = create_conversation(database)
             one = append_message(database, first.conversation_id, "user", "one", clock=self._clock(2))
@@ -126,6 +235,7 @@ class RuntimeConversationTests(unittest.TestCase):
     def test_exact_complete_thread_reconstruction_and_append_only_surface(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
+            initialize_runtime(database)
             conversation = create_conversation(database)
             first = append_message(database, conversation.conversation_id, "user", "hello  ")
             second = append_message(database, conversation.conversation_id, "synthesis", "hi\nthere")
@@ -147,6 +257,12 @@ class RuntimeConversationTests(unittest.TestCase):
     def test_cli_runtime_round_trip_requires_explicit_database(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
+            code, _, _ = self._run_cli("runtime", "conversation", "create", "--database", str(database), "--json")
+            self.assertNotEqual(code, 0)
+            self.assertFalse(database.exists())
+            code, _, _ = self._run_cli("runtime", "conversation", "show", "--database", str(database), "--conversation-id", "missing", "--json")
+            self.assertNotEqual(code, 0)
+            self.assertFalse(database.exists())
             code, stdout, _ = self._run_cli("runtime", "init", "--database", str(database), "--json")
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout)["schema_version"], 1)
