@@ -38,4 +38,25 @@ Do not treat diagnostic output as authority over source data until the
 implementation producing it has been accepted as conformant.
 
 # Litmus Test
-Each transformation/layer may change the representation of meaning without changing the meaning represented.
+Each transformation/layer may change the representation of meaning without changing the meaning represented—guarding against:
+SEMANTIC LEAKAGE:
+- downstream representation introduces meaning that no upstream authority supplied.
+SEMANTIC ERASURE:
+- downstream representation drops a distinction that the next layer actually needs.
+
+# Semantic Conservation Chain
+```text
+AUTHORED MEANING
+      ↓
+CANONICAL STATE
+      ↓
+RETRIEVAL REPRESENTATIONS
+      ↓
+CAPABILITY FACTS
+      ↓
+MODEL-FACING CATALOG
+      ↓
+MODEL 1 RETRIEVAL CHOICE
+      ↓
+CONTROL-PLANE VALIDATION
+```
