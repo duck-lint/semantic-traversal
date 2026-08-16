@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig,
     GraphHandle,
     build_exact_index,

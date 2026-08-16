@@ -17,4 +17,4 @@ dependencies = [
 where = ["src"]
 
 [project.scripts]
-semantic-traversal = "ugh_parser.cli:main"
+semantic-traversal = "semantic_traversal.cli:main"

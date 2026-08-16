@@ -2,7 +2,7 @@
 
 The exact table stores only lookup keys and canonical ``unit_id`` values.  It
 does not duplicate canonical semantic state and it cannot hydrate a unit by
-itself; callers must use :func:`ugh_parser.substrate.hydrate_unit`.
+itself; callers must use :func:`semantic_traversal.projection.substrate.hydrate_unit`.
 """
 
 from __future__ import annotations

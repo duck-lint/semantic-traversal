@@ -1,4 +1,4 @@
-from ugh_parser import BuildConfig, SemanticIdentifierDeclaration
+from semantic_traversal import BuildConfig, SemanticIdentifierDeclaration
 
 
 def build_config(

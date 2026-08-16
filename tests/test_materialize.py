@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ugh_parser import (
+from semantic_traversal import (
     BuildConfig,
     MaterializationError,
     VaultParseResult,
@@ -10,7 +10,7 @@ from ugh_parser import (
     parse_vault,
 )
 from tests._test_helpers import build_config
-from ugh_parser.vault import CorpusFailure
+from semantic_traversal.build.vault import CorpusFailure
 
 
 class ContextMaterializationTests(unittest.TestCase):

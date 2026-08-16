@@ -1,10 +1,13 @@
 .env.*
+.env
 *.pyc
 agent_harness/private/
 .venv/
 __pycache__/
 *.py[cod]
 build/
+!src/semantic_traversal/build/
+!src/semantic_traversal/build/*.py
 dist/
 output/
 .runtime_deps/

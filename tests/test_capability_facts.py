@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from ugh_parser import EmbeddingContract, EmbeddingProviderError
-from ugh_parser.cli import main
+from semantic_traversal import EmbeddingContract, EmbeddingProviderError
+from semantic_traversal.cli import main
 
 
 class ObserverProvider:
@@ -101,7 +101,7 @@ class CapabilityFactsTests(unittest.TestCase):
     def _build(self, root: Path) -> tuple[Path, Path, Path]:
         vault, config = self._fixture(root)
         output = root / "build"
-        with patch("ugh_parser.cli.OllamaEmbeddingProvider", ObserverProvider):
+        with patch("semantic_traversal.cli.OllamaEmbeddingProvider", ObserverProvider):
             code, _, stderr = self._run(
                 "build", "--vault", str(vault), "--config", str(config), "--output", str(output)
             )
@@ -109,9 +109,9 @@ class CapabilityFactsTests(unittest.TestCase):
         return vault, config, output
 
     def _observe(self, output: Path) -> tuple[int, str, str]:
-        with patch("ugh_parser.cli.OllamaEmbeddingProvider", side_effect=AssertionError("observer contacted Ollama")), patch(
-            "ugh_parser.cli.parse_vault", side_effect=AssertionError("observer parsed the vault")
-        ), patch("ugh_parser.cli.load_build_config", side_effect=AssertionError("observer read build config")):
+        with patch("semantic_traversal.cli.OllamaEmbeddingProvider", side_effect=AssertionError("observer contacted Ollama")), patch(
+            "semantic_traversal.cli.parse_vault", side_effect=AssertionError("observer parsed the vault")
+        ), patch("semantic_traversal.cli.load_build_config", side_effect=AssertionError("observer read build config")):
             return self._run("inspect", "capability-facts", "--build", str(output), "--json")
 
     def test_observer_uses_completed_build_only_and_is_read_only(self):
