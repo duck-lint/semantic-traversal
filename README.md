@@ -20,6 +20,9 @@ The project is being reconstructed around an authority boundary:
 Indexes, embeddings, model outputs, and diagnostic observations are derivative
 artifacts. They do not become a replacement ontology for the vault.
 
+<img width="1460" height="1181" alt="image" src="https://github.com/user-attachments/assets/c0fdf94d-c69d-4bad-9b14-2381c1bdbfe1" />
+
+
 ## Current implementation
 
 The `import` branch contains an executable substrate build and the first
