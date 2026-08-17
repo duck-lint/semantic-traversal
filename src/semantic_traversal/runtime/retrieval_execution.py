@@ -261,14 +261,25 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
             raise RetrievalExecutionError("persisted retrieval request status is malformed")
         if status == "succeeded" and (not isinstance(item["result"], dict) or item["failure"] is not None):
             raise RetrievalExecutionError("persisted successful retrieval outcome is malformed")
-        if status != "succeeded" and (item["result"] is not None or not isinstance(item["failure"], dict)):
-            raise RetrievalExecutionError("persisted failed retrieval outcome is malformed")
+        if status == "failed":
+            if item["result"] is not None or not isinstance(item["failure"], dict):
+                raise RetrievalExecutionError("persisted failed retrieval outcome is malformed")
+            if set(item["failure"]) != {"kind", "surface", "exception_type", "message"} or item["failure"]["kind"] != "surface_error":
+                raise RetrievalExecutionError("persisted surface failure evidence is malformed")
+        if status == "not_executed":
+            if item["result"] is not None or not isinstance(item["failure"], dict):
+                raise RetrievalExecutionError("persisted not-executed retrieval outcome is malformed")
+            if item["failure"].get("kind") == "prior_request_failed":
+                if set(item["failure"]) != {"kind", "failed_ordinal"} or not isinstance(item["failure"]["failed_ordinal"], int):
+                    raise RetrievalExecutionError("persisted prior-request failure evidence is malformed")
+            elif item["failure"] != {"kind": "package_identity_changed"}:
+                raise RetrievalExecutionError("persisted execution-level failure evidence is malformed")
         outcomes.append(_outcome(ordinal, item["request"], status, item["result"], item["failure"]))
     execution_failure = payload["execution_failure"]
     if execution_failure is not None and not isinstance(execution_failure, dict):
         raise RetrievalExecutionError("persisted execution failure is malformed")
     if row["status"] == "running":
-        if execution_failure is not None or len(outcomes) > len(expected_requests):
+        if execution_failure is not None or any(item.status != "succeeded" for item in outcomes):
             raise RetrievalExecutionError("persisted running execution is malformed")
     elif row["status"] == "succeeded":
         if execution_failure is not None or len(outcomes) != len(expected_requests) or any(item.status != "succeeded" for item in outcomes):
@@ -276,10 +287,33 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
     elif row["status"] == "failed":
         failed = [item.ordinal for item in outcomes if item.status == "failed"]
         if failed:
-            if len(failed) != 1 or any(item.status != "not_executed" for item in outcomes[failed[0] + 1:]):
+            failed_ordinal = failed[0]
+            if (
+                len(failed) != 1
+                or execution_failure is not None
+                or len(outcomes) != len(expected_requests)
+                or any(item.status != "succeeded" for item in outcomes[:failed_ordinal])
+                or any(
+                    item.status != "not_executed"
+                    or item.failure != {"kind": "prior_request_failed", "failed_ordinal": failed_ordinal}
+                    for item in outcomes[failed_ordinal + 1:]
+                )
+            ):
                 raise RetrievalExecutionError("persisted fail-fast outcomes are malformed")
-        elif execution_failure is None:
-            raise RetrievalExecutionError("persisted failed execution has no factual failure")
+        else:
+            if (
+                execution_failure is None
+                or execution_failure.get("kind") != "package_identity_changed"
+                or len(outcomes) != len(expected_requests)
+                or any(item.status != "succeeded" for item in outcomes if item.status != "not_executed")
+                or any(
+                    item.status != "not_executed"
+                    or item.failure != {"kind": "package_identity_changed"}
+                    for item in outcomes
+                    if item.status == "not_executed"
+                )
+            ):
+                raise RetrievalExecutionError("persisted execution-level failure evidence is malformed")
     else:
         raise RetrievalExecutionError("persisted retrieval execution status is unsupported")
     return RetrievalExecutionResult(
@@ -372,7 +406,7 @@ def execute_retrieval(
             except RetrievalPackageError as exc:
                 execution_failure = {"kind": "package_identity_changed", "message": str(exc)}
                 outcomes.extend(
-                    _outcome(index, item, "not_executed", failure={"kind": "prior_request_failed", "failed_ordinal": ordinal})
+                    _outcome(index, item, "not_executed", failure={"kind": "package_identity_changed"})
                     for index, item in enumerate(authority.requests[ordinal:], ordinal)
                 )
                 break

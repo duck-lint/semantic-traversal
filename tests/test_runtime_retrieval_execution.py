@@ -1,4 +1,5 @@
 import contextlib
+import datetime as dt
 import hashlib
 import io
 import json
@@ -16,7 +17,7 @@ from semantic_traversal.runtime.conversation import (
 from semantic_traversal.runtime.retrieval_execution import (
     EXECUTION_CONTRACT_VERSION, RetrievalExecutionError, execute_retrieval,
 )
-from semantic_traversal.runtime.retrieval_package import load_retrieval_package
+from semantic_traversal.runtime.retrieval_package import RetrievalPackageError, load_retrieval_package
 
 
 class RuntimeRetrievalExecutionTests(unittest.TestCase):
@@ -156,6 +157,88 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         connection.close()
         self.assertEqual(stored[0], "failed")
         self.assertEqual([item["status"] for item in json.loads(stored[1])["requests"]], ["succeeded", "failed", "not_executed"])
+        persisted = json.loads(stored[1])["requests"]
+        self.assertEqual(persisted[1]["failure"]["kind"], "surface_error")
+        self.assertEqual(persisted[2]["failure"], {"kind": "prior_request_failed", "failed_ordinal": 1})
+
+    def test_package_identity_change_between_requests_does_not_fabricate_request_failure(self):
+        database, package, conformance_id = self.prepared("package-change-between", [self.exact("first"), self.exact("second")])
+        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup", return_value=()) as exact, patch.object(
+            module,
+            "require_current_package_identity",
+            side_effect=[None, None, RetrievalPackageError("package changed between requests")],
+        ):
+            result = execute_retrieval(database, package, conformance_id)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual([item.status for item in result.requests], ["succeeded", "not_executed"])
+        self.assertEqual(result.requests[0].result, {"kind": "exact", "unit_ids": ()})
+        self.assertEqual(result.execution_failure["kind"], "package_identity_changed")
+        self.assertEqual(result.requests[1].failure, {"kind": "package_identity_changed"})
+        self.assertNotIn("failed_ordinal", result.requests[1].failure)
+        self.assertEqual(exact.call_count, 1)
+        connection = sqlite3.connect(database)
+        status, result_json = connection.execute(
+            "SELECT status, result_json FROM retrieval_executions"
+        ).fetchone()
+        connection.close()
+        self.assertEqual(status, "failed")
+        persisted = json.loads(result_json)
+        self.assertEqual(persisted["requests"][0]["status"], "succeeded")
+        self.assertEqual(persisted["requests"][1]["failure"], {"kind": "package_identity_changed"})
+
+    def test_final_package_identity_change_cannot_commit_success(self):
+        database, package, conformance_id = self.prepared("package-change-final", [self.exact("only")])
+        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup", return_value=()), patch.object(
+            module,
+            "require_current_package_identity",
+            side_effect=[None, None, RetrievalPackageError("package changed before terminal commit")],
+        ):
+            result = execute_retrieval(database, package, conformance_id)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual([item.status for item in result.requests], ["succeeded"])
+        self.assertEqual(result.execution_failure["kind"], "package_identity_changed")
+        connection = sqlite3.connect(database)
+        status = connection.execute("SELECT status FROM retrieval_executions").fetchone()[0]
+        connection.close()
+        self.assertEqual(status, "failed")
+
+    def test_persisted_prior_request_failure_requires_an_actual_failed_request(self):
+        database, package, conformance_id = self.prepared("malformed-prior-failure", [self.exact("first"), self.exact("second")])
+        execute_retrieval(database, package, conformance_id)
+        connection = sqlite3.connect(database)
+        payload = json.loads(connection.execute("SELECT result_json FROM retrieval_executions").fetchone()[0])
+        payload["requests"][1] = {
+            "ordinal": 1,
+            "request": payload["requests"][1]["request"],
+            "status": "not_executed",
+            "result": None,
+            "failure": {"kind": "prior_request_failed", "failed_ordinal": 1},
+        }
+        connection.execute(
+            "UPDATE retrieval_executions SET status = 'failed', completed_at = 'done', result_json = ?",
+            (json.dumps(payload, separators=(",", ":")),),
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaises(RetrievalExecutionError):
+            execute_retrieval(database, package, conformance_id)
+
+    def test_unexpected_programming_error_leaves_running_evidence(self):
+        database, package, conformance_id = self.prepared("unexpected-error", [self.exact("first"), self.exact("second")])
+        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup", side_effect=[(), RuntimeError("unexpected bug")]):
+            with self.assertRaisesRegex(RuntimeError, "unexpected bug"):
+                execute_retrieval(database, package, conformance_id)
+        connection = sqlite3.connect(database)
+        status, result_json = connection.execute(
+            "SELECT status, result_json FROM retrieval_executions"
+        ).fetchone()
+        connection.close()
+        self.assertEqual(status, "running")
+        payload = json.loads(result_json)
+        self.assertEqual([item["status"] for item in payload["requests"]], ["succeeded"])
 
     def test_duplicate_successful_requests_execute_twice_and_second_call_is_idempotent(self):
         database, package, conformance_id = self.prepared("duplicate", [self.exact(), self.exact()])
@@ -219,6 +302,31 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         self.assertEqual(result.status, "succeeded")
         self.assertIsInstance(exact.call_args.args[3], tuple)
         self.assertEqual(exact.call_args.args[3], ("A", "B"))
+
+    def test_native_date_and_datetime_adapters_restore_python_types(self):
+        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["_execute_surface", "exact_lookup"])
+        package = load_retrieval_package(self.build)
+        connection = sqlite3.connect(":memory:")
+        try:
+            date_request = {
+                "operator": "exact.equals", "field_class": "semantic_identifier", "field_name": "date",
+                "target": "complete_value",
+                "operand": {"shape": "scalar", "domain": "date", "value": "2026-07-31"},
+            }
+            datetime_request = {
+                "operator": "exact.equals", "field_class": "semantic_identifier", "field_name": "moment",
+                "target": "complete_value",
+                "operand": {"shape": "scalar", "domain": "datetime", "value": "2026-07-31T12:34:56Z"},
+            }
+            with patch.object(module, "exact_lookup", return_value=()) as exact:
+                module._execute_surface(connection, package, date_request, None)
+                self.assertIs(type(exact.call_args.args[3]), dt.date)
+                self.assertEqual(exact.call_args.args[3], dt.date(2026, 7, 31))
+                module._execute_surface(connection, package, datetime_request, None)
+                self.assertIs(type(exact.call_args.args[3]), dt.datetime)
+                self.assertEqual(exact.call_args.args[3], dt.datetime(2026, 7, 31, 12, 34, 56, tzinfo=dt.timezone.utc))
+        finally:
+            connection.close()
 
     def test_execution_does_not_change_projection_bytes(self):
         database, package, conformance_id = self.prepared("read-only", [self.exact()])
