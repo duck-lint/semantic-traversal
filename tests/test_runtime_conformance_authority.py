@@ -67,6 +67,7 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
             for table in ("conversations", "messages", "model_runs")
         }
         connection.execute("DROP TABLE retrieval_conformance")
+        connection.execute("DROP TABLE retrieval_executions")
         connection.execute("PRAGMA user_version = 3")
         connection.commit()
         connection.close()
@@ -87,7 +88,7 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
             database, _, before = self._make_v3(directory)
             migrate_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
             for table, rows in before.items():
                 self.assertEqual(tuple(connection.execute(f"SELECT * FROM {table} ORDER BY rowid")), rows)
             self.assertIsNotNone(connection.execute("SELECT name FROM sqlite_master WHERE name = 'retrieval_conformance'").fetchone())

@@ -111,10 +111,10 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database, _, _, _, _ = self.prepared(directory, requests=[])
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
             self.assertEqual(
                 {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
-                {"conversations", "messages", "model_runs", "retrieval_conformance"},
+                {"conversations", "messages", "model_runs", "retrieval_conformance", "retrieval_executions"},
             )
             columns = tuple(row[1] for row in connection.execute("PRAGMA table_info(retrieval_conformance)"))
             self.assertEqual(

@@ -1,4 +1,4 @@
-"""Durable model-run lifecycle writes for runtime schema v4."""
+"""Durable model-run lifecycle writes for runtime schema v5."""
 
 from __future__ import annotations
 
