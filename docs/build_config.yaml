@@ -1,0 +1,74 @@
+# The vault root is an environment-specific filesystem path supplied explicitly
+# when a build is invoked. It is not stored in checked-in build configuration and
+# does not participate in semantic identity.
+#
+# All canonical authored paths are vault-relative: only the path beneath the
+# supplied vault root enters the semantic substrate.
+#
+# vault_name is a logical label only. It does not locate or validate the
+# filesystem directory supplied at build invocation.
+vault_name: kháos
+uuid_field: uuid
+excluded_folders:
+  - VAULT DESIGN
+semantic_identifiers:
+  note_type:
+    description: 'Categorical type of content represented by the semantic object.'
+  tags:
+    description: 'Authored grouping labels for semantically associated objects; they do not establish canonical identity or vault topology.'
+  aliases:
+    description: 'Alternative authored names or shorthands for the same semantic object.'
+  journal_entry_date:
+    description: 'Date to which the journal entry belongs as authored, independent of later digitization or editing.'
+  title:
+    description: 'Title of the represented source material.'
+  creator:
+    description: 'Person or entity credited with creating the represented source material.'
+  book_read_today:
+    description: 'Book the vault author records as having read on the journal_entry_date.'
+  layer:
+    description: 'Organon layer whose function or constraints the semantic object represents: Meta-Ontology, Seed Axioms, Pillars, or Interface.'
+  unity_level:
+    description: 'Level of synthesized object-unity at which the represented content is treated for analysis.'
+  analysis_orientation:
+    description: 'Direction of analysis: constitutive/outside-in from manifold through synthesis to object and concept formation, or critical/inside-out from concepts through expected appearances and experience to revision.'
+  register:
+    description: 'Register of the represented claim-target: Public for agent-independent or shareable constraints, or Indexical for first-person givenness, attention, finitude, and commitments. The value meta marks Layer-M framework documents that define or govern register discipline; it is not a third register.'
+  register_mode:
+    description: 'Mode of the represented move within its register: descriptive, experiential report, or commitment.'
+  pillar:
+    description: 'Layer-1 pillar affiliation: Semantic Geometry for Public-facing structural modeling, or Dynamic Coherence for Indexical praxis and updating under finitude. The value meta marks Layer-M framework documents outside ordinary Layer-1 pillar affiliation; it is not a third pillar.'
+  headspace:
+    description: 'Temporal orientation of the vault author''s attention while composing a journal entry, such as present-, past-, or future-oriented; it is not a calendar-time coordinate.'
+  hypnagogic_resonance:
+    description: 'Vault-author-reported degree of hypnagogic resonance associated with the journal_entry_date.'
+  reactivity:
+    description: 'Vault-author-reported degree of reactivity associated with hypnagogic resonance on the journal_entry_date.'
+  dream_motif:
+    description: 'Authored motif identified in dreams from the night preceding the journal_entry_date.'
+  dream_motif_valence:
+    description: 'Vault-author-reported valence of dream motifs from the night preceding the journal_entry_date.'
+  dream_location:
+    description: 'Vault-author-reported location or setting of dreams from the night preceding the journal_entry_date.'
+  recall_ability:
+    description: 'Vault-author-reported degree of dream recall associated with the journal_entry_date.'
+  dream_lucidity:
+    description: 'Vault-author-reported degree of dream lucidity from the night preceding the journal_entry_date.'
+  format:
+    description: 'Format of the represented source material.'
+  publish_studio:
+    description: 'Publisher or publishing studio of the represented source material.'
+  original_year_published:
+    description: 'Year in which the represented source material was first published.'
+  origin:
+    description: 'Country of origin of the represented source material.'
+  entity_type:
+    description: 'Class of represented entity, distinguishing animals, including humans, from organizations.'
+  canonical_name:
+    description: 'Primary authored name of the represented entity.'
+  relationship:
+    description: 'Relationship of the represented entity to the vault author.'
+  first_met:
+    description: 'Date on which the vault author first met the represented entity.'
+  birthday:
+    description: 'Birth date of the represented entity.'

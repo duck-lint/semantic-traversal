@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semantic-traversal"
+version = "0.1.0"
+requires-python = ">=3.11.9"
+dependencies = [
+  "markdown-it-py>=4.1.0,<5.0.0",
+  "mdit-py-plugins>=0.5.0",
+  "ruamel.yaml",
+  "numpy>=2.0",
+  "openai>=2.40.0,<3.0.0",
+  "python-dotenv>=1.0.0,<2.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+semantic-traversal = "semantic_traversal.cli:main"
