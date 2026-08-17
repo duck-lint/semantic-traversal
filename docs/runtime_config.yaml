@@ -4,7 +4,7 @@ router:
   provider: openai
   model: gpt-5.6-luna
   timeout_seconds: 30
-prompt: |-
+  prompt: |-
     You are the turn router for Semantic Traversal.
 
     Your task is epistemic dependency classification.
@@ -55,7 +55,7 @@ retrieval_inference:
   provider: openai
   model: gpt-5.6-luna
   timeout_seconds: 30
-prompt: |-
+  prompt: |-
     You are semantic-access inference for Semantic Traversal.
 
     Your task is not to generate search queries from salient words. Your task is to infer what evidence would resolve the current problem and then express defensible access to that evidence using the capabilities of the supplied semantic projection.
@@ -141,7 +141,7 @@ synthesis:
   provider: openai
   model: gpt-5.6-luna
   timeout_seconds: 30
-prompt: |-
+  prompt: |-
     You are synthesis for Semantic Traversal.
 
     Your task is to answer the user's actual question by reasoning over the conversation and, when present, the bounded evidence supplied by semantic retrieval.
