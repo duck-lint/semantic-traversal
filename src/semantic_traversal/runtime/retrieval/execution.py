@@ -24,7 +24,10 @@ from .package import (
     require_catalog_binding, require_current_package_identity,
 )
 from .package_verification import (
-    VERIFICATION_CONTRACT_VERSION, RetrievalPackageVerificationError, verify_retrieval_package,
+    VERIFICATION_CONTRACT_VERSION,
+    RetrievalPackageInput,
+    RetrievalPackageVerificationError,
+    normalize_verified_retrieval_package,
 )
 
 
@@ -389,7 +392,7 @@ def load_retrieval_execution(
 
 def execute_retrieval(
     database_path: str | Path,
-    package: RetrievalPackage,
+    package: RetrievalPackageInput,
     conformance_id: str,
     *,
     vector_provider: Any | None = None,
@@ -397,7 +400,8 @@ def execute_retrieval(
 ) -> RetrievalExecutionResult:
     """Execute one existing valid conformance against one verified package."""
     try:
-        verify_retrieval_package(package)
+        verified_package = normalize_verified_retrieval_package(package)
+        package = verified_package.package
         runtime_connection = _connect_runtime(database_path)
         try:
             authority = _load_authority(runtime_connection, conformance_id)

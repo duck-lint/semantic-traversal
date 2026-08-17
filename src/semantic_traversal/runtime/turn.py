@@ -148,7 +148,7 @@ def execute_turn(
         selected_vector_provider = OllamaEmbeddingProvider(base_url=ollama_url)
     try:
         execution_result = execute_retrieval(
-            database_path, package, conformance_result.conformance_id,
+            database_path, verified_package, conformance_result.conformance_id,
             vector_provider=selected_vector_provider, clock=clock,
         )
     except RetrievalExecutionError as exc:
@@ -156,7 +156,7 @@ def execute_turn(
 
     try:
         hydrated_result = hydrate_retrieval_execution(
-            database_path, package, execution_result.execution_id,
+            database_path, verified_package, execution_result.execution_id,
         )
     except RetrievalHydrationError as exc:
         raise _stage_error("retrieval hydration", exc) from exc

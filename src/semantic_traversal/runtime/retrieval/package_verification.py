@@ -143,9 +143,34 @@ def verify_retrieval_package(package: RetrievalPackage) -> VerifiedRetrievalPack
     return VerifiedRetrievalPackage(package)
 
 
+RetrievalPackageInput = RetrievalPackage | VerifiedRetrievalPackage
+
+
+def normalize_verified_retrieval_package(
+    package: RetrievalPackageInput,
+) -> VerifiedRetrievalPackage:
+    """Carry verification authority across stages without a boolean bypass."""
+
+    if isinstance(package, VerifiedRetrievalPackage):
+        if package.verification_contract_version != VERIFICATION_CONTRACT_VERSION:
+            raise RetrievalPackageVerificationError(
+                "verified retrieval package contract is incompatible"
+            )
+        try:
+            require_current_package_identity(package.package)
+        except RetrievalPackageError as exc:
+            raise RetrievalPackageVerificationError(str(exc)) from exc
+        return package
+    if isinstance(package, RetrievalPackage):
+        return verify_retrieval_package(package)
+    raise RetrievalPackageVerificationError("retrieval package value has an unsupported type")
+
+
 __all__ = [
     "VERIFICATION_CONTRACT_VERSION",
     "RetrievalPackageVerificationError",
+    "RetrievalPackageInput",
     "VerifiedRetrievalPackage",
+    "normalize_verified_retrieval_package",
     "verify_retrieval_package",
 ]

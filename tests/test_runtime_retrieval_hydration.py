@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 import unittest
 from pathlib import Path
@@ -28,6 +29,7 @@ from semantic_traversal.runtime.retrieval.package import (
     RetrievalPackageError,
     load_retrieval_package,
 )
+from semantic_traversal.runtime.retrieval.package_verification import verify_retrieval_package
 from tests.test_cli import CliProvider
 
 
@@ -493,18 +495,27 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
             hydrate_retrieval_execution(database, package, execution.execution_id)
 
     def test_package_lineage_and_mutation_fail_before_or_during_hydration(self):
-        database, package, conformance_id = self.prepared("lineage", [self.exact()])
+        mutation_build = self.root / "mutation-build"
+        shutil.copytree(self.build, mutation_build)
+        database, package, conformance_id = self.prepared(
+            "lineage", [self.lexical()], build=mutation_build
+        )
         execution = execute_retrieval(database, package, conformance_id)
         other = load_retrieval_package(self.other_build)
         with self.assertRaises(RetrievalHydrationError):
             hydrate_retrieval_execution(database, other, execution.execution_id)
 
         module = __import__("semantic_traversal.runtime.retrieval.hydration", fromlist=["hydrate_unit"])
-        with patch.object(module, "require_current_package_identity", side_effect=[
-            None,
-            None,
-            RetrievalPackageError("package changed during hydration"),
-        ]):
+        original_hydrate_unit = module.hydrate_unit
+
+        def hydrate_then_mutate(connection, unit_id):
+            result = original_hydrate_unit(connection, unit_id)
+            package.capability_catalog_path.write_bytes(
+                package.capability_catalog_path.read_bytes() + b"mutation"
+            )
+            return result
+
+        with patch.object(module, "hydrate_unit", side_effect=hydrate_then_mutate):
             with self.assertRaises(RetrievalHydrationError):
                 hydrate_retrieval_execution(database, package, execution.execution_id)
 
@@ -517,6 +528,21 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             hydrated.requests[0].request["operator"] = "changed"
         self.assertIsInstance(hydrated, HydratedRetrievalResult)
+
+    def test_package_identity_checks_are_constant_in_hit_count(self):
+        database, package, conformance_id = self.prepared("identity-count", [self.lexical()])
+        execution = execute_retrieval(database, package, conformance_id)
+        unit_id, _, _, _ = self.identities(package)
+        execution_id = self.rewrite_results(database, [{
+            "kind": "lexical",
+            "hits": [{"unit_id": unit_id, "score": float(index)} for index in range(101)],
+        }])
+        verified = verify_retrieval_package(package)
+        module = __import__("semantic_traversal.runtime.retrieval.hydration", fromlist=["require_current_package_identity"])
+        with patch.object(module, "require_current_package_identity", wraps=module.require_current_package_identity) as check:
+            hydrated = hydrate_retrieval_execution(database, verified, execution_id)
+        self.assertEqual(len(hydrated.requests[0].result.hits), 101)
+        self.assertEqual(check.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -43,8 +43,10 @@ from .package import (
 )
 from .package_verification import (
     VERIFICATION_CONTRACT_VERSION,
+    RetrievalPackageInput,
     RetrievalPackageVerificationError,
     VerifiedRetrievalPackage,
+    normalize_verified_retrieval_package,
     verify_retrieval_package,
 )
 from .packet import (
@@ -91,8 +93,10 @@ __all__ = [
     "require_catalog_binding",
     "require_current_package_identity",
     "VERIFICATION_CONTRACT_VERSION",
+    "RetrievalPackageInput",
     "RetrievalPackageVerificationError",
     "VerifiedRetrievalPackage",
+    "normalize_verified_retrieval_package",
     "verify_retrieval_package",
     "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
     "CanonicalTargetRef", "CanonicalTargetPayload", "PacketOccurrence", "ExactOccurrence",

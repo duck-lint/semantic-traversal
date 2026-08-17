@@ -33,8 +33,9 @@ from .package import (
 )
 from .package_verification import (
     VERIFICATION_CONTRACT_VERSION,
+    RetrievalPackageInput,
     RetrievalPackageVerificationError,
-    verify_retrieval_package,
+    normalize_verified_retrieval_package,
 )
 
 
@@ -195,6 +196,17 @@ class HydratedRetrievalResult:
     requests: tuple[HydratedRequestResult, ...]
 
 
+@dataclass
+class _HydrationCaches:
+    units: dict[int, CanonicalUnit]
+    objects: dict[str, CanonicalObject]
+    regions: dict[tuple[str, tuple[str, ...]], CanonicalRegion]
+
+    @classmethod
+    def create(cls) -> _HydrationCaches:
+        return cls({}, {}, {})
+
+
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise RetrievalHydrationError(f"{label} must be an object")
@@ -261,9 +273,21 @@ def _graph_handle(value: Any) -> GraphHandle:
     raise RetrievalHydrationError(f"unsupported graph node kind: {node_kind!r}")
 
 
-def _unit_target(connection: sqlite3.Connection, unit_id: int, handle: GraphHandle | None = None) -> HydratedCanonicalTarget:
-    unit = hydrate_unit(connection, unit_id)
-    owner = hydrate_object(connection, unit.source_object_uuid)
+def _unit_target(
+    connection: sqlite3.Connection,
+    unit_id: int,
+    handle: GraphHandle | None = None,
+    caches: _HydrationCaches | None = None,
+) -> HydratedCanonicalTarget:
+    caches = caches or _HydrationCaches.create()
+    unit = caches.units.get(unit_id)
+    if unit is None:
+        unit = hydrate_unit(connection, unit_id)
+        caches.units[unit_id] = unit
+    owner = caches.objects.get(unit.source_object_uuid)
+    if owner is None:
+        owner = hydrate_object(connection, unit.source_object_uuid)
+        caches.objects[unit.source_object_uuid] = owner
     return HydratedCanonicalTarget(SEMANTIC_UNIT, canonical_unit=unit, owning_object=owner, graph_handle=handle)
 
 
@@ -271,10 +295,16 @@ def _object_target(
     connection: sqlite3.Connection,
     source_object_uuid: str,
     handle: GraphHandle | None = None,
+    caches: _HydrationCaches | None = None,
 ) -> HydratedCanonicalTarget:
+    caches = caches or _HydrationCaches.create()
+    canonical_object = caches.objects.get(source_object_uuid)
+    if canonical_object is None:
+        canonical_object = hydrate_object(connection, source_object_uuid)
+        caches.objects[source_object_uuid] = canonical_object
     return HydratedCanonicalTarget(
         SEMANTIC_OBJECT,
-        canonical_object=hydrate_object(connection, source_object_uuid),
+        canonical_object=canonical_object,
         graph_handle=handle,
     )
 
@@ -284,9 +314,18 @@ def _region_target(
     source_object_uuid: str,
     region_path: tuple[str, ...],
     handle: GraphHandle | None = None,
+    caches: _HydrationCaches | None = None,
 ) -> HydratedCanonicalTarget:
-    region = hydrate_region(connection, source_object_uuid, region_path)
-    owner = hydrate_object(connection, source_object_uuid)
+    caches = caches or _HydrationCaches.create()
+    key = (source_object_uuid, region_path)
+    region = caches.regions.get(key)
+    if region is None:
+        region = hydrate_region(connection, source_object_uuid, region_path)
+        caches.regions[key] = region
+    owner = caches.objects.get(source_object_uuid)
+    if owner is None:
+        owner = hydrate_object(connection, source_object_uuid)
+        caches.objects[source_object_uuid] = owner
     return HydratedCanonicalTarget(
         SEMANTIC_REGION,
         canonical_region=region,
@@ -295,13 +334,17 @@ def _region_target(
     )
 
 
-def _graph_target(connection: sqlite3.Connection, handle: GraphHandle) -> HydratedCanonicalTarget:
+def _graph_target(
+    connection: sqlite3.Connection,
+    handle: GraphHandle,
+    caches: _HydrationCaches,
+) -> HydratedCanonicalTarget:
     if handle.node_kind == SEMANTIC_UNIT:
-        return _unit_target(connection, handle.identity[0], handle)
+        return _unit_target(connection, handle.identity[0], handle, caches)
     if handle.node_kind == SEMANTIC_OBJECT:
-        return _object_target(connection, handle.identity[0], handle)
+        return _object_target(connection, handle.identity[0], handle, caches)
     if handle.node_kind == SEMANTIC_REGION:
-        return _region_target(connection, handle.identity[0], handle.identity[1], handle)
+        return _region_target(connection, handle.identity[0], handle.identity[1], handle, caches)
     if handle.node_kind == SCOPE:
         return HydratedCanonicalTarget(SCOPE, graph_handle=handle)
     raise RetrievalHydrationError(f"unsupported graph node kind: {handle.node_kind!r}")
@@ -310,7 +353,7 @@ def _graph_target(connection: sqlite3.Connection, handle: GraphHandle) -> Hydrat
 def _hydrate_exact(
     connection: sqlite3.Connection,
     result: Mapping[str, Any],
-    check_package: Any,
+    caches: _HydrationCaches,
 ) -> HydratedExactResult:
     _exact_keys(result, {"kind", "unit_ids"}, "exact result")
     if result["kind"] != "exact":
@@ -318,15 +361,14 @@ def _hydrate_exact(
     hits: list[HydratedExactHit] = []
     for raw_unit_id in _sequence(result["unit_ids"], "exact unit_ids"):
         unit_id = _int_identity(raw_unit_id, "exact unit_id")
-        check_package()
-        hits.append(HydratedExactHit(unit_id, _unit_target(connection, unit_id)))
+        hits.append(HydratedExactHit(unit_id, _unit_target(connection, unit_id, caches=caches)))
     return HydratedExactResult(tuple(hits))
 
 
 def _hydrate_lexical(
     connection: sqlite3.Connection,
     result: Mapping[str, Any],
-    check_package: Any,
+    caches: _HydrationCaches,
 ) -> HydratedLexicalResult:
     _exact_keys(result, {"kind", "hits"}, "lexical result")
     if result["kind"] != "lexical":
@@ -337,15 +379,14 @@ def _hydrate_lexical(
         _exact_keys(hit, {"unit_id", "score"}, "lexical hit")
         unit_id = _int_identity(hit["unit_id"], "lexical unit_id")
         score = _score(hit["score"], "lexical score")
-        check_package()
-        hits.append(HydratedLexicalHit(unit_id, score, _unit_target(connection, unit_id)))
+        hits.append(HydratedLexicalHit(unit_id, score, _unit_target(connection, unit_id, caches=caches)))
     return HydratedLexicalResult(tuple(hits))
 
 
 def _hydrate_vector(
     connection: sqlite3.Connection,
     result: Mapping[str, Any],
-    check_package: Any,
+    caches: _HydrationCaches,
 ) -> HydratedVectorResult:
     _exact_keys(result, {"kind", "hits"}, "vector result")
     if result["kind"] != "vector":
@@ -363,11 +404,10 @@ def _hydrate_vector(
             raise RetrievalHydrationError(f"unsupported vector target kind: {target_kind!r}")
         score = _score(hit["score"], "vector score")
         segment_ordinal = _int_identity(hit["segment_ordinal"], "vector segment ordinal")
-        check_package()
         target = (
-            _unit_target(connection, target_identity)
+            _unit_target(connection, target_identity, caches=caches)
             if target_kind == SEMANTIC_UNIT
-            else _object_target(connection, target_identity)
+            else _object_target(connection, target_identity, caches=caches)
         )
         hits.append(HydratedVectorHit(target_kind, target_identity, score, segment_ordinal, target))
     return HydratedVectorResult(tuple(hits))
@@ -377,7 +417,7 @@ def _hydrate_graph_discovery(
     connection: sqlite3.Connection,
     request: Mapping[str, Any],
     result: Mapping[str, Any],
-    check_package: Any,
+    caches: _HydrationCaches,
 ) -> HydratedGraphDiscoveryResult:
     _exact_keys(result, {"kind", "hits"}, "graph discovery result")
     if result["kind"] != "graph_discovery":
@@ -390,8 +430,7 @@ def _hydrate_graph_discovery(
         if node.node_kind != request["node_kind"]:
             raise RetrievalHydrationError("graph discovery result node kind does not match request")
         score = _score(hit["score"], "graph discovery score")
-        check_package()
-        hits.append(HydratedGraphDiscoveryHit(node, score, _graph_target(connection, node)))
+        hits.append(HydratedGraphDiscoveryHit(node, score, _graph_target(connection, node, caches)))
     return HydratedGraphDiscoveryResult(tuple(hits))
 
 
@@ -399,7 +438,7 @@ def _hydrate_graph_relations(
     connection: sqlite3.Connection,
     request: Mapping[str, Any],
     result: Mapping[str, Any],
-    check_package: Any,
+    caches: _HydrationCaches,
     catalog: Mapping[str, Any],
 ) -> HydratedGraphRelationResult:
     _exact_keys(result, {"kind", "occurrences"}, "graph relation result")
@@ -435,14 +474,13 @@ def _hydrate_graph_relations(
         target = _graph_handle(occurrence["target"])
         if source.node_kind not in source_kinds or target.node_kind not in target_kinds:
             raise RetrievalHydrationError("graph relation result endpoint kinds conflict with capability catalog")
-        check_package()
         occurrences.append(
             HydratedGraphOccurrence(
                 edge_id,
                 relation_class,
                 relation_name,
-                _graph_target(connection, source),
-                _graph_target(connection, target),
+                _graph_target(connection, source, caches),
+                _graph_target(connection, target, caches),
             )
         )
     return HydratedGraphRelationResult(tuple(occurrences))
@@ -452,20 +490,20 @@ def _hydrate_surface(
     connection: sqlite3.Connection,
     request: Mapping[str, Any],
     result: Mapping[str, Any],
-    check_package: Any,
+    caches: _HydrationCaches,
     catalog: Mapping[str, Any],
 ) -> Any:
     operator = request["operator"]
     if operator == "exact.equals":
-        return _hydrate_exact(connection, result, check_package)
+        return _hydrate_exact(connection, result, caches)
     if operator in {"lexical.terms", "lexical.phrase"}:
-        return _hydrate_lexical(connection, result, check_package)
+        return _hydrate_lexical(connection, result, caches)
     if operator == "vector.semantic_similarity":
-        return _hydrate_vector(connection, result, check_package)
+        return _hydrate_vector(connection, result, caches)
     if operator in {"graph.discovery.terms", "graph.discovery.phrase"}:
-        return _hydrate_graph_discovery(connection, request, result, check_package)
+        return _hydrate_graph_discovery(connection, request, result, caches)
     if operator == "graph.relation_occurrence_lookup":
-        return _hydrate_graph_relations(connection, request, result, check_package, catalog)
+        return _hydrate_graph_relations(connection, request, result, caches, catalog)
     raise RetrievalHydrationError(f"unsupported hydrated retrieval operator: {operator!r}")
 
 
@@ -500,7 +538,7 @@ def _open_substrate_read_only(path: Path) -> sqlite3.Connection:
 
 def hydrate_retrieval_execution(
     database_path: str | Path,
-    package: RetrievalPackage,
+    package: RetrievalPackageInput,
     execution_id: str,
 ) -> HydratedRetrievalResult:
     """Hydrate one terminal persisted retrieval execution from its exact package."""
@@ -510,16 +548,16 @@ def hydrate_retrieval_execution(
         execution = load_retrieval_execution(database_path, execution_id)
         if execution.status not in {"succeeded", "failed"}:
             raise RetrievalHydrationError("retrieval execution is not terminal")
-        verify_retrieval_package(package)
+        verified_package = normalize_verified_retrieval_package(package)
+        package = verified_package.package
         _require_lineage(execution, package)
-        require_current_package_identity(package)
+        try:
+            require_current_package_identity(package)
+        except RetrievalPackageError as exc:
+            raise RetrievalHydrationError(str(exc)) from exc
         connection = _open_substrate_read_only(package.substrate_path)
-
-        def check_package() -> None:
-            try:
-                require_current_package_identity(package)
-            except RetrievalPackageError as exc:
-                raise RetrievalHydrationError(str(exc)) from exc
+        connection.execute("BEGIN")
+        caches = _HydrationCaches.create()
 
         hydrated_requests: list[HydratedRequestResult] = []
         for item in execution.requests:
@@ -527,8 +565,7 @@ def hydrate_retrieval_execution(
             if item.status == "succeeded":
                 if not isinstance(item.result, Mapping):
                     raise RetrievalHydrationError("successful persisted retrieval result is malformed")
-                result = _hydrate_surface(connection, item.request, item.result, check_package, package.capability_catalog.parsed)
-                check_package()
+                result = _hydrate_surface(connection, item.request, item.result, caches, package.capability_catalog.parsed)
             elif item.status not in {"failed", "not_executed"}:
                 raise RetrievalHydrationError("persisted request status is unsupported for hydration")
             hydrated_requests.append(
@@ -541,7 +578,10 @@ def hydrate_retrieval_execution(
                     _immutable(item.failure) if item.failure is not None else None,
                 )
             )
-        check_package()
+        try:
+            require_current_package_identity(package)
+        except RetrievalPackageError as exc:
+            raise RetrievalHydrationError(str(exc)) from exc
         return HydratedRetrievalResult(
             execution.execution_id,
             execution.conformance_id,
