@@ -134,6 +134,9 @@ class RetrievalPacket:
     packet_contract_version: str
     selection_rule: str
     execution_id: str
+    conformance_id: str
+    retrieval_run_id: str
+    retrieval_package_id: str
     execution_status: str
     execution_failure: Mapping[str, Any] | None
     requests: tuple[RequestCoverage, ...]
@@ -265,7 +268,20 @@ def assemble_retrieval_packet(hydrated_result: HydratedRetrievalResult, packet_c
     if len(selected) > packet_config.max_occurrences or total != len(selected) + len(omitted):
         raise RetrievalPacketError("packet coverage arithmetic is inconsistent")
     removals = tuple(RemovalRecord(hydrated_result.execution_id, item.request.ordinal, item.occurrence_ordinal, item.request.operator, item.native_identity) for item in omitted)
-    packet = RetrievalPacket(PACKET_CONTRACT_VERSION, SELECTION_RULE_VERSION, hydrated_result.execution_id, hydrated_result.status, hydrated_result.execution_failure, request_records, tuple(item.occurrence for item in selected), _payloads(selected), coverage)
+    packet = RetrievalPacket(
+        PACKET_CONTRACT_VERSION,
+        SELECTION_RULE_VERSION,
+        hydrated_result.execution_id,
+        hydrated_result.conformance_id,
+        hydrated_result.retrieval_run_id,
+        hydrated_result.retrieval_package_id,
+        hydrated_result.status,
+        hydrated_result.execution_failure,
+        request_records,
+        tuple(item.occurrence for item in selected),
+        _payloads(selected),
+        coverage,
+    )
     return PacketAssemblyResult(packet, removals)
 
 

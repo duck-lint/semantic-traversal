@@ -13,6 +13,7 @@ from unittest.mock import patch
 from semantic_traversal.cli import main
 from semantic_traversal.runtime.config import (
     ModelConfig,
+    PacketConfig,
     RuntimeConfig,
     RuntimeConfigError,
     load_runtime_config,
@@ -54,6 +55,7 @@ class RuntimeRouterTests(unittest.TestCase):
         return RuntimeConfig(
             ModelConfig("openai", "explicit-model-id", 7.5, ROUTER_PROMPT_V1),
             ModelConfig("openai", "retrieval-model", 8.5, "retrieval test prompt"),
+            PacketConfig(32),
         )
 
     def _clock(self, seconds=0):

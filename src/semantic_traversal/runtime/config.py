@@ -41,9 +41,7 @@ class PacketConfig:
 class RuntimeConfig:
     router: ModelConfig
     retrieval_inference: ModelConfig
-    # The default preserves direct construction by existing runtime consumers.
-    # YAML loading remains strict and never supplies this default for an absent section.
-    packet: PacketConfig = PacketConfig(32)
+    packet: PacketConfig
 
 
 def _load_values(path: str | Path) -> dict[str, Any]:
