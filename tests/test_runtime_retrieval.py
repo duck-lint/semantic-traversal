@@ -67,7 +67,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\n",
+                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\npacket:\n  max_occurrences: 32\n",
                 encoding="utf-8",
             )
             config = load_runtime_config(path)

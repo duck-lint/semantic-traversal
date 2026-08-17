@@ -8,7 +8,7 @@ from .conversation import (
     Conversation, Message, RuntimeConversationError, append_message, create_conversation,
     get_conversation, initialize_runtime, migrate_runtime,
 )
-from .config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
+from .config import ModelConfig, PacketConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
 from .retrieval.inference import RetrievalInferenceResult, RuntimeRetrievalError, infer_retrieval
 from .retrieval.package import (
     IDENTITY_VERSION, RetrievalPackage, RetrievalPackageError, RetrievalPackageIdentity,
@@ -31,10 +31,14 @@ from .retrieval.hydration import (
     HydratedRequestResult, HydratedRetrievalResult, HydratedVectorHit,
     HydratedVectorResult, RetrievalHydrationError, hydrate_retrieval_execution,
 )
+from .retrieval.packet import (
+    PACKET_CONTRACT_VERSION, SELECTION_RULE_VERSION, CanonicalTargetPayload, CanonicalTargetRef,
+    PacketAssemblyResult, RetrievalPacket, RetrievalPacketError, assemble_retrieval_packet,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
-    "get_conversation", "initialize_runtime", "migrate_runtime", "ModelConfig",
+    "get_conversation", "initialize_runtime", "migrate_runtime", "ModelConfig", "PacketConfig",
     "RuntimeConfig", "RuntimeConfigError", "load_runtime_config", "RetrievalInferenceResult",
     "RuntimeRetrievalError", "infer_retrieval", "RouterResult", "RuntimeRouterError", "route_conversation",
     "IDENTITY_VERSION", "RetrievalPackage", "RetrievalPackageError", "RetrievalPackageIdentity",
@@ -49,4 +53,7 @@ __all__ = [
     "HydratedRequestResult", "HydratedRetrievalResult", "HydratedVectorHit",
     "HydratedVectorResult", "RetrievalHydrationError", "hydrate_retrieval_execution",
     "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
+    "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
+    "CanonicalTargetRef", "CanonicalTargetPayload", "RetrievalPacket", "PacketAssemblyResult",
+    "assemble_retrieval_packet",
 ]
