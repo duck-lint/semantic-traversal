@@ -126,7 +126,7 @@ class RetrievalPacketTests(unittest.TestCase):
         self.assertEqual(packet.execution_failure["kind"], "surface_failure")
 
     def test_packet_config_yaml_is_strict(self):
-        base = "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: p\n"
+        base = "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: p\nsynthesis:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: p\n"
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             for value in (None, "", "max_occurrences: 0", "max_occurrences: -1", "max_occurrences: true", "max_occurrences: 32.0", "max_occurrences: '32'", "max_occurrences: 32\n  extra: true"):

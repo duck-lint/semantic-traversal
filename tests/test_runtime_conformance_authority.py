@@ -18,6 +18,52 @@ from semantic_traversal.runtime.conversation import (
 
 
 class RuntimeConformanceAuthorityTests(unittest.TestCase):
+    def _downgrade_model_runs_to_v3(self, connection):
+        connection.execute("ALTER TABLE model_runs RENAME TO model_runs_v6")
+        connection.execute(
+            """
+            CREATE TABLE model_runs (
+                run_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                trigger_message_id INTEGER NOT NULL,
+                run_kind TEXT NOT NULL CHECK (run_kind IN ('router', 'retrieval_inference')),
+                parent_run_id TEXT,
+                capability_catalog_sha256 TEXT,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                provider_response_id TEXT,
+                output_json TEXT,
+                error_type TEXT,
+                error_message TEXT,
+                input_tokens INTEGER,
+                cached_input_tokens INTEGER,
+                output_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                total_tokens INTEGER,
+                CHECK (
+                    (run_kind = 'router' AND parent_run_id IS NULL AND capability_catalog_sha256 IS NULL)
+                    OR
+                    (run_kind = 'retrieval_inference' AND parent_run_id IS NOT NULL AND capability_catalog_sha256 IS NOT NULL)
+                ),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
+                FOREIGN KEY (trigger_message_id) REFERENCES messages(message_id),
+                FOREIGN KEY (parent_run_id) REFERENCES model_runs(run_id)
+            )
+            """
+        )
+        columns = (
+            "run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, "
+            "capability_catalog_sha256, provider, model, prompt_version, status, started_at, "
+            "completed_at, provider_response_id, output_json, error_type, error_message, "
+            "input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens"
+        )
+        connection.execute(f"INSERT INTO model_runs ({columns}) SELECT {columns} FROM model_runs_v6")
+        connection.execute("DROP TABLE model_runs_v6")
+
     def _catalog(self):
         return minimum_catalog()
 
@@ -62,6 +108,7 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
     def _make_v3(self, directory):
         database, catalog_path = self._prepare(directory)
         connection = sqlite3.connect(database)
+        self._downgrade_model_runs_to_v3(connection)
         before = {
             table: tuple(connection.execute(f"SELECT * FROM {table} ORDER BY rowid"))
             for table in ("conversations", "messages", "model_runs")
@@ -88,9 +135,14 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
             database, _, before = self._make_v3(directory)
             migrate_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
             for table, rows in before.items():
-                self.assertEqual(tuple(connection.execute(f"SELECT * FROM {table} ORDER BY rowid")), rows)
+                if table == "model_runs":
+                    columns = "run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, completed_at, provider_response_id, output_json, error_type, error_message, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens"
+                    actual = tuple(connection.execute(f"SELECT {columns} FROM {table} ORDER BY rowid"))
+                else:
+                    actual = tuple(connection.execute(f"SELECT * FROM {table} ORDER BY rowid"))
+                self.assertEqual(actual, rows)
             self.assertIsNotNone(connection.execute("SELECT name FROM sqlite_master WHERE name = 'retrieval_conformance'").fetchone())
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM retrieval_conformance").fetchone()[0], 0)
             connection.close()
