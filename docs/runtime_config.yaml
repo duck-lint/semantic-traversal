@@ -48,3 +48,5 @@ retrieval_inference:
     If no defensible retrieval request is available from the supplied catalog, return an empty request list rather than inventing one.
 
     Emit only the required structured retrieval proposal.
+packet:
+  max_occurrences: 32

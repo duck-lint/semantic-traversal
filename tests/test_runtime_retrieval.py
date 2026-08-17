@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from tests.catalog_fixtures import minimum_catalog
-from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
+from semantic_traversal.runtime.config import ModelConfig, PacketConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import (
     OpenAIProviderError,
@@ -37,6 +37,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
         return RuntimeConfig(
             ModelConfig("openai", "router-model", 3.0, "router prompt\n"),
             ModelConfig("openai", "retrieval-model", 4.0, "retrieval prompt\n"),
+            PacketConfig(32),
         )
 
     def catalog(self, directory):
@@ -67,7 +68,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\n",
+                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\npacket:\n  max_occurrences: 32\n",
                 encoding="utf-8",
             )
             config = load_runtime_config(path)
