@@ -136,7 +136,7 @@ retrieval_inference:
     Think through the problem first.
     Emit only the required structured retrieval proposal.
 packet:
-  max_occurrences: 32
+  max_occurrences: 150
 synthesis:
   provider: openai
   model: gpt-5.6-luna
