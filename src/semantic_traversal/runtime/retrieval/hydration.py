@@ -9,29 +9,29 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from ..build.canonical import CanonicalObject, CanonicalRegion, CanonicalUnit
-from ..projection.graph import GraphHandle
-from ..projection.substrate import (
+from ...build.canonical import CanonicalObject, CanonicalRegion, CanonicalUnit
+from ...projection.graph import GraphHandle
+from ...projection.substrate import (
     SubstrateError,
     hydrate_object,
     hydrate_region,
     hydrate_unit,
 )
-from .retrieval_execution import (
+from .execution import (
     EXECUTION_CONTRACT_VERSION,
     RetrievalExecutionError,
     RetrievalExecutionRequestResult,
     RetrievalExecutionResult,
     load_retrieval_execution,
 )
-from .retrieval_package import (
+from .package import (
     IDENTITY_VERSION,
     RetrievalPackage,
     RetrievalPackageError,
     require_catalog_binding,
     require_current_package_identity,
 )
-from .retrieval_package_verification import (
+from .package_verification import (
     VERIFICATION_CONTRACT_VERSION,
     RetrievalPackageVerificationError,
     verify_retrieval_package,
@@ -374,6 +374,7 @@ def _hydrate_vector(
 
 def _hydrate_graph_discovery(
     connection: sqlite3.Connection,
+    request: Mapping[str, Any],
     result: Mapping[str, Any],
     check_package: Any,
 ) -> HydratedGraphDiscoveryResult:
@@ -385,6 +386,8 @@ def _hydrate_graph_discovery(
         hit = _mapping(raw_hit, "graph discovery hit")
         _exact_keys(hit, {"node", "score"}, "graph discovery hit")
         node = _graph_handle(hit["node"])
+        if node.node_kind != request["node_kind"]:
+            raise RetrievalHydrationError("graph discovery result node kind does not match request")
         score = _score(hit["score"], "graph discovery score")
         check_package()
         hits.append(HydratedGraphDiscoveryHit(node, score, _graph_target(connection, node)))
@@ -393,6 +396,7 @@ def _hydrate_graph_discovery(
 
 def _hydrate_graph_relations(
     connection: sqlite3.Connection,
+    request: Mapping[str, Any],
     result: Mapping[str, Any],
     check_package: Any,
 ) -> HydratedGraphRelationResult:
@@ -410,6 +414,8 @@ def _hydrate_graph_relations(
         edge_id = _int_identity(occurrence["edge_id"], "graph edge ID")
         relation_class = _text_identity(occurrence["relation_class"], "relation class")
         relation_name = _text_identity(occurrence["relation_name"], "relation name")
+        if relation_class != request["relation_class"] or relation_name != request["relation_name"]:
+            raise RetrievalHydrationError("graph relation result identity does not match request")
         source = _graph_handle(occurrence["source"])
         target = _graph_handle(occurrence["target"])
         check_package()
@@ -427,10 +433,11 @@ def _hydrate_graph_relations(
 
 def _hydrate_surface(
     connection: sqlite3.Connection,
-    operator: str,
+    request: Mapping[str, Any],
     result: Mapping[str, Any],
     check_package: Any,
 ) -> Any:
+    operator = request["operator"]
     if operator == "exact.equals":
         return _hydrate_exact(connection, result, check_package)
     if operator in {"lexical.terms", "lexical.phrase"}:
@@ -438,9 +445,9 @@ def _hydrate_surface(
     if operator == "vector.semantic_similarity":
         return _hydrate_vector(connection, result, check_package)
     if operator in {"graph.discovery.terms", "graph.discovery.phrase"}:
-        return _hydrate_graph_discovery(connection, result, check_package)
+        return _hydrate_graph_discovery(connection, request, result, check_package)
     if operator == "graph.relation_occurrence_lookup":
-        return _hydrate_graph_relations(connection, result, check_package)
+        return _hydrate_graph_relations(connection, request, result, check_package)
     raise RetrievalHydrationError(f"unsupported hydrated retrieval operator: {operator!r}")
 
 
@@ -502,7 +509,7 @@ def hydrate_retrieval_execution(
             if item.status == "succeeded":
                 if not isinstance(item.result, Mapping):
                     raise RetrievalHydrationError("successful persisted retrieval result is malformed")
-                result = _hydrate_surface(connection, item.request["operator"], item.result, check_package)
+                result = _hydrate_surface(connection, item.request, item.result, check_package)
                 check_package()
             elif item.status not in {"failed", "not_executed"}:
                 raise RetrievalHydrationError("persisted request status is unsupported for hydration")

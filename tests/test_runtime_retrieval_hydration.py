@@ -7,14 +7,14 @@ from unittest.mock import patch
 
 from semantic_traversal.cli import main
 from semantic_traversal import hydrate_object, hydrate_region, hydrate_unit
-from semantic_traversal.runtime.control_plane import conform_retrieval
+from semantic_traversal.runtime.retrieval.control_plane import conform_retrieval
 from semantic_traversal.runtime.conversation import (
     append_message,
     create_conversation,
     initialize_runtime,
 )
-from semantic_traversal.runtime.retrieval_execution import execute_retrieval
-from semantic_traversal.runtime.retrieval_hydration import (
+from semantic_traversal.runtime.retrieval.execution import execute_retrieval
+from semantic_traversal.runtime.retrieval.hydration import (
     HydratedExactResult,
     HydratedGraphDiscoveryResult,
     HydratedGraphRelationResult,
@@ -24,7 +24,7 @@ from semantic_traversal.runtime.retrieval_hydration import (
     RetrievalHydrationError,
     hydrate_retrieval_execution,
 )
-from semantic_traversal.runtime.retrieval_package import (
+from semantic_traversal.runtime.retrieval.package import (
     RetrievalPackageError,
     load_retrieval_package,
 )
@@ -278,7 +278,6 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
                     "kind": "graph_discovery",
                     "hits": [
                         {"node": {"node_kind": "semantic_object", "identity": [source_uuid]}, "score": 1.0},
-                        {"node": {"node_kind": "scope", "identity": [["A"]]}, "score": 2.0},
                     ],
                 },
                 {
@@ -298,6 +297,13 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
                             "target": {"node_kind": "semantic_object", "identity": ["zero"]},
                         },
                         {
+                            "edge_id": 42,
+                            "relation_class": "body_wikilink",
+                            "relation_name": "linked_to",
+                            "source": {"node_kind": "scope", "identity": [["A"]]},
+                            "target": {"node_kind": "semantic_object", "identity": ["zero"]},
+                        },
+                        {
                             "edge_id": 41,
                             "relation_class": "body_wikilink",
                             "relation_name": "linked_to",
@@ -312,8 +318,6 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         discovery = hydrated.requests[0].result
         self.assertIsInstance(discovery, HydratedGraphDiscoveryResult)
         self.assertEqual(discovery.hits[0].target.canonical_object.source_object_uuid, source_uuid)
-        self.assertEqual(discovery.hits[1].target.graph_handle.node_kind, "scope")
-        self.assertIsNone(discovery.hits[1].target.canonical_object)
         substrate = sqlite3.connect(package.substrate_path)
         expected_region = hydrate_region(substrate, region_uuid, region_path)
         expected_region_owner = hydrate_object(substrate, region_uuid)
@@ -325,15 +329,71 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         self.assertEqual(region.owning_object.source_object_uuid, region_uuid)
         relation = hydrated.requests[2].result
         self.assertIsInstance(relation, HydratedGraphRelationResult)
-        self.assertEqual(len(relation.occurrences), 2)
-        self.assertEqual(relation.occurrences[0].edge_id, relation.occurrences[1].edge_id)
+        self.assertEqual(len(relation.occurrences), 3)
+        self.assertEqual(relation.occurrences[0].edge_id, relation.occurrences[2].edge_id)
         self.assertEqual(relation.occurrences[0].source.canonical_unit.unit_id, unit_id)
         self.assertEqual(relation.occurrences[0].target.canonical_object.source_object_uuid, "zero")
+        self.assertEqual(relation.occurrences[1].source.graph_handle.node_kind, "scope")
+        self.assertIsNone(relation.occurrences[1].source.canonical_object)
+
+    def test_graph_discovery_result_node_kind_mismatch_fails_without_retrieval(self):
+        requests = [{
+            "operator": "graph.discovery.terms",
+            "node_kind": "semantic_object",
+            "dimension_name": "address_text",
+            "operand": ["target"],
+        }]
+        database, package, conformance_id = self.prepared("discovery-mismatch", requests, self.region_build)
+        execution = execute_retrieval(database, package, conformance_id)
+        _, _, region_uuid, region_path = self.identities(package)
+        execution_id = self.rewrite_results(
+            database,
+            [{
+                "kind": "graph_discovery",
+                "hits": [{
+                    "node": {"node_kind": "semantic_region", "identity": [region_uuid, list(region_path)]},
+                    "score": 1.0,
+                }],
+            }],
+        )
+        execution_module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["graph_discover"])
+        with patch.object(execution_module, "graph_discover") as graph_discover:
+            with self.assertRaises(RetrievalHydrationError):
+                hydrate_retrieval_execution(database, package, execution_id or execution.execution_id)
+            graph_discover.assert_not_called()
+
+    def test_graph_relation_result_identity_mismatch_fails_without_retrieval(self):
+        requests = [{
+            "operator": "graph.relation_occurrence_lookup",
+            "relation_class": "body_wikilink",
+            "relation_name": "linked_to",
+        }]
+        database, package, conformance_id = self.prepared("relation-mismatch", requests)
+        unit_id, _, _, _ = self.identities(package)
+        execution = execute_retrieval(database, package, conformance_id)
+        execution_id = self.rewrite_results(
+            database,
+            [{
+                "kind": "graph_relation_occurrences",
+                "occurrences": [{
+                    "edge_id": 1,
+                    "relation_class": "structural",
+                    "relation_name": "contains_unit",
+                    "source": {"node_kind": "semantic_unit", "identity": [unit_id]},
+                    "target": {"node_kind": "semantic_object", "identity": ["zero"]},
+                }],
+            }],
+        )
+        execution_module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["graph_relation_lookup"])
+        with patch.object(execution_module, "graph_relation_lookup") as graph_relation_lookup:
+            with self.assertRaises(RetrievalHydrationError):
+                hydrate_retrieval_execution(database, package, execution_id or execution.execution_id)
+            graph_relation_lookup.assert_not_called()
 
     def test_failed_execution_hydrates_prior_success_and_retains_failures(self):
         requests = [self.exact(), self.lexical()]
         database, package, conformance_id = self.prepared("failed", requests)
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["lexical_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["lexical_lookup"])
         with patch.object(module, "lexical_lookup", side_effect=ValueError("lexical failure")):
             execution = execute_retrieval(database, package, conformance_id)
         unit_id, _, _, _ = self.identities(package)
@@ -375,7 +435,7 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         with self.assertRaises(RetrievalHydrationError):
             hydrate_retrieval_execution(database, other, execution.execution_id)
 
-        module = __import__("semantic_traversal.runtime.retrieval_hydration", fromlist=["hydrate_unit"])
+        module = __import__("semantic_traversal.runtime.retrieval.hydration", fromlist=["hydrate_unit"])
         with patch.object(module, "require_current_package_identity", side_effect=[
             None,
             None,

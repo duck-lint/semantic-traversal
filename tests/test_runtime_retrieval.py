@@ -17,8 +17,8 @@ from semantic_traversal.runtime.openai_provider import (
     RetrievalProviderInference,
 )
 from semantic_traversal.runtime.prompts import prompt_version
-from semantic_traversal.runtime.retrieval import RuntimeRetrievalError, infer_retrieval
-from semantic_traversal.runtime.retrieval_requests import RetrievalRequestError, canonicalize_retrieval_request
+from semantic_traversal.runtime.retrieval.inference import RuntimeRetrievalError, infer_retrieval
+from semantic_traversal.runtime.retrieval.requests import RetrievalRequestError, canonicalize_retrieval_request
 from semantic_traversal.runtime.router import route_conversation
 
 

@@ -12,18 +12,18 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-from ..projection.exact import exact_lookup
-from ..projection.graph import GraphError, graph_discover, graph_relation_lookup
-from ..projection.lexical import lexical_lookup
-from ..projection.substrate import SubstrateError
-from ..projection.vector import EmbeddingProviderError, VectorError, vector_lookup
+from ...projection.exact import exact_lookup
+from ...projection.graph import GraphError, graph_discover, graph_relation_lookup
+from ...projection.lexical import lexical_lookup
+from ...projection.substrate import SubstrateError
+from ...projection.vector import EmbeddingProviderError, VectorError, vector_lookup
 from .control_plane import CATALOG_CONFORMANCE_CONTRACT_VERSION, _canonical_persisted_proposal
-from .conversation import RuntimeConversationError, _connect_runtime, _timestamp
-from .retrieval_package import (
+from ..conversation import RuntimeConversationError, _connect_runtime, _timestamp
+from .package import (
     IDENTITY_VERSION, RetrievalPackage, RetrievalPackageError,
     require_catalog_binding, require_current_package_identity,
 )
-from .retrieval_package_verification import (
+from .package_verification import (
     VERIFICATION_CONTRACT_VERSION, RetrievalPackageVerificationError, verify_retrieval_package,
 )
 

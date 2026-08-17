@@ -11,7 +11,7 @@ import openai
 
 from .config import ModelConfig
 from .conversation import Message
-from .retrieval_requests import (
+from .retrieval.requests import (
     RetrievalRequestError,
     canonicalize_retrieval_requests,
     retrieval_proposal_schema,

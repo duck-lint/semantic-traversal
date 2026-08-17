@@ -9,8 +9,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from semantic_traversal.cli import main
-from semantic_traversal.runtime.retrieval_package import load_retrieval_package
-from semantic_traversal.runtime.retrieval_package_verification import (
+from semantic_traversal.runtime.retrieval.package import load_retrieval_package
+from semantic_traversal.runtime.retrieval.package_verification import (
     RetrievalPackageVerificationError,
     VERIFICATION_CONTRACT_VERSION,
     verify_retrieval_package,

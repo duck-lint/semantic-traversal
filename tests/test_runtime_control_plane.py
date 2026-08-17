@@ -11,13 +11,13 @@ from unittest.mock import patch
 
 from semantic_traversal.cli import main
 from tests.catalog_fixtures import minimum_catalog
-from semantic_traversal.runtime.control_plane import (
+from semantic_traversal.runtime.retrieval.control_plane import (
     CATALOG_CONFORMANCE_CONTRACT_VERSION,
     RetrievalConformanceError,
     conform_retrieval,
 )
 from semantic_traversal.runtime.conversation import create_conversation, initialize_runtime
-from semantic_traversal.runtime.retrieval_requests import canonicalize_retrieval_requests
+from semantic_traversal.runtime.retrieval.requests import canonicalize_retrieval_requests
 
 
 class RuntimeControlPlaneTests(unittest.TestCase):

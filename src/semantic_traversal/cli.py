@@ -30,10 +30,10 @@ from .build.vault import parse_vault
 from .projection.vector import OllamaEmbeddingProvider, build_vector_index, vector_eligible_targets, vector_lookup
 from .projection.verification import verify_completed_build
 from .runtime.config import load_runtime_config
-from .runtime.control_plane import conform_retrieval
+from .runtime.retrieval.control_plane import conform_retrieval
 from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
 from .runtime.router import route_conversation
-from .runtime.retrieval import infer_retrieval
+from .runtime.retrieval.inference import infer_retrieval
 
 
 class CliError(ValueError):
