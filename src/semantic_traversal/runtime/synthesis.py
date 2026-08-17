@@ -35,10 +35,17 @@ class SynthesisProviderError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class SynthesisMessage:
+    ordinal: int
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
 class SynthesisInput:
     contract_version: str
     route: str
-    conversation: Conversation
+    conversation: tuple[SynthesisMessage, ...]
     retrieval_packet: RetrievalPacket | None
 
     def __post_init__(self) -> None:
@@ -114,10 +121,10 @@ def _serialize_value(value: Any) -> Any:
     raise SynthesisError(f"unsupported synthesis input value: {type(value).__name__}")
 
 
-def _conversation_json(conversation: Conversation) -> list[dict[str, Any]]:
+def _conversation_json(conversation: tuple[SynthesisMessage, ...]) -> list[dict[str, Any]]:
     return [
         {"role": message.role, "content": message.content, "ordinal": message.ordinal}
-        for message in conversation.messages
+        for message in conversation
     ]
 
 
@@ -231,15 +238,13 @@ def _existing_synthesis(connection: sqlite3.Connection, conversation_id: str, tr
     if parent is None or parent["run_kind"] not in {"router", "retrieval_inference"}:
         raise SynthesisError("successful synthesis run has invalid parent lineage")
     route = "semantic_retrieval" if parent["run_kind"] == "retrieval_inference" else "direct"
+    if not isinstance(row["input_json"], str) or not row["input_json"]:
+        raise SynthesisError("successful synthesis run has invalid persisted input JSON")
+    if not isinstance(row["input_sha256"], str) or not row["input_sha256"]:
+        raise SynthesisError("successful synthesis run has invalid persisted input hash")
+    if synthesis_input_sha256(row["input_json"]) != row["input_sha256"]:
+        raise SynthesisError("successful synthesis run input hash does not match persisted input JSON")
     return SynthesisResult(row["run_id"], row["conversation_id"], row["trigger_message_id"], route, row["parent_run_id"], row["input_sha256"], row["status"], row["output_text"], row["produced_message_id"], row["provider_response_id"], _usage_from_row(row))
-
-
-def _provider_failure(exc: Exception) -> tuple[str, str]:
-    if isinstance(exc, SynthesisProviderError):
-        return exc.error_type, str(exc)
-    if isinstance(exc, SynthesisError):
-        return "runtime_validation", str(exc)
-    return "provider_status", str(exc)
 
 
 def _fail_run(database_path: str, run_id: str, error_type: str, error_message: str, clock: Any) -> None:
@@ -265,10 +270,8 @@ def synthesize_conversation(
     """Run one provider-neutral synthesis attempt with durable atomic success."""
     connection = _connect_runtime(database_path)
     try:
-        # A successful prior synthesis appends a message, so the latest
-        # message is no longer the triggering user message on an idempotent
-        # second call. Resolve that narrow existing-result case first; a new
-        # attempt still goes through the complete latest-user validation below.
+        # The router identity is the only pre-transaction input needed to find
+        # the trigger. The attempt check and claim must share one write lock.
         router_row = connection.execute("SELECT * FROM model_runs WHERE run_id = ?", (router_run_id,)).fetchone()
         if (
             router_row is None
@@ -277,37 +280,47 @@ def synthesize_conversation(
             or router_row["conversation_id"] != conversation_id
         ):
             raise SynthesisError("router run does not belong to the requested conversation")
-        existing = _existing_synthesis(connection, conversation_id, router_row["trigger_message_id"])
-        if existing is not None:
-            return existing
-        conversation = _conversation_from_connection(connection, conversation_id)
-        route = _route_for_router(connection, router_run_id, conversation)
-        if route == "direct" and retrieval_packet is not None:
-            raise SynthesisError("direct route cannot receive a retrieval packet")
-        if route == "semantic_retrieval":
-            if retrieval_packet is None:
-                raise SynthesisError("semantic-retrieval route requires a retrieval packet")
-            _validate_packet_lineage(connection, retrieval_packet, router_run_id, conversation)
-        synthesis_input = SynthesisInput(SYNTHESIS_INPUT_CONTRACT_VERSION, route, conversation, retrieval_packet)
-        input_json = serialize_synthesis_input(synthesis_input)
-        input_sha = synthesis_input_sha256(input_json)
-        run_id = str(uuid4())
-        insert_parent = router_run_id if route == "direct" else retrieval_packet.retrieval_run_id
         connection.execute("BEGIN IMMEDIATE")
-        insert_synthesis_run(
-            connection,
-            run_id=run_id,
-            conversation_id=conversation_id,
-            trigger_message_id=conversation.messages[-1].message_id,
-            parent_run_id=insert_parent,
-            provider=runtime_config.synthesis.provider,
-            model=runtime_config.synthesis.model,
-            prompt_version=prompt_version(runtime_config.synthesis.prompt),
-            started_at=_timestamp(clock),
-            input_json=input_json,
-            input_sha256=input_sha,
-        )
-        connection.commit()
+        try:
+            existing = _existing_synthesis(connection, conversation_id, router_row["trigger_message_id"])
+            if existing is not None:
+                connection.commit()
+                return existing
+            conversation = _conversation_from_connection(connection, conversation_id)
+            route = _route_for_router(connection, router_run_id, conversation)
+            if route == "direct" and retrieval_packet is not None:
+                raise SynthesisError("direct route cannot receive a retrieval packet")
+            if route == "semantic_retrieval":
+                if retrieval_packet is None:
+                    raise SynthesisError("semantic-retrieval route requires a retrieval packet")
+                _validate_packet_lineage(connection, retrieval_packet, router_run_id, conversation)
+            synthesis_input = SynthesisInput(
+                SYNTHESIS_INPUT_CONTRACT_VERSION,
+                route,
+                tuple(SynthesisMessage(message.ordinal, message.role, message.content) for message in conversation.messages),
+                retrieval_packet,
+            )
+            input_json = serialize_synthesis_input(synthesis_input)
+            input_sha = synthesis_input_sha256(input_json)
+            run_id = str(uuid4())
+            insert_parent = router_run_id if route == "direct" else retrieval_packet.retrieval_run_id
+            insert_synthesis_run(
+                connection,
+                run_id=run_id,
+                conversation_id=conversation_id,
+                trigger_message_id=conversation.messages[-1].message_id,
+                parent_run_id=insert_parent,
+                provider=runtime_config.synthesis.provider,
+                model=runtime_config.synthesis.model,
+                prompt_version=prompt_version(runtime_config.synthesis.prompt),
+                started_at=_timestamp(clock),
+                input_json=input_json,
+                input_sha256=input_sha,
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
     except Exception:
         connection.rollback()
         raise
@@ -320,8 +333,12 @@ def synthesize_conversation(
             raise SynthesisError("synthesis provider returned blank or unsupported response text")
         if not isinstance(result.usage, SynthesisUsage):
             raise SynthesisError("synthesis provider returned unsupported usage")
-    except Exception as exc:
-        error_type, error_message = _provider_failure(exc)
+    except SynthesisProviderError as exc:
+        error_type, error_message = exc.error_type, str(exc)
+        _fail_run(database_path, run_id, error_type, error_message, clock)
+        raise SynthesisError(f"synthesis run failed ({error_type}): {error_message}") from exc
+    except SynthesisError as exc:
+        error_type, error_message = "runtime_validation", str(exc)
         _fail_run(database_path, run_id, error_type, error_message, clock)
         raise SynthesisError(f"synthesis run failed ({error_type}): {error_message}") from exc
 
@@ -358,6 +375,6 @@ def synthesize_conversation(
 
 __all__ = [
     "SYNTHESIS_INPUT_CONTRACT_VERSION", "SynthesisError", "SynthesisProviderError",
-    "SynthesisInput", "SynthesisUsage", "SynthesisProviderResult", "SynthesisProvider",
+    "SynthesisMessage", "SynthesisInput", "SynthesisUsage", "SynthesisProviderResult", "SynthesisProvider",
     "SynthesisResult", "serialize_synthesis_input", "synthesis_input_sha256", "synthesize_conversation",
 ]

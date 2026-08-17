@@ -1,6 +1,7 @@
 import datetime as dt
 import json
 import sqlite3
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,7 +16,7 @@ from semantic_traversal.runtime.retrieval.hydration import HydratedCanonicalTarg
 from semantic_traversal.runtime.retrieval.packet import assemble_retrieval_packet
 from semantic_traversal.runtime.router import route_conversation
 from semantic_traversal.runtime.synthesis import (
-    SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisError, SynthesisProviderError,
+    SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisError, SynthesisMessage, SynthesisProviderError,
     SynthesisProviderResult, SynthesisUsage, SynthesisInput, serialize_synthesis_input,
     synthesis_input_sha256, synthesize_conversation,
 )
@@ -95,7 +96,14 @@ class SynthesisTests(unittest.TestCase):
             second = synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
             self.assertEqual(len(provider.inputs), 1)
             self.assertEqual(provider.inputs[0][1].route, "direct")
-            self.assertEqual(provider.inputs[0][1].conversation.messages[-1].content, "Explain transcendental arguments.")
+            received_messages = provider.inputs[0][1].conversation
+            self.assertEqual(received_messages[-1].content, "Explain transcendental arguments.")
+            self.assertEqual(received_messages, (SynthesisMessage(0, "user", "Explain transcendental arguments."),))
+            self.assertEqual(set(vars(received_messages[-1])), {"ordinal", "role", "content"})
+            input_json = serialize_synthesis_input(provider.inputs[0][1])
+            self.assertNotIn("message_id", input_json)
+            self.assertNotIn("created_at", input_json)
+            self.assertNotIn("conversation_id", input_json)
             self.assertIsNone(provider.inputs[0][1].retrieval_packet)
             self.assertEqual(first, second)
             self.assertEqual(get_conversation(database, conversation.conversation_id).messages[-1].role, "synthesis")
@@ -164,7 +172,7 @@ class SynthesisTests(unittest.TestCase):
             router = route_conversation(database, runtime_config(), conversation.conversation_id, provider=type("Router", (), {"infer_router": lambda self, config, messages: ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage())})())
             provider = RecordingProvider("continuity response")
             synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            messages = provider.inputs[0][1].conversation.messages
+            messages = provider.inputs[0][1].conversation
             self.assertEqual([(item.role, item.content) for item in messages], [("user", "Explain transcendental arguments."), ("synthesis", "It drank milk and later ate hay."), ("user", "When did that change?")])
 
             fields = (FrontmatterField("none", "present_value", None), FrontmatterField("bool", "present_value", True), FrontmatterField("int", "present_value", 4), FrontmatterField("float", "present_value", 1.25), FrontmatterField("date", "present_value", dt.date(2026, 1, 2)), FrontmatterField("datetime", "present_value", dt.datetime(2026, 1, 2, 3, 4, tzinfo=dt.timezone.utc)), FrontmatterField("list", "present_value", ["x", None]), FrontmatterField("mapping", "present_value", {"x": "y"}))
@@ -172,7 +180,12 @@ class SynthesisTests(unittest.TestCase):
             owner = CanonicalObject("owner", "owner.md", (), fields, (), ())
             target = HydratedCanonicalTarget("semantic_unit", canonical_unit=unit, owning_object=owner)
             packet = assemble_retrieval_packet(HydratedRetrievalResult("e", "c", "r", "p", "succeeded", None, (HydratedRequestResult(0, {"operator": "exact.equals"}, "exact.equals", "succeeded", HydratedExactResult((HydratedExactHit(1, target),)), None),)), PacketConfig(1)).packet
-            value = SynthesisInput(SYNTHESIS_INPUT_CONTRACT_VERSION, "semantic_retrieval", get_conversation(database, conversation.conversation_id), packet)
+            value = SynthesisInput(
+                SYNTHESIS_INPUT_CONTRACT_VERSION,
+                "semantic_retrieval",
+                tuple(SynthesisMessage(item.ordinal, item.role, item.content) for item in get_conversation(database, conversation.conversation_id).messages),
+                packet,
+            )
             first, second = serialize_synthesis_input(value), serialize_synthesis_input(value)
             self.assertEqual(first, second)
             self.assertEqual(synthesis_input_sha256(first), synthesis_input_sha256(second))
@@ -198,6 +211,97 @@ class SynthesisTests(unittest.TestCase):
             connection.close()
         finally:
             directory.cleanup()
+
+    def test_unexpected_provider_error_leaves_running_attempt_and_closes_replay(self):
+        directory, database, conversation, router = self.prepared()
+        try:
+            provider = RecordingProvider(error=RuntimeError("unexpected bug"))
+            with self.assertRaisesRegex(RuntimeError, "unexpected bug"):
+                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT status, error_type FROM model_runs WHERE run_kind='synthesis'").fetchone(), ("running", None))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role='synthesis'").fetchone()[0], 0)
+            connection.close()
+            second_provider = RecordingProvider("must not run")
+            with self.assertRaisesRegex(SynthesisError, "incomplete prior synthesis"):
+                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=second_provider)
+            self.assertEqual(second_provider.inputs, [])
+        finally:
+            directory.cleanup()
+
+    def test_concurrent_calls_claim_one_attempt(self):
+        directory, database, conversation, router = self.prepared()
+        try:
+            entered = threading.Event()
+            release = threading.Event()
+
+            class BlockingProvider(RecordingProvider):
+                def synthesize(self, config, synthesis_input):
+                    self.inputs.append((config, synthesis_input))
+                    entered.set()
+                    if not release.wait(5):
+                        raise AssertionError("blocking provider was not released")
+                    return SynthesisProviderResult("concurrent response", "provider-response", SynthesisUsage())
+
+            first_provider = BlockingProvider()
+            first_result = []
+            first_error = []
+
+            def run_first():
+                try:
+                    first_result.append(synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=first_provider))
+                except BaseException as exc:  # pragma: no cover - assertion reports the unexpected thread failure
+                    first_error.append(exc)
+
+            thread = threading.Thread(target=run_first)
+            thread.start()
+            self.assertTrue(entered.wait(5))
+            second_provider = RecordingProvider("must not run")
+            with self.assertRaisesRegex(SynthesisError, "incomplete prior synthesis"):
+                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=second_provider)
+            self.assertEqual(second_provider.inputs, [])
+            release.set()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(first_error, [])
+            self.assertEqual(len(first_result), 1)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role='synthesis'").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind='synthesis'").fetchone()[0], 1)
+            connection.close()
+        finally:
+            release.set() if 'release' in locals() else None
+            directory.cleanup()
+
+    def test_successful_replay_rejects_corrupt_persisted_input_hash(self):
+        directory, database, conversation, router = self.prepared()
+        untouched_directory, untouched_database, untouched_conversation, untouched_router = self.prepared()
+        try:
+            provider = RecordingProvider("stable response")
+            first = synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
+            connection = sqlite3.connect(database)
+            connection.execute("UPDATE model_runs SET input_json = ? WHERE run_id = ?", ("{\"corrupted\":true}", first.run_id))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(SynthesisError, "input hash"):
+                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
+            self.assertEqual(len(provider.inputs), 1)
+            self.assertEqual(get_conversation(database, conversation.conversation_id).messages[-1].content, "stable response")
+
+            untouched_provider = RecordingProvider("untouched response")
+            untouched_first = synthesize_conversation(
+                untouched_database, runtime_config(), untouched_conversation.conversation_id,
+                untouched_router.run_id, provider=untouched_provider,
+            )
+            untouched_second = synthesize_conversation(
+                untouched_database, runtime_config(), untouched_conversation.conversation_id,
+                untouched_router.run_id, provider=untouched_provider,
+            )
+            self.assertEqual(untouched_first, untouched_second)
+            self.assertEqual(len(untouched_provider.inputs), 1)
+        finally:
+            directory.cleanup()
+            untouched_directory.cleanup()
 
 
 if __name__ == "__main__":

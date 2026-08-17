@@ -37,7 +37,7 @@ from .retrieval.packet import (
 )
 from .synthesis import (
     LEGAL_SYNTHESIS_ROUTES, SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisError,
-    SynthesisInput, SynthesisProvider, SynthesisProviderError, SynthesisProviderResult,
+    SynthesisInput, SynthesisMessage, SynthesisProvider, SynthesisProviderError, SynthesisProviderResult,
     SynthesisResult, SynthesisUsage, serialize_synthesis_input, synthesis_input_sha256,
     synthesize_conversation,
 )
@@ -63,7 +63,7 @@ __all__ = [
     "CanonicalTargetRef", "CanonicalTargetPayload", "RetrievalPacket", "PacketAssemblyResult",
     "assemble_retrieval_packet",
     "SYNTHESIS_INPUT_CONTRACT_VERSION", "LEGAL_SYNTHESIS_ROUTES", "SynthesisError",
-    "SynthesisProviderError", "SynthesisInput", "SynthesisProvider", "SynthesisProviderResult",
+    "SynthesisProviderError", "SynthesisMessage", "SynthesisInput", "SynthesisProvider", "SynthesisProviderResult",
     "SynthesisUsage", "SynthesisResult", "serialize_synthesis_input", "synthesis_input_sha256",
     "synthesize_conversation",
 ]
