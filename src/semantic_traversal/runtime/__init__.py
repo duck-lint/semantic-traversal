@@ -22,6 +22,14 @@ from .retrieval_package_verification import (
 from .retrieval_execution import (
     EXECUTION_CONTRACT_VERSION, RetrievalExecutionError,
     RetrievalExecutionRequestResult, RetrievalExecutionResult, execute_retrieval,
+    load_retrieval_execution,
+)
+from .retrieval_hydration import (
+    HydratedCanonicalTarget, HydratedExactHit, HydratedExactResult,
+    HydratedGraphDiscoveryHit, HydratedGraphDiscoveryResult, HydratedGraphOccurrence,
+    HydratedGraphRelationResult, HydratedLexicalHit, HydratedLexicalResult,
+    HydratedRequestResult, HydratedRetrievalResult, HydratedVectorHit,
+    HydratedVectorResult, RetrievalHydrationError, hydrate_retrieval_execution,
 )
 
 __all__ = [
@@ -34,6 +42,11 @@ __all__ = [
     "VERIFICATION_CONTRACT_VERSION", "RetrievalPackageVerificationError", "VerifiedRetrievalPackage",
     "verify_retrieval_package",
     "EXECUTION_CONTRACT_VERSION", "RetrievalExecutionError", "RetrievalExecutionRequestResult",
-    "RetrievalExecutionResult", "execute_retrieval",
+    "RetrievalExecutionResult", "execute_retrieval", "load_retrieval_execution",
+    "HydratedCanonicalTarget", "HydratedExactHit", "HydratedExactResult",
+    "HydratedGraphDiscoveryHit", "HydratedGraphDiscoveryResult", "HydratedGraphOccurrence",
+    "HydratedGraphRelationResult", "HydratedLexicalHit", "HydratedLexicalResult",
+    "HydratedRequestResult", "HydratedRetrievalResult", "HydratedVectorHit",
+    "HydratedVectorResult", "RetrievalHydrationError", "hydrate_retrieval_execution",
     "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
 ]

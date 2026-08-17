@@ -7,6 +7,7 @@ from semantic_traversal import (
     BuildConfig,
     canonicalize_ingest,
     foreign_key_check,
+    hydrate_region,
     hydrate_unit,
     materialize_context,
     parse_vault,
@@ -106,6 +107,20 @@ target body
                 with self.assertRaises(KeyError):
                     hydrate_unit(reopened, 999999)
                 reopened.close()
+        finally:
+            directory.cleanup()
+
+    def test_region_hydration_uses_complete_object_local_identity(self):
+        directory, ingest = self._build()
+        try:
+            connection = sqlite3.connect(":memory:")
+            write_completed_ingest(connection, ingest)
+            expected = next(region for region in ingest.regions if region.reference.region_path == ("region-0001",))
+            self.assertEqual(hydrate_region(connection, "source-uuid", ("region-0001",)), expected)
+            with self.assertRaises(KeyError):
+                hydrate_region(connection, "source-uuid", ("missing",))
+            with self.assertRaises(ValueError):
+                hydrate_region(connection, "source-uuid", ())
         finally:
             directory.cleanup()
 

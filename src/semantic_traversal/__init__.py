@@ -18,7 +18,7 @@ from .build.vault import CorpusFailure, VaultParseResult, discover_markdown_note
 from .build.materialize import MaterializedCorpus, MaterializedObject, MaterializedUnit, MaterializationError, RelationCandidate, materialize_context
 from .build.resolve import ResolutionError, ResolutionFailure, ResolutionResult, ResolvedObjectRelation, ResolvedRelation, ObjectTarget, RegionTarget, resolve_relations
 from .build.canonical import CanonicalObject, CanonicalObjectRelation, CanonicalRegion, CanonicalRegionReference, CanonicalRelation, CanonicalUnit, CanonicalizationError, CompletedIngest, canonicalize_ingest
-from .projection.substrate import SubstrateError, foreign_key_check, hydrate_object, hydrate_unit, write_completed_ingest
+from .projection.substrate import SubstrateError, foreign_key_check, hydrate_object, hydrate_region, hydrate_unit, write_completed_ingest
 from .projection.exact import exact_lookup, build_exact_index
 from .projection.lexical import LexicalHit, build_lexical_index, lexical_integrity_check, lexical_lookup
 from .projection.graph import GraphDiscoveryHit, GraphEdgeOccurrence, GraphError, GraphHandle, GraphTraversalHit, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
@@ -68,6 +68,7 @@ __all__ = [
     "write_completed_ingest",
     "hydrate_unit",
     "hydrate_object",
+    "hydrate_region",
     "foreign_key_check",
     "build_exact_index",
     "exact_lookup",
