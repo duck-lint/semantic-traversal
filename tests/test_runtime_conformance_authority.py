@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from tests.catalog_fixtures import minimum_catalog
-from semantic_traversal.runtime.control_plane import conform_retrieval
+from semantic_traversal.runtime.retrieval.control_plane import conform_retrieval
 from semantic_traversal.runtime.conversation import (
     RuntimeConversationError,
     append_message,

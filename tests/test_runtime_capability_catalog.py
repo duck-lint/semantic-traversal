@@ -7,12 +7,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tests.catalog_fixtures import minimum_catalog
-from semantic_traversal.runtime.capability_catalog import CapabilityCatalogError, load_capability_catalog
+from semantic_traversal.runtime.retrieval.capability_catalog import CapabilityCatalogError, load_capability_catalog
 from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig
-from semantic_traversal.runtime.control_plane import RetrievalConformanceError, conform_retrieval
+from semantic_traversal.runtime.retrieval.control_plane import RetrievalConformanceError, conform_retrieval
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import ProviderUsage, RetrievalProviderInference
-from semantic_traversal.runtime.retrieval import RuntimeRetrievalError, infer_retrieval
+from semantic_traversal.runtime.retrieval.inference import RuntimeRetrievalError, infer_retrieval
 
 
 class CatalogAdmissionTests(unittest.TestCase):

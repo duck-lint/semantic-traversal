@@ -13,8 +13,8 @@ from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from .capability_catalog import CapabilityCatalogError, load_capability_catalog
-from .conversation import CONFORMANCE_CONTRACT_VERSION, RuntimeConversationError, _connect_runtime, _timestamp
-from .retrieval_requests import RetrievalRequestError, canonicalize_retrieval_requests
+from ..conversation import CONFORMANCE_CONTRACT_VERSION, RuntimeConversationError, _connect_runtime, _timestamp
+from .requests import RetrievalRequestError, canonicalize_retrieval_requests
 
 
 CATALOG_CONFORMANCE_CONTRACT_VERSION = CONFORMANCE_CONTRACT_VERSION

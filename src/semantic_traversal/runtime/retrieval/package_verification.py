@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..projection.catalog import CatalogGenerationError, catalog_from_facts
-from ..projection.capability_facts import CapabilityObservationError, observe_capability_facts
-from ..projection.verification import CompletedBuildVerificationError, verify_completed_build
-from .retrieval_package import (
+from ...projection.catalog import CatalogGenerationError, catalog_from_facts
+from ...projection.capability_facts import CapabilityObservationError, observe_capability_facts
+from ...projection.verification import CompletedBuildVerificationError, verify_completed_build
+from .package import (
     RetrievalPackage,
     RetrievalPackageError,
     require_current_package_identity,

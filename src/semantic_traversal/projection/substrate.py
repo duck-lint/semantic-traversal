@@ -16,6 +16,7 @@ from ..build.canonical import (
     CanonicalObject,
     CanonicalObjectRelation,
     CanonicalRelation,
+    CanonicalRegion,
     CanonicalRegionReference,
     CanonicalUnit,
     CompletedIngest,
@@ -452,6 +453,44 @@ def hydrate_object(connection: sqlite3.Connection, source_object_uuid: str) -> C
         regions.append(CanonicalRegion(reference, level, raw, parsed_text, address_text, parent_region_id))
     return CanonicalObject(source_object_uuid, source_path, path_hierarchy,
                            fields, tuple(relations), tuple(regions))
+
+
+def hydrate_region(
+    connection: sqlite3.Connection,
+    source_object_uuid: str,
+    region_path: tuple[str, ...],
+) -> CanonicalRegion:
+    """Hydrate one complete canonical region by its object-local identity."""
+
+    _enable_foreign_keys(connection)
+    if (
+        not isinstance(source_object_uuid, str)
+        or not source_object_uuid
+        or not isinstance(region_path, tuple)
+        or not region_path
+        or not all(isinstance(component, str) and component for component in region_path)
+    ):
+        raise SubstrateError("canonical region identity is malformed")
+    path_json = _path_json(region_path)
+    row = connection.execute(
+        """SELECT level, raw_markdown, parsed_text, address_text, parent_region_id
+        FROM canonical_regions
+        WHERE source_object_uuid = ? AND region_path_json = ?""",
+        (source_object_uuid, path_json),
+    ).fetchone()
+    if row is None:
+        raise KeyError(
+            f"unknown canonical region: {source_object_uuid}/{region_path!r}"
+        )
+    level, raw_markdown, parsed_text, address_text, parent_region_id = row
+    return CanonicalRegion(
+        CanonicalRegionReference(source_object_uuid, region_path),
+        level,
+        raw_markdown,
+        parsed_text,
+        address_text,
+        parent_region_id,
+    )
 
 
 def foreign_key_check(connection: sqlite3.Connection) -> tuple[tuple[Any, ...], ...]:

@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tests.catalog_fixtures import minimum_catalog
-from semantic_traversal.runtime.retrieval_package import (
+from semantic_traversal.runtime.retrieval.package import (
     IDENTITY_VERSION,
     RetrievalPackageError,
     load_retrieval_package,

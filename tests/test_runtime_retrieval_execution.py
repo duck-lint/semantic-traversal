@@ -10,14 +10,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from semantic_traversal.runtime.control_plane import conform_retrieval
+from semantic_traversal.runtime.retrieval.control_plane import conform_retrieval
 from semantic_traversal.runtime.conversation import (
     RuntimeConversationError, append_message, create_conversation, initialize_runtime, migrate_runtime,
 )
-from semantic_traversal.runtime.retrieval_execution import (
+from semantic_traversal.runtime.retrieval.execution import (
     EXECUTION_CONTRACT_VERSION, RetrievalExecutionError, execute_retrieval,
 )
-from semantic_traversal.runtime.retrieval_package import RetrievalPackageError, load_retrieval_package
+from semantic_traversal.runtime.retrieval.package import RetrievalPackageError, load_retrieval_package
 
 
 class RuntimeRetrievalExecutionTests(unittest.TestCase):
@@ -150,7 +150,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
 
     def test_exact_zero_hit_and_empty_proposal_succeed_without_hydration(self):
         database, package, conformance_id = self.prepared("zero", [self.exact()])
-        with patch("semantic_traversal.runtime.retrieval_execution._surface_result", wraps=__import__("semantic_traversal.runtime.retrieval_execution", fromlist=["_surface_result"])._surface_result):
+        with patch("semantic_traversal.runtime.retrieval.execution._surface_result", wraps=__import__("semantic_traversal.runtime.retrieval.execution", fromlist=["_surface_result"])._surface_result):
             result = execute_retrieval(database, package, conformance_id)
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(dict(result.requests[0].result), {"kind": "exact", "unit_ids": ()})
@@ -163,7 +163,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
     def test_order_duplicates_and_fail_fast_preserve_factual_partial_results(self):
         requests = [self.exact("first"), {"operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": ["two words"]}, self.exact("later")]
         database, package, conformance_id = self.prepared("fail-fast", requests)
-        with patch("semantic_traversal.runtime.retrieval_execution.lexical_lookup", side_effect=ValueError("tokenizer rejection")), patch("semantic_traversal.runtime.retrieval_execution.exact_lookup", wraps=__import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"]).exact_lookup) as exact:
+        with patch("semantic_traversal.runtime.retrieval.execution.lexical_lookup", side_effect=ValueError("tokenizer rejection")), patch("semantic_traversal.runtime.retrieval.execution.exact_lookup", wraps=__import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"]).exact_lookup) as exact:
             result = execute_retrieval(database, package, conformance_id)
         self.assertEqual([item.status for item in result.requests], ["succeeded", "failed", "not_executed"])
         self.assertEqual(result.status, "failed")
@@ -179,7 +179,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
 
     def test_package_identity_change_between_requests_does_not_fabricate_request_failure(self):
         database, package, conformance_id = self.prepared("package-change-between", [self.exact("first"), self.exact("second")])
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup", return_value=()) as exact, patch.object(
             module,
             "require_current_package_identity",
@@ -205,7 +205,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
 
     def test_final_package_identity_change_cannot_commit_success(self):
         database, package, conformance_id = self.prepared("package-change-final", [self.exact("only")])
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup", return_value=()), patch.object(
             module,
             "require_current_package_identity",
@@ -250,7 +250,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             [{"kind": "package_identity_changed"}, None],
             {"kind": "package_identity_changed"},
         )
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup") as exact:
             with self.assertRaises(RetrievalExecutionError):
                 execute_retrieval(database, package, conformance_id)
@@ -283,7 +283,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             }],
             None,
         )
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup") as exact:
             with self.assertRaises(RetrievalExecutionError):
                 execute_retrieval(database, package, conformance_id)
@@ -291,7 +291,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
 
     def test_unexpected_programming_error_leaves_running_evidence(self):
         database, package, conformance_id = self.prepared("unexpected-error", [self.exact("first"), self.exact("second")])
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup", side_effect=[(), RuntimeError("unexpected bug")]):
             with self.assertRaisesRegex(RuntimeError, "unexpected bug"):
                 execute_retrieval(database, package, conformance_id)
@@ -306,7 +306,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
 
     def test_duplicate_successful_requests_execute_twice_and_second_call_is_idempotent(self):
         database, package, conformance_id = self.prepared("duplicate", [self.exact(), self.exact()])
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup", wraps=module.exact_lookup) as exact:
             first = execute_retrieval(database, package, conformance_id)
             second = execute_retrieval(database, package, conformance_id)
@@ -325,12 +325,12 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
 
     def test_missing_conformance_and_package_mismatch_fail_before_surface_calls(self):
         database, package, conformance_id = self.prepared("authority", [self.exact()])
-        with patch("semantic_traversal.runtime.retrieval_execution.exact_lookup") as exact:
+        with patch("semantic_traversal.runtime.retrieval.execution.exact_lookup") as exact:
             with self.assertRaises(RetrievalExecutionError):
                 execute_retrieval(database, package, "missing")
             exact.assert_not_called()
         other = load_retrieval_package(self.other_build)
-        with patch("semantic_traversal.runtime.retrieval_execution.exact_lookup") as exact:
+        with patch("semantic_traversal.runtime.retrieval.execution.exact_lookup") as exact:
             with self.assertRaises(RetrievalExecutionError):
                 execute_retrieval(database, other, conformance_id)
             exact.assert_not_called()
@@ -343,7 +343,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         original = package.substrate_path.read_bytes()
         package.substrate_path.write_bytes(original + b"changed")
         try:
-            with patch("semantic_traversal.runtime.retrieval_execution.exact_lookup") as exact:
+            with patch("semantic_traversal.runtime.retrieval.execution.exact_lookup") as exact:
                 with self.assertRaises(RetrievalExecutionError):
                     execute_retrieval(database, package, conformance_id)
                 exact.assert_not_called()
@@ -360,7 +360,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             "operand": {"shape": "ordered_sequence", "member_domain": "string", "value": ["A", "B"]},
         }
         database, package, conformance_id = self.prepared("ordered", [request])
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
         with patch.object(module, "exact_lookup", return_value=()) as exact:
             result = execute_retrieval(database, package, conformance_id)
         self.assertEqual(result.status, "succeeded")
@@ -368,7 +368,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         self.assertEqual(exact.call_args.args[3], ("A", "B"))
 
     def test_native_date_and_datetime_adapters_restore_python_types(self):
-        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["_execute_surface", "exact_lookup"])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["_execute_surface", "exact_lookup"])
         package = load_retrieval_package(self.build)
         connection = sqlite3.connect(":memory:")
         try:
