@@ -264,7 +264,11 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
         if status == "failed":
             if item["result"] is not None or not isinstance(item["failure"], dict):
                 raise RetrievalExecutionError("persisted failed retrieval outcome is malformed")
-            if set(item["failure"]) != {"kind", "surface", "exception_type", "message"} or item["failure"]["kind"] != "surface_error":
+            if (
+                set(item["failure"]) != {"kind", "surface", "exception_type", "message"}
+                or item["failure"]["kind"] != "surface_error"
+                or item["failure"]["surface"] != item["request"]["operator"]
+            ):
                 raise RetrievalExecutionError("persisted surface failure evidence is malformed")
         if status == "not_executed":
             if item["result"] is not None or not isinstance(item["failure"], dict):
@@ -305,15 +309,19 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
                 execution_failure is None
                 or execution_failure.get("kind") != "package_identity_changed"
                 or len(outcomes) != len(expected_requests)
-                or any(item.status != "succeeded" for item in outcomes if item.status != "not_executed")
-                or any(
-                    item.status != "not_executed"
-                    or item.failure != {"kind": "package_identity_changed"}
-                    for item in outcomes
-                    if item.status == "not_executed"
-                )
             ):
                 raise RetrievalExecutionError("persisted execution-level failure evidence is malformed")
+            saw_not_executed = False
+            for item in outcomes:
+                if item.status == "succeeded":
+                    if saw_not_executed:
+                        raise RetrievalExecutionError("persisted package-failure prefix is malformed")
+                elif item.status == "not_executed":
+                    saw_not_executed = True
+                    if item.failure != {"kind": "package_identity_changed"}:
+                        raise RetrievalExecutionError("persisted package-failure evidence is malformed")
+                else:
+                    raise RetrievalExecutionError("persisted package-failure outcome status is malformed")
     else:
         raise RetrievalExecutionError("persisted retrieval execution status is unsupported")
     return RetrievalExecutionResult(

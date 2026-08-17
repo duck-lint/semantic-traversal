@@ -69,6 +69,22 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             "operand": {"shape": "scalar", "domain": "string", "value": value},
         }
 
+    @staticmethod
+    def rewrite_terminal_execution(database, statuses, failures, execution_failure):
+        connection = sqlite3.connect(database)
+        payload = json.loads(connection.execute("SELECT result_json FROM retrieval_executions").fetchone()[0])
+        for item, status, failure in zip(payload["requests"], statuses, failures):
+            item["status"] = status
+            item["result"] = item["result"] if status == "succeeded" else None
+            item["failure"] = None if status == "succeeded" else failure
+        payload["execution_failure"] = execution_failure
+        connection.execute(
+            "UPDATE retrieval_executions SET status = 'failed', completed_at = 'done', result_json = ?",
+            (json.dumps(payload, separators=(",", ":")),),
+        )
+        connection.commit()
+        connection.close()
+
     def test_schema_v5_contains_only_the_execution_table_in_addition_to_v4(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
@@ -224,6 +240,54 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         connection.close()
         with self.assertRaises(RetrievalExecutionError):
             execute_retrieval(database, package, conformance_id)
+
+    def test_persisted_package_failure_rejects_succeeded_after_not_executed(self):
+        database, package, conformance_id = self.prepared("malformed-package-order", [self.exact("first"), self.exact("second")])
+        execute_retrieval(database, package, conformance_id)
+        self.rewrite_terminal_execution(
+            database,
+            ["not_executed", "succeeded"],
+            [{"kind": "package_identity_changed"}, None],
+            {"kind": "package_identity_changed"},
+        )
+        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup") as exact:
+            with self.assertRaises(RetrievalExecutionError):
+                execute_retrieval(database, package, conformance_id)
+        exact.assert_not_called()
+
+    def test_persisted_package_failure_rejects_interleaved_request_outcomes(self):
+        requests = [self.exact("first"), self.exact("second"), self.exact("third")]
+        database, package, conformance_id = self.prepared("malformed-package-interleave", requests)
+        execute_retrieval(database, package, conformance_id)
+        self.rewrite_terminal_execution(
+            database,
+            ["succeeded", "not_executed", "succeeded"],
+            [None, {"kind": "package_identity_changed"}, None],
+            {"kind": "package_identity_changed"},
+        )
+        with self.assertRaises(RetrievalExecutionError):
+            execute_retrieval(database, package, conformance_id)
+
+    def test_persisted_surface_failure_must_name_request_operator(self):
+        database, package, conformance_id = self.prepared("malformed-surface-label", [self.exact("only")])
+        execute_retrieval(database, package, conformance_id)
+        self.rewrite_terminal_execution(
+            database,
+            ["failed"],
+            [{
+                "kind": "surface_error",
+                "surface": "vector.semantic_similarity",
+                "exception_type": "ValueError",
+                "message": "wrong surface",
+            }],
+            None,
+        )
+        module = __import__("semantic_traversal.runtime.retrieval_execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup") as exact:
+            with self.assertRaises(RetrievalExecutionError):
+                execute_retrieval(database, package, conformance_id)
+        exact.assert_not_called()
 
     def test_unexpected_programming_error_leaves_running_evidence(self):
         database, package, conformance_id = self.prepared("unexpected-error", [self.exact("first"), self.exact("second")])
