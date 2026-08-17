@@ -264,7 +264,7 @@ def synthesize_conversation(
     router_run_id: str,
     *,
     retrieval_packet: RetrievalPacket | None = None,
-    provider: SynthesisProvider,
+    provider: SynthesisProvider | None = None,
     clock: Any = None,
 ) -> SynthesisResult:
     """Run one provider-neutral synthesis attempt with durable atomic success."""
@@ -328,7 +328,12 @@ def synthesize_conversation(
         connection.close()
 
     try:
-        result = provider.synthesize(runtime_config.synthesis, synthesis_input)
+        selected_provider = provider
+        if selected_provider is None:
+            from .openai_provider import OpenAIResponsesProvider
+
+            selected_provider = OpenAIResponsesProvider()
+        result = selected_provider.synthesize(runtime_config.synthesis, synthesis_input)
         if not isinstance(result, SynthesisProviderResult) or not isinstance(result.response_text, str) or not result.response_text.strip():
             raise SynthesisError("synthesis provider returned blank or unsupported response text")
         if not isinstance(result.usage, SynthesisUsage):
