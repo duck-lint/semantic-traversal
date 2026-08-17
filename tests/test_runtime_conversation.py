@@ -75,7 +75,7 @@ class RuntimeConversationTests(unittest.TestCase):
             database = Path(directory) / "runtime.sqlite3"
             initialize_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
             self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 0)
             self.assertEqual(
                 {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
@@ -93,7 +93,8 @@ class RuntimeConversationTests(unittest.TestCase):
                     "run_id", "conversation_id", "trigger_message_id", "run_kind", "parent_run_id",
                     "capability_catalog_sha256", "provider", "model", "prompt_version", "status", "started_at",
                     "completed_at", "provider_response_id",
-                    "output_json", "error_type", "error_message",
+                    "output_json", "input_json", "input_sha256", "output_text", "produced_message_id",
+                    "error_type", "error_message",
                     "input_tokens", "cached_input_tokens",
                     "output_tokens", "reasoning_tokens", "total_tokens",
                 ),
@@ -152,7 +153,7 @@ class RuntimeConversationTests(unittest.TestCase):
             connection.close()
 
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
             self.assertEqual(
                 {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
                 {"conversations", "messages", "model_runs", "retrieval_conformance", "retrieval_executions"},
@@ -238,7 +239,7 @@ class RuntimeConversationTests(unittest.TestCase):
                 connection.close()
                 initialize_runtime(database)
                 connection = sqlite3.connect(database)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
                 connection.close()
 
     def test_schema_v3_requires_lineage_check(self):
@@ -421,7 +422,7 @@ class RuntimeConversationTests(unittest.TestCase):
             self.assertFalse(database.exists())
             code, stdout, _ = self._run_cli("runtime", "init", "--database", str(database), "--json")
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(stdout)["schema_version"], 5)
+            self.assertEqual(json.loads(stdout)["schema_version"], 6)
             code, stdout, _ = self._run_cli("runtime", "conversation", "create", "--database", str(database), "--json")
             self.assertEqual(code, 0)
             conversation_id = json.loads(stdout)["conversation_id"]

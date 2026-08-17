@@ -15,7 +15,8 @@ LEGACY_SCHEMA_VERSION = 1
 ROUTER_SCHEMA_VERSION = 2
 MODEL_RUN_SCHEMA_VERSION = 3
 CONFORMANCE_SCHEMA_VERSION = 4
-SCHEMA_VERSION = 5
+RETRIEVAL_SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 CONFORMANCE_CONTRACT_VERSION = "catalog-conformance-v1"
 ALLOWED_ROLES = frozenset({"user", "synthesis"})
 HISTORICAL_ROUTER_V1_PROMPT_VERSION = "router-v1"
@@ -72,6 +73,13 @@ _V3_MODEL_RUN_COLUMNS = (
     "completed_at", "provider_response_id", "output_json", "error_type", "error_message",
     "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
 )
+_V6_MODEL_RUN_COLUMNS = (
+    "run_id", "conversation_id", "trigger_message_id", "run_kind", "parent_run_id",
+    "capability_catalog_sha256", "provider", "model", "prompt_version", "status", "started_at",
+    "completed_at", "provider_response_id", "output_json", "input_json", "input_sha256",
+    "output_text", "produced_message_id", "error_type", "error_message", "input_tokens",
+    "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
+)
 _CONFORMANCE_COLUMNS = (
     "conformance_id", "retrieval_run_id", "retrieval_proposal_sha256", "capability_catalog_sha256",
     "contract_version", "status", "checked_at", "result_json",
@@ -104,6 +112,13 @@ _MODEL_RUN_DEFINITIONS = {
     "output_tokens": ("INTEGER", 0, None, 0),
     "reasoning_tokens": ("INTEGER", 0, None, 0),
     "total_tokens": ("INTEGER", 0, None, 0),
+}
+_V6_MODEL_RUN_DEFINITIONS = {
+    **_MODEL_RUN_DEFINITIONS,
+    "input_json": ("TEXT", 0, None, 0),
+    "input_sha256": ("TEXT", 0, None, 0),
+    "output_text": ("TEXT", 0, None, 0),
+    "produced_message_id": ("INTEGER", 0, None, 0),
 }
 _CONFORMANCE_DEFINITIONS = {
     "conformance_id": ("TEXT", 0, None, 1),
@@ -142,11 +157,11 @@ def _definitions(schema_version: int) -> dict[str, dict[str, tuple[str, int, str
             for key in _V2_MODEL_RUN_COLUMNS
             if key not in {"parent_run_id", "capability_catalog_sha256"}
         }
-    elif schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, SCHEMA_VERSION}:
-        definitions["model_runs"] = dict(_MODEL_RUN_DEFINITIONS)
-        if schema_version in {CONFORMANCE_SCHEMA_VERSION, SCHEMA_VERSION}:
+    elif schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+        definitions["model_runs"] = dict(_V6_MODEL_RUN_DEFINITIONS if schema_version == SCHEMA_VERSION else _MODEL_RUN_DEFINITIONS)
+        if schema_version in {CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
             definitions["retrieval_conformance"] = dict(_CONFORMANCE_DEFINITIONS)
-        if schema_version == SCHEMA_VERSION:
+        if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
             definitions["retrieval_executions"] = dict(_EXECUTION_DEFINITIONS)
     return definitions
 
@@ -189,7 +204,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         _create_model_runs_table(connection)
         _create_retrieval_conformance_table(connection)
         _create_retrieval_executions_table(connection)
-        connection.execute("PRAGMA user_version = 5")
+        connection.execute("PRAGMA user_version = 6")
         _validate_schema(connection, SCHEMA_VERSION)
         connection.commit()
     except Exception:
@@ -204,7 +219,7 @@ def _create_model_runs_table(connection: sqlite3.Connection) -> None:
             run_id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL,
             trigger_message_id INTEGER NOT NULL,
-            run_kind TEXT NOT NULL CHECK (run_kind IN ('router', 'retrieval_inference')),
+            run_kind TEXT NOT NULL CHECK (run_kind IN ('router', 'retrieval_inference', 'synthesis')),
             parent_run_id TEXT,
             capability_catalog_sha256 TEXT,
             provider TEXT NOT NULL,
@@ -215,6 +230,10 @@ def _create_model_runs_table(connection: sqlite3.Connection) -> None:
             completed_at TEXT,
             provider_response_id TEXT,
             output_json TEXT,
+            input_json TEXT,
+            input_sha256 TEXT,
+            output_text TEXT,
+            produced_message_id INTEGER,
             error_type TEXT,
             error_message TEXT,
             input_tokens INTEGER,
@@ -226,10 +245,13 @@ def _create_model_runs_table(connection: sqlite3.Connection) -> None:
                 (run_kind = 'router' AND parent_run_id IS NULL AND capability_catalog_sha256 IS NULL)
                 OR
                 (run_kind = 'retrieval_inference' AND parent_run_id IS NOT NULL AND capability_catalog_sha256 IS NOT NULL)
+                OR
+                (run_kind = 'synthesis' AND parent_run_id IS NOT NULL AND capability_catalog_sha256 IS NULL)
             ),
             FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id),
             FOREIGN KEY (trigger_message_id) REFERENCES messages(message_id),
-            FOREIGN KEY (parent_run_id) REFERENCES model_runs(run_id)
+            FOREIGN KEY (parent_run_id) REFERENCES model_runs(run_id),
+            FOREIGN KEY (produced_message_id) REFERENCES messages(message_id)
         )
         """
     )
@@ -300,6 +322,7 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
             else _CONFORMANCE_COLUMNS if table == "retrieval_conformance"
             else _EXECUTION_COLUMNS if table == "retrieval_executions"
             else _V2_MODEL_RUN_COLUMNS if schema_version == ROUTER_SCHEMA_VERSION
+            else _V6_MODEL_RUN_COLUMNS if schema_version == SCHEMA_VERSION
             else _V3_MODEL_RUN_COLUMNS
         )
         info = _table_info(connection, table)
@@ -323,14 +346,14 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
     if not re.search(r"CHECK\s*\(\s*role\s+IN\s*\(\s*'user'\s*,\s*'synthesis'\s*\)\s*\)", messages_sql, re.IGNORECASE):
         raise RuntimeConversationError("runtime message role constraint is incompatible")
 
-    if schema_version in {ROUTER_SCHEMA_VERSION, MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, SCHEMA_VERSION}:
+    if schema_version in {ROUTER_SCHEMA_VERSION, MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
         model_runs_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_runs'").fetchone()[0]
-        run_kind = r"'router'\s*\)" if schema_version == ROUTER_SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*\)"
+        run_kind = r"'router'\s*\)" if schema_version == ROUTER_SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*\)" if schema_version != SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*,\s*'synthesis'\s*\)"
         if not re.search(rf"CHECK\s*\(\s*run_kind\s+IN\s*\(\s*{run_kind}", model_runs_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime model-run kind constraint is incompatible")
         if not re.search(r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)", model_runs_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime model-run status constraint is incompatible")
-        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, SCHEMA_VERSION} and not (
+        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION} and not (
             re.search(
                 r"run_kind\s*=\s*'router'\s+AND\s+parent_run_id\s+IS\s+NULL\s+AND\s+capability_catalog_sha256\s+IS\s+NULL",
                 model_runs_sql,
@@ -341,6 +364,10 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
                 model_runs_sql,
                 re.IGNORECASE,
             )
+            and (
+                schema_version != SCHEMA_VERSION
+                or re.search(r"run_kind\s*=\s*'synthesis'\s+AND\s+parent_run_id\s+IS\s+NOT\s+NULL\s+AND\s+capability_catalog_sha256\s+IS\s+NULL", model_runs_sql, re.IGNORECASE)
+            )
         ):
             raise RuntimeConversationError("runtime model-run lineage constraint is incompatible")
         model_run_foreign_keys = {(row[2], row[3], row[4]) for row in connection.execute("PRAGMA foreign_key_list(model_runs)")}
@@ -348,12 +375,14 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
             ("conversations", "conversation_id", "conversation_id"),
             ("messages", "trigger_message_id", "message_id"),
         }
-        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, SCHEMA_VERSION}:
+        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
             required.add(("model_runs", "parent_run_id", "run_id"))
+        if schema_version == SCHEMA_VERSION:
+            required.add(("messages", "produced_message_id", "message_id"))
         if required - model_run_foreign_keys:
             raise RuntimeConversationError("runtime model-run foreign keys are incompatible")
 
-    if schema_version in {CONFORMANCE_SCHEMA_VERSION, SCHEMA_VERSION}:
+    if schema_version in {CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
         conformance_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_conformance'").fetchone()[0]
         if not re.search(r"CHECK\s*\(\s*contract_version\s*=\s*'catalog-conformance-v1'\s*\)", conformance_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime conformance contract constraint is incompatible")
@@ -369,7 +398,7 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
         if ("retrieval_run_id",) not in unique_pairs:
             raise RuntimeConversationError("runtime conformance uniqueness constraint is incompatible")
 
-    if schema_version == SCHEMA_VERSION:
+    if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
         execution_sql = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_executions'"
         ).fetchone()[0]
@@ -438,6 +467,9 @@ def _runtime_schema_state(connection: sqlite3.Connection, *, initialize_empty: b
     if version == CONFORMANCE_SCHEMA_VERSION:
         _validate_schema(connection, CONFORMANCE_SCHEMA_VERSION)
         raise RuntimeConversationError("runtime schema v4 is older and requires explicit migration")
+    if version == RETRIEVAL_SCHEMA_VERSION:
+        _validate_schema(connection, RETRIEVAL_SCHEMA_VERSION)
+        raise RuntimeConversationError("runtime schema v5 is older and requires explicit migration")
     if version != SCHEMA_VERSION:
         raise RuntimeConversationError(f"unsupported runtime schema version: {version}")
     _validate_schema(connection, SCHEMA_VERSION)
@@ -489,8 +521,68 @@ def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TABLE model_runs_v2_legacy")
 
 
+def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
+    # Keep legacy foreign-key declarations pointed at the stable table name
+    # while the model-run columns are rebuilt.
+    connection.execute("PRAGMA legacy_alter_table = ON")
+    has_conformance = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_conformance'"
+    ).fetchone() is not None
+    has_executions = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_executions'"
+    ).fetchone() is not None
+    if has_executions:
+        connection.execute("ALTER TABLE retrieval_executions RENAME TO retrieval_executions_v5_legacy")
+    if has_conformance:
+        connection.execute("ALTER TABLE retrieval_conformance RENAME TO retrieval_conformance_v5_legacy")
+    connection.execute("ALTER TABLE model_runs RENAME TO model_runs_v5_legacy")
+    _create_model_runs_table(connection)
+    connection.execute(
+        """
+        INSERT INTO model_runs (
+            run_id, conversation_id, trigger_message_id, run_kind, parent_run_id,
+            capability_catalog_sha256, provider, model, prompt_version, status, started_at,
+            completed_at, provider_response_id, output_json, error_type, error_message,
+            input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens
+        )
+        SELECT run_id, conversation_id, trigger_message_id, run_kind, parent_run_id,
+               capability_catalog_sha256, provider, model, prompt_version, status, started_at,
+               completed_at, provider_response_id, output_json, error_type, error_message,
+               input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens
+        FROM model_runs_v5_legacy
+        """
+    )
+    connection.execute("DROP TABLE model_runs_v5_legacy")
+    if has_conformance:
+        _create_retrieval_conformance_table(connection)
+        connection.execute(
+            """
+            INSERT INTO retrieval_conformance
+            SELECT conformance_id, retrieval_run_id, retrieval_proposal_sha256,
+                   capability_catalog_sha256, contract_version, status, checked_at, result_json
+            FROM retrieval_conformance_v5_legacy
+            """
+        )
+        connection.execute("DROP TABLE retrieval_conformance_v5_legacy")
+    if has_executions:
+        _create_retrieval_executions_table(connection)
+        connection.execute(
+            """
+            INSERT INTO retrieval_executions
+            SELECT execution_id, conformance_id, retrieval_run_id,
+                   retrieval_proposal_sha256, capability_catalog_sha256,
+                   retrieval_package_id, retrieval_package_identity_version,
+                   substrate_sha256, vectors_sha256, package_verification_contract_version,
+                   execution_contract_version, status, started_at, completed_at, result_json
+            FROM retrieval_executions_v5_legacy
+            """
+        )
+        connection.execute("DROP TABLE retrieval_executions_v5_legacy")
+    connection.execute("PRAGMA legacy_alter_table = OFF")
+
+
 def migrate_runtime(database_path: str | Path) -> None:
-    """Explicitly migrate the supported legacy schemas to schema v5."""
+    """Explicitly migrate the supported legacy schemas to schema v6."""
     connection = _open_connection(database_path, allow_create=False)
     transaction_started = False
     try:
@@ -502,7 +594,7 @@ def migrate_runtime(database_path: str | Path) -> None:
             _create_model_runs_table(connection)
             _create_retrieval_conformance_table(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 5")
+            connection.execute("PRAGMA user_version = 6")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             transaction_started = False
@@ -514,30 +606,48 @@ def migrate_runtime(database_path: str | Path) -> None:
             _migrate_v2_to_v3(connection)
             _create_retrieval_conformance_table(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 5")
+            connection.execute("PRAGMA user_version = 6")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             transaction_started = False
             return
         if version == MODEL_RUN_SCHEMA_VERSION:
             _validate_schema(connection, MODEL_RUN_SCHEMA_VERSION)
+            connection.execute("PRAGMA legacy_alter_table = ON")
             connection.execute("BEGIN IMMEDIATE")
             transaction_started = True
+            _migrate_v5_to_v6(connection)
             _create_retrieval_conformance_table(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 5")
+            connection.execute("PRAGMA user_version = 6")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
+            connection.execute("PRAGMA legacy_alter_table = OFF")
             transaction_started = False
             return
         if version == CONFORMANCE_SCHEMA_VERSION:
             _validate_schema(connection, CONFORMANCE_SCHEMA_VERSION)
+            connection.execute("PRAGMA legacy_alter_table = ON")
             connection.execute("BEGIN IMMEDIATE")
             transaction_started = True
+            _migrate_v5_to_v6(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 5")
+            connection.execute("PRAGMA user_version = 6")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
+            connection.execute("PRAGMA legacy_alter_table = OFF")
+            transaction_started = False
+            return
+        if version == RETRIEVAL_SCHEMA_VERSION:
+            _validate_schema(connection, RETRIEVAL_SCHEMA_VERSION)
+            connection.execute("PRAGMA legacy_alter_table = ON")
+            connection.execute("BEGIN IMMEDIATE")
+            transaction_started = True
+            _migrate_v5_to_v6(connection)
+            connection.execute("PRAGMA user_version = 6")
+            _validate_schema(connection, SCHEMA_VERSION)
+            connection.commit()
+            connection.execute("PRAGMA legacy_alter_table = OFF")
             transaction_started = False
             return
         if version == SCHEMA_VERSION:

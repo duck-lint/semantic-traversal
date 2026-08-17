@@ -38,6 +38,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
             ModelConfig("openai", "router-model", 3.0, "router prompt\n"),
             ModelConfig("openai", "retrieval-model", 4.0, "retrieval prompt\n"),
             PacketConfig(32),
+            ModelConfig("openai", "synthesis-model", 5.0, "synthesis prompt\n"),
         )
 
     def catalog(self, directory):
@@ -68,7 +69,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\npacket:\n  max_occurrences: 32\n",
+                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\npacket:\n  max_occurrences: 32\nsynthesis:\n  provider: openai\n  model: m3\n  timeout_seconds: 3\n  prompt: synthesis\n",
                 encoding="utf-8",
             )
             config = load_runtime_config(path)
@@ -297,7 +298,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
             from semantic_traversal.runtime.conversation import migrate_runtime
             migrate_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
             self.assertEqual(connection.execute("SELECT prompt_version, parent_run_id, capability_catalog_sha256 FROM model_runs").fetchone(), ("sha256:32abaecb56571dd80b6915ac2b6c01a0e02cbbec0487dc3aa1e6aeb74d0ca352", None, None))
             self.assertEqual(connection.execute("SELECT run_id, conversation_id, trigger_message_id, run_kind, provider, model, status, started_at FROM model_runs").fetchone(), (before[0][0], before[0][1], before[0][2], before[0][3], before[0][4], before[0][5], before[0][7], before[0][8]))
             connection.close()

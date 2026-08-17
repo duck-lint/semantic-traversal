@@ -35,6 +35,12 @@ from .retrieval.packet import (
     PACKET_CONTRACT_VERSION, SELECTION_RULE_VERSION, CanonicalTargetPayload, CanonicalTargetRef,
     PacketAssemblyResult, RetrievalPacket, RetrievalPacketError, assemble_retrieval_packet,
 )
+from .synthesis import (
+    LEGAL_SYNTHESIS_ROUTES, SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisError,
+    SynthesisInput, SynthesisProvider, SynthesisProviderError, SynthesisProviderResult,
+    SynthesisResult, SynthesisUsage, serialize_synthesis_input, synthesis_input_sha256,
+    synthesize_conversation,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -56,4 +62,8 @@ __all__ = [
     "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
     "CanonicalTargetRef", "CanonicalTargetPayload", "RetrievalPacket", "PacketAssemblyResult",
     "assemble_retrieval_packet",
+    "SYNTHESIS_INPUT_CONTRACT_VERSION", "LEGAL_SYNTHESIS_ROUTES", "SynthesisError",
+    "SynthesisProviderError", "SynthesisInput", "SynthesisProvider", "SynthesisProviderResult",
+    "SynthesisUsage", "SynthesisResult", "serialize_synthesis_input", "synthesis_input_sha256",
+    "synthesize_conversation",
 ]
