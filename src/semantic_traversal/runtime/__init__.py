@@ -41,6 +41,7 @@ from .synthesis import (
     SynthesisResult, SynthesisUsage, serialize_synthesis_input, synthesis_input_sha256,
     synthesize_conversation,
 )
+from .turn import RuntimeTurnError, TurnResult, execute_turn
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -66,4 +67,5 @@ __all__ = [
     "SynthesisProviderError", "SynthesisMessage", "SynthesisInput", "SynthesisProvider", "SynthesisProviderResult",
     "SynthesisUsage", "SynthesisResult", "serialize_synthesis_input", "synthesis_input_sha256",
     "synthesize_conversation",
+    "RuntimeTurnError", "TurnResult", "execute_turn",
 ]
