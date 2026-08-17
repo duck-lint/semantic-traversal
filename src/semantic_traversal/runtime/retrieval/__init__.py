@@ -1,4 +1,4 @@
-"""Deterministic retrieval inference, package, execution, and hydration."""
+"""Retrieval inference, authority, execution, and hydration."""
 
 from .control_plane import (
     ConformanceRequestResult,

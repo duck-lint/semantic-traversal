@@ -266,11 +266,11 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         requests = [
             {"operator": "graph.discovery.terms", "node_kind": "semantic_object", "dimension_name": "address_text", "operand": ["target"]},
             {"operator": "graph.discovery.terms", "node_kind": "semantic_region", "dimension_name": "address_text", "operand": ["inner"]},
-            {"operator": "graph.relation_occurrence_lookup", "relation_class": "body_wikilink", "relation_name": "linked_to"},
+            {"operator": "graph.relation_occurrence_lookup", "relation_class": "structural", "relation_name": "contains_object"},
         ]
         database, package, conformance_id = self.prepared("graph", requests, self.region_build)
         execution = execute_retrieval(database, package, conformance_id)
-        unit_id, source_uuid, region_uuid, region_path = self.identities(package)
+        _, source_uuid, region_uuid, region_path = self.identities(package)
         execution_id = self.rewrite_results(
             database,
             [
@@ -291,23 +291,23 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
                     "occurrences": [
                         {
                             "edge_id": 41,
-                            "relation_class": "body_wikilink",
-                            "relation_name": "linked_to",
-                            "source": {"node_kind": "semantic_unit", "identity": [unit_id]},
+                            "relation_class": "structural",
+                            "relation_name": "contains_object",
+                            "source": {"node_kind": "scope", "identity": [["A"]]},
                             "target": {"node_kind": "semantic_object", "identity": ["zero"]},
                         },
                         {
                             "edge_id": 42,
-                            "relation_class": "body_wikilink",
-                            "relation_name": "linked_to",
+                            "relation_class": "structural",
+                            "relation_name": "contains_object",
                             "source": {"node_kind": "scope", "identity": [["A"]]},
                             "target": {"node_kind": "semantic_object", "identity": ["zero"]},
                         },
                         {
                             "edge_id": 41,
-                            "relation_class": "body_wikilink",
-                            "relation_name": "linked_to",
-                            "source": {"node_kind": "semantic_unit", "identity": [unit_id]},
+                            "relation_class": "structural",
+                            "relation_name": "contains_object",
+                            "source": {"node_kind": "scope", "identity": [["A"]]},
                             "target": {"node_kind": "semantic_object", "identity": ["zero"]},
                         },
                     ],
@@ -331,7 +331,8 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         self.assertIsInstance(relation, HydratedGraphRelationResult)
         self.assertEqual(len(relation.occurrences), 3)
         self.assertEqual(relation.occurrences[0].edge_id, relation.occurrences[2].edge_id)
-        self.assertEqual(relation.occurrences[0].source.canonical_unit.unit_id, unit_id)
+        self.assertEqual(relation.occurrences[0].source.graph_handle.node_kind, "scope")
+        self.assertIsNone(relation.occurrences[0].source.canonical_object)
         self.assertEqual(relation.occurrences[0].target.canonical_object.source_object_uuid, "zero")
         self.assertEqual(relation.occurrences[1].source.graph_handle.node_kind, "scope")
         self.assertIsNone(relation.occurrences[1].source.canonical_object)
@@ -390,6 +391,48 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
                 hydrate_retrieval_execution(database, package, execution_id or execution.execution_id)
             graph_relation_lookup.assert_not_called()
 
+    def test_graph_relation_wrong_source_kind_fails_closed(self):
+        request = {
+            "operator": "graph.relation_occurrence_lookup",
+            "relation_class": "body_wikilink",
+            "relation_name": "linked_to",
+        }
+        database, package, conformance_id = self.prepared("relation-wrong-source", [request])
+        execution = execute_retrieval(database, package, conformance_id)
+        execution_id = self.rewrite_results(database, [{
+            "kind": "graph_relation_occurrences",
+            "occurrences": [{
+                "edge_id": 1,
+                "relation_class": "body_wikilink",
+                "relation_name": "linked_to",
+                "source": {"node_kind": "scope", "identity": [["A"]]},
+                "target": {"node_kind": "semantic_object", "identity": ["zero"]},
+            }],
+        }])
+        with self.assertRaises(RetrievalHydrationError):
+            hydrate_retrieval_execution(database, package, execution_id or execution.execution_id)
+
+    def test_graph_relation_wrong_target_kind_fails_closed(self):
+        request = {
+            "operator": "graph.relation_occurrence_lookup",
+            "relation_class": "body_wikilink",
+            "relation_name": "linked_to",
+        }
+        database, package, conformance_id = self.prepared("relation-wrong-target", [request])
+        execution = execute_retrieval(database, package, conformance_id)
+        execution_id = self.rewrite_results(database, [{
+            "kind": "graph_relation_occurrences",
+            "occurrences": [{
+                "edge_id": 1,
+                "relation_class": "body_wikilink",
+                "relation_name": "linked_to",
+                "source": {"node_kind": "semantic_unit", "identity": [self.identities(package)[0]]},
+                "target": {"node_kind": "scope", "identity": [["A"]]},
+            }],
+        }])
+        with self.assertRaises(RetrievalHydrationError):
+            hydrate_retrieval_execution(database, package, execution_id or execution.execution_id)
+
     def test_failed_execution_hydrates_prior_success_and_retains_failures(self):
         requests = [self.exact(), self.lexical()]
         database, package, conformance_id = self.prepared("failed", requests)
@@ -412,6 +455,27 @@ class RuntimeRetrievalHydrationTests(unittest.TestCase):
         self.assertEqual(hydrated.requests[1].status, "failed")
         self.assertIsNone(hydrated.requests[1].result)
         self.assertEqual(hydrated.requests[1].failure["kind"], "surface_error")
+
+    def test_terminal_package_failure_survives_hydration(self):
+        database, package, conformance_id = self.prepared("package-failure", [self.exact()])
+        execution = execute_retrieval(database, package, conformance_id)
+        unit_id, _, _, _ = self.identities(package)
+        execution_id = self.rewrite_results(
+            database,
+            [{"kind": "exact", "unit_ids": [unit_id]}],
+            execution_status="failed",
+            execution_failure={
+                "kind": "package_identity_changed",
+                "message": "package changed after retrieval",
+            },
+        )
+        hydrated = hydrate_retrieval_execution(database, package, execution_id or execution.execution_id)
+        self.assertEqual(hydrated.status, "failed")
+        self.assertEqual(
+            dict(hydrated.execution_failure),
+            {"kind": "package_identity_changed", "message": "package changed after retrieval"},
+        )
+        self.assertIsInstance(hydrated.requests[0].result, HydratedExactResult)
 
     def test_malformed_target_identity_fails_closed(self):
         database, package, conformance_id = self.prepared("unknown-unit", [self.exact()])

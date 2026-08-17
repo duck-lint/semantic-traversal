@@ -191,6 +191,7 @@ class HydratedRetrievalResult:
     retrieval_run_id: str
     retrieval_package_id: str
     status: str
+    execution_failure: Mapping[str, Any] | None
     requests: tuple[HydratedRequestResult, ...]
 
 
@@ -399,10 +400,24 @@ def _hydrate_graph_relations(
     request: Mapping[str, Any],
     result: Mapping[str, Any],
     check_package: Any,
+    catalog: Mapping[str, Any],
 ) -> HydratedGraphRelationResult:
     _exact_keys(result, {"kind", "occurrences"}, "graph relation result")
     if result["kind"] != "graph_relation_occurrences":
         raise RetrievalHydrationError("graph relation result kind is malformed")
+    graph = _mapping(catalog.get("graph"), "capability catalog graph")
+    relations = _sequence(graph.get("relations"), "capability catalog graph relations")
+    matching_relations = [
+        _mapping(relation, "capability catalog graph relation")
+        for relation in relations
+        if relation.get("relation_class") == request["relation_class"]
+        and relation.get("relation_name") == request["relation_name"]
+    ]
+    if len(matching_relations) != 1:
+        raise RetrievalHydrationError("graph relation is absent or ambiguous in capability catalog")
+    relation = matching_relations[0]
+    source_kinds = _sequence(relation.get("source_kinds"), "capability catalog relation source_kinds")
+    target_kinds = _sequence(relation.get("target_kinds"), "capability catalog relation target_kinds")
     occurrences: list[HydratedGraphOccurrence] = []
     for raw_occurrence in _sequence(result["occurrences"], "graph relation occurrences"):
         occurrence = _mapping(raw_occurrence, "graph relation occurrence")
@@ -418,6 +433,8 @@ def _hydrate_graph_relations(
             raise RetrievalHydrationError("graph relation result identity does not match request")
         source = _graph_handle(occurrence["source"])
         target = _graph_handle(occurrence["target"])
+        if source.node_kind not in source_kinds or target.node_kind not in target_kinds:
+            raise RetrievalHydrationError("graph relation result endpoint kinds conflict with capability catalog")
         check_package()
         occurrences.append(
             HydratedGraphOccurrence(
@@ -436,6 +453,7 @@ def _hydrate_surface(
     request: Mapping[str, Any],
     result: Mapping[str, Any],
     check_package: Any,
+    catalog: Mapping[str, Any],
 ) -> Any:
     operator = request["operator"]
     if operator == "exact.equals":
@@ -447,7 +465,7 @@ def _hydrate_surface(
     if operator in {"graph.discovery.terms", "graph.discovery.phrase"}:
         return _hydrate_graph_discovery(connection, request, result, check_package)
     if operator == "graph.relation_occurrence_lookup":
-        return _hydrate_graph_relations(connection, request, result, check_package)
+        return _hydrate_graph_relations(connection, request, result, check_package, catalog)
     raise RetrievalHydrationError(f"unsupported hydrated retrieval operator: {operator!r}")
 
 
@@ -509,7 +527,7 @@ def hydrate_retrieval_execution(
             if item.status == "succeeded":
                 if not isinstance(item.result, Mapping):
                     raise RetrievalHydrationError("successful persisted retrieval result is malformed")
-                result = _hydrate_surface(connection, item.request, item.result, check_package)
+                result = _hydrate_surface(connection, item.request, item.result, check_package, package.capability_catalog.parsed)
                 check_package()
             elif item.status not in {"failed", "not_executed"}:
                 raise RetrievalHydrationError("persisted request status is unsupported for hydration")
@@ -530,6 +548,7 @@ def hydrate_retrieval_execution(
             execution.retrieval_run_id,
             package.identity.package_id,
             execution.status,
+            _immutable(execution.execution_failure) if execution.execution_failure is not None else None,
             tuple(hydrated_requests),
         )
     except RetrievalHydrationError:
