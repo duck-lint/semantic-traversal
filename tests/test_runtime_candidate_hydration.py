@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import sqlite3
 import unittest
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,6 +10,7 @@ from unittest.mock import patch
 
 from semantic_traversal.cli import main
 from semantic_traversal.projection.graph import GraphHandle
+from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import ProviderUsage
 from semantic_traversal.runtime.retrieval.candidate_hydration import (
     CANDIDATE_HYDRATION_CONTRACT_VERSION,
@@ -19,6 +21,7 @@ from semantic_traversal.runtime.retrieval.candidate_hydration import (
     HydratedUnitTarget,
     hydrate_candidate_selection,
 )
+from semantic_traversal.runtime.retrieval.control_plane import conform_retrieval
 from semantic_traversal.runtime.retrieval.candidates import (
     Candidate,
     ExactSupport,
@@ -28,16 +31,20 @@ from semantic_traversal.runtime.retrieval.candidates import (
     CandidateRef,
     RelationEvidence,
 )
+from semantic_traversal.runtime.retrieval.execution import execute_retrieval
 from semantic_traversal.runtime.retrieval.package import load_retrieval_package
 from semantic_traversal.runtime.retrieval.package_verification import verify_retrieval_package
+from semantic_traversal.runtime.retrieval.candidates import compose_candidate_workspace
 from semantic_traversal.runtime.retrieval.selection import (
     CANDIDATE_SELECTION_CONTRACT_VERSION,
     CandidateAdmission,
     CandidateSelection,
     SelectionCoverage,
     SelectionRequestCoverage,
+    select_candidates,
 )
 from tests.test_cli import CliProvider
+from tests.test_temporal import TemporalProjectionTests
 
 
 class CandidateHydrationTests(unittest.TestCase):
@@ -65,6 +72,10 @@ class CandidateHydrationTests(unittest.TestCase):
             catalog = build / "capability_catalog.json"
             assert main(["catalog", "generate", "--build", str(build), "--config", str(config), "--output", str(catalog)]) == 0
         cls.package = verify_retrieval_package(load_retrieval_package(build))
+        temporal_root = root / "temporal-build-source"
+        temporal_root.mkdir()
+        cls.temporal_build = TemporalProjectionTests()._build(temporal_root)
+        cls.temporal_package = verify_retrieval_package(load_retrieval_package(cls.temporal_build))
         connection = sqlite3.connect(build / "substrate.sqlite3")
         cls.region_path = tuple(json.loads(connection.execute("SELECT region_path_json FROM canonical_regions ORDER BY canonical_ordinal LIMIT 1").fetchone()[0]))
         connection.close()
@@ -125,7 +136,7 @@ class CandidateHydrationTests(unittest.TestCase):
         )
         requests = (
             {"operator": "exact.equals"}, {"operator": "lexical.terms"},
-            {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-16"}},
+            {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-17"}},
             {"operator": "vector.semantic_similarity"},
         )
         candidate = self.unit(supports=supports)
@@ -136,14 +147,12 @@ class CandidateHydrationTests(unittest.TestCase):
         self.assertEqual(result.hydrated_candidates[0].candidate.supports, supports)
 
     def test_shared_owner_and_region_caches_read_each_canonical_value_once(self):
-        candidates = (self.unit(1), self.unit(1), self.object(), self.region())
-        # Duplicate candidates are not a valid selection in normal operation;
-        # this direct fixture isolates the operation-local cache contract.
+        candidates = (self.unit(1), self.unit(2), self.object(), self.region())
         substrate = __import__("semantic_traversal.projection.substrate", fromlist=["hydrate_object", "hydrate_region", "hydrate_unit"])
         with patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_unit", wraps=substrate.hydrate_unit) as unit, patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_object", wraps=substrate.hydrate_object) as obj, patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_region", wraps=substrate.hydrate_region) as region:
             result = hydrate_candidate_selection(self.package, self.selection(candidates))
         self.assertEqual(len(result.hydrated_candidates), 4)
-        self.assertEqual(unit.call_count, 1)
+        self.assertEqual(unit.call_count, 2)
         self.assertEqual(obj.call_count, 1)
         self.assertEqual(region.call_count, 1)
 
@@ -177,7 +186,7 @@ class CandidateHydrationTests(unittest.TestCase):
 
     def test_temporal_contradiction_is_all_or_nothing(self):
         support = TemporalSupport(0, 0, "temporal.before", 1, dt.date(2026, 4, 16))
-        request = {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-16"}}
+        request = {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-17"}}
         candidate = self.unit(supports=(support,))
         substrate = __import__("semantic_traversal.projection.substrate", fromlist=["hydrate_unit"])
         real = substrate.hydrate_unit
@@ -189,15 +198,54 @@ class CandidateHydrationTests(unittest.TestCase):
             with self.assertRaises(CandidateHydrationError):
                 hydrate_candidate_selection(self.package, self.selection((candidate,), requests=(request,)))
 
+    def test_temporal_absent_blank_and_wrong_native_type_are_hard_failures(self):
+        support = TemporalSupport(0, 0, "temporal.before", 1, dt.date(2026, 4, 16))
+        request = {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-17"}}
+        candidate = self.unit(supports=(support,))
+        substrate = __import__("semantic_traversal.projection.substrate", fromlist=["hydrate_unit"])
+        real = substrate.hydrate_unit
+        for state, value in (("absent", None), ("present_blank", None), ("present_value", dt.datetime(2026, 4, 16))):
+            with self.subTest(state=state):
+                def contradictory(connection, unit_id, state=state, value=value):
+                    unit = real(connection, unit_id)
+                    field = replace(unit.inherited_identifiers[0], state=state, value=value)
+                    return replace(unit, inherited_identifiers=(field, *unit.inherited_identifiers[1:]))
+                with patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_unit", side_effect=contradictory):
+                    with self.assertRaises(CandidateHydrationError):
+                        hydrate_candidate_selection(self.package, self.selection((candidate,), requests=(request,)))
+
+    def test_temporal_support_unit_identity_mismatch_is_a_hard_failure(self):
+        support = TemporalSupport(0, 0, "temporal.before", 2, dt.date(2026, 4, 16))
+        request = {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-17"}}
+        with self.assertRaises(CandidateHydrationError):
+            hydrate_candidate_selection(self.package, self.selection((self.unit(supports=(support,)),), requests=(request,)))
+
     def test_lineage_and_verified_package_boundaries_fail_before_canonical_reads(self):
         selection = self.selection((self.unit(),))
         with patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_unit") as hydrate:
             with self.assertRaises(CandidateHydrationError):
                 hydrate_candidate_selection(self.package.package, selection)
-            mismatched = replace(selection, substrate_sha256="sha256:wrong")
-            with self.assertRaises(CandidateHydrationError):
-                hydrate_candidate_selection(self.package, mismatched)
+            mutations = {
+                "retrieval_package_id": "wrong-package",
+                "retrieval_package_identity_version": "wrong-package-v1",
+                "substrate_sha256": "sha256:wrong-substrate",
+                "vectors_sha256": "sha256:wrong-vectors",
+                "capability_catalog_sha256": "sha256:wrong-catalog",
+                "package_verification_contract_version": "wrong-verification-v1",
+            }
+            for field, value in mutations.items():
+                with self.subTest(field=field), self.assertRaises(CandidateHydrationError):
+                    hydrate_candidate_selection(self.package, replace(selection, **{field: value}))
             hydrate.assert_not_called()
+
+    def test_scope_hydration_performs_no_canonical_substrate_hydration(self):
+        scope = Candidate(CandidateRef("scope", (("vault",),)), ())
+        with patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_unit") as unit, patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_object") as obj, patch("semantic_traversal.runtime.retrieval.candidate_hydration.hydrate_region") as region:
+            result = hydrate_candidate_selection(self.package, self.selection((scope,)))
+        self.assertIsInstance(result.hydrated_candidates[0].canonical_target, HydratedScopeTarget)
+        unit.assert_not_called()
+        obj.assert_not_called()
+        region.assert_not_called()
 
     def test_order_and_selection_are_unchanged(self):
         candidates = (self.object(), self.unit(), Candidate(CandidateRef("scope", (("z",),)), ()))
@@ -213,6 +261,43 @@ class CandidateHydrationTests(unittest.TestCase):
             hydrate_candidate_selection(self.package, selection)
         self.assertEqual(current.call_count, 1)
         self.assertEqual(opened.call_count, 1)
+
+    def test_temporal_execution_composition_selection_hydration_preserves_immutable_requests(self):
+        requests = [
+            {"operator": "temporal.earliest", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value"},
+            {"operator": "temporal.latest", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value"},
+            {"operator": "temporal.before", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-16"}},
+            {"operator": "temporal.after", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "anchor": {"domain": "date", "value": "2026-04-16"}},
+            {"operator": "temporal.between", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "start": {"domain": "date", "value": "2026-04-15"}, "end": {"domain": "date", "value": "2026-04-18"}},
+            {"operator": "temporal.ordered", "field_class": "semantic_identifier", "field_name": "journal_entry_date", "target": "complete_value", "direction": "descending"},
+        ]
+        root = Path(self.directory.name) / "cross-stage"
+        root.mkdir()
+        database = root / "runtime.sqlite3"
+        initialize_runtime(database)
+        conversation = create_conversation(database)
+        message = append_message(database, conversation.conversation_id, "user", "temporal")
+        output = json.dumps({"requests": requests}, separators=(",", ":"))
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, provider, model, prompt_version, status, started_at, output_json) VALUES (?, ?, ?, 'router', 'p', 'm', 'p', 'succeeded', 't', ?)",
+            ("router-cross-stage", conversation.conversation_id, message.message_id, '{"route":"semantic_retrieval"}'),
+        )
+        connection.execute(
+            "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, output_json) VALUES (?, ?, ?, 'retrieval_inference', ?, ?, 'p', 'm', 'p', 'succeeded', 't', ?)",
+            ("retrieval-cross-stage", conversation.conversation_id, message.message_id, "router-cross-stage", self.temporal_package.package.identity.capability_catalog_sha256, output),
+        )
+        connection.commit()
+        connection.close()
+        conformance = conform_retrieval(database, self.temporal_build / "capability_catalog.json", "retrieval-cross-stage")
+        execution = execute_retrieval(database, self.temporal_package, conformance.conformance_id)
+        workspace = compose_candidate_workspace(execution)
+        selection = select_candidates(workspace, 20)
+        result = hydrate_candidate_selection(self.temporal_package, selection)
+        self.assertEqual(result.selection, selection)
+        self.assertTrue(all(any(isinstance(support, TemporalSupport) for support in candidate.candidate.supports) for candidate in result.hydrated_candidates))
+        self.assertEqual([item.candidate.target_ref.identity for item in result.hydrated_candidates], [item.target_ref.identity for item in selection.selected_candidates])
+        self.assertTrue(all(isinstance(item.request, Mapping) for item in selection.requests))
 
 
 if __name__ == "__main__":

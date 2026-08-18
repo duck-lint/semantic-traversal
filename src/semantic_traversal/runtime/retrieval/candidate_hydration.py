@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -161,12 +163,35 @@ def _canonical_date(unit: CanonicalUnit, field_name: str) -> dt.date:
     return field.value
 
 
+_TEMPORAL_OPERATORS = frozenset({
+    "temporal.earliest", "temporal.latest", "temporal.before", "temporal.after",
+    "temporal.between", "temporal.ordered",
+})
+
+
+def _validate_date_literal(value: Any, label: str) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"domain", "value"}:
+        raise _error(f"{label} temporal literal is malformed")
+    if value["domain"] != "date" or not isinstance(value["value"], str):
+        raise _error(f"{label} temporal literal is malformed")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value["value"]) is None:
+        raise _error(f"{label} temporal literal is not exact YYYY-MM-DD")
+    try:
+        parsed = dt.date.fromisoformat(value["value"])
+    except ValueError as exc:
+        raise _error(f"{label} temporal literal is not a valid calendar date", exc)
+    if type(parsed) is not dt.date:
+        raise _error(f"{label} temporal literal is not a native date")
+
+
 def _validate_temporal_supports(candidate: Candidate, selection: CandidateSelection, unit: CanonicalUnit) -> None:
     for support in candidate.supports:
         if not isinstance(support, TemporalSupport):
             continue
         if candidate.target_ref.target_kind != "semantic_unit":
             raise _error("temporal support is attached to a non-unit candidate")
+        if support.unit_id != unit.unit_id:
+            raise _error("temporal support unit identity disagrees with canonical unit")
         if support.request_ordinal < 0 or support.request_ordinal >= len(selection.requests):
             raise _error("temporal support request provenance is out of range")
         request = selection.requests[support.request_ordinal]
@@ -178,7 +203,7 @@ def _validate_temporal_supports(candidate: Candidate, selection: CandidateSelect
             or request.status != "succeeded"
             or not isinstance(request.returned_occurrences, int)
             or support.occurrence_ordinal >= request.returned_occurrences
-            or not support.operator.startswith("temporal.")
+            or support.operator not in _TEMPORAL_OPERATORS
             or raw.get("operator") != support.operator
             or raw.get("field_class") != "semantic_identifier"
             or raw.get("target") != "complete_value"
@@ -186,27 +211,24 @@ def _validate_temporal_supports(candidate: Candidate, selection: CandidateSelect
         ):
             raise _error("temporal support request provenance is malformed")
         if support.operator in {"temporal.before", "temporal.after"}:
-            operand = raw.get("anchor")
+            if set(raw) != {"operator", "field_class", "field_name", "target", "anchor"}:
+                raise _error("temporal support request shape is malformed")
+            _validate_date_literal(raw["anchor"], "anchor")
         elif support.operator == "temporal.between":
-            operand = raw.get("start")
-        else:
-            operand = None
-        if operand is not None:
-            if not isinstance(operand, dict) or operand.get("domain") != "date" or type(operand.get("value")) is not str:
-                raise _error("temporal support request date provenance is malformed")
-            try:
-                request_date = dt.date.fromisoformat(operand["value"])
-            except ValueError as exc:
-                raise _error("temporal support request date provenance is malformed", exc)
-            if type(request_date) is not dt.date:
-                raise _error("temporal support request date provenance is malformed")
-        else:
-            request_date = None
+            if set(raw) != {"operator", "field_class", "field_name", "target", "start", "end"}:
+                raise _error("temporal support request shape is malformed")
+            _validate_date_literal(raw["start"], "start")
+            _validate_date_literal(raw["end"], "end")
+        elif support.operator == "temporal.ordered":
+            if set(raw) != {"operator", "field_class", "field_name", "target", "direction"}:
+                raise _error("temporal support request shape is malformed")
+            if raw["direction"] not in {"ascending", "descending"}:
+                raise _error("temporal support request direction is malformed")
+        elif set(raw) != {"operator", "field_class", "field_name", "target"}:
+            raise _error("temporal support request shape is malformed")
         canonical = _canonical_date(unit, raw["field_name"])
         if canonical != support.temporal_date:
             raise _error("temporal support disagrees with canonical date")
-        if request_date is not None and request_date != support.temporal_date:
-            raise _error("temporal support disagrees with request date")
 
 
 def hydrate_candidate_selection(
