@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import dataclasses
 import datetime as dt
 import json
+import re
 import shutil
 import sqlite3
 import sys
@@ -26,6 +27,7 @@ from .build.materialize import materialize_context
 from .build.parser import _missing_semantic_identifier_descriptions, load_build_config
 from .build.resolve import resolve_relations
 from .projection.substrate import hydrate_object, hydrate_unit, write_completed_ingest
+from .projection.temporal import after, before, between, earliest, latest, ordered, build_temporal_index
 from .build.vault import parse_vault
 from .projection.vector import OllamaEmbeddingProvider, build_vector_index, vector_eligible_targets, vector_lookup
 from .projection.verification import verify_completed_build
@@ -125,6 +127,9 @@ def _build(args: argparse.Namespace) -> dict[str, Any]:
                 f"relation types: {connection.execute('SELECT COUNT(*) FROM graph_relation_types').fetchone()[0]}",
                 file=sys.stderr,
             )
+            _stage("temporal")
+            build_temporal_index(connection)
+            print(f"temporal entries: {connection.execute('SELECT COUNT(*) FROM temporal_index_entries').fetchone()[0]}", file=sys.stderr)
             _stage("vector")
             targets = vector_eligible_targets(connection)
             provider = OllamaEmbeddingProvider(base_url=args.ollama_url)
@@ -180,6 +185,7 @@ def _inspect_counts(args: argparse.Namespace) -> None:
                 for (parsed_text,) in connection.execute("SELECT parsed_text FROM canonical_units")
             ),
             "exact_entries": connection.execute("SELECT COUNT(*) FROM exact_index_entries").fetchone()[0],
+            "temporal_entries": connection.execute("SELECT COUNT(*) FROM temporal_index_entries").fetchone()[0],
             "lexical_dimensions": len(lexical_tables),
             "lexical_occurrences": sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in lexical_tables),
             "graph_nodes": connection.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0],
@@ -341,6 +347,30 @@ def _vector(args: argparse.Namespace) -> None:
     finally: connection.close()
 
 
+def _parse_cli_date(value: str) -> dt.date:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise CliError("date must use exact YYYY-MM-DD form")
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError as exc:
+        raise CliError("date is not a valid calendar date") from exc
+
+
+def _temporal(args: argparse.Namespace) -> None:
+    connection = _connection(args.build)
+    try:
+        field = args.field
+        if args.temporal_command == "earliest": result = earliest(connection, field)
+        elif args.temporal_command == "latest": result = latest(connection, field)
+        elif args.temporal_command == "before": result = before(connection, _parse_cli_date(args.anchor), field)
+        elif args.temporal_command == "after": result = after(connection, _parse_cli_date(args.anchor), field)
+        elif args.temporal_command == "between": result = between(connection, _parse_cli_date(args.start), _parse_cli_date(args.end), field)
+        else: result = ordered(connection, args.direction, field)
+        _emit(result, args)
+    finally:
+        connection.close()
+
+
 def _runtime_init(args: argparse.Namespace) -> None:
     initialize_runtime(args.database)
     _emit({"database": str(Path(args.database).resolve()), "schema_version": SCHEMA_VERSION}, args)
@@ -443,6 +473,13 @@ def _parser() -> argparse.ArgumentParser:
     a = gsub.add_parser("relations"); _add_build_ref(a); a.add_argument("--relation-class", required=True); a.add_argument("--relation-name", required=True); a.set_defaults(handler=_graph_relations)
     a = gsub.add_parser("traverse"); _add_build_ref(a); a.add_argument("--handle-json", required=True); a.add_argument("--relation-class", required=True); a.add_argument("--relation-name", required=True); a.add_argument("--direction", choices=["inbound","outbound"], required=True); a.set_defaults(handler=_graph_traverse)
     v = sub.add_parser("vector"); _add_build_ref(v); v.add_argument("--query", required=True); v.add_argument("--ollama-url", default="http://127.0.0.1:11434"); v.set_defaults(handler=_vector)
+    temporal = sub.add_parser("temporal"); tsub = temporal.add_subparsers(dest="temporal_command", required=True)
+    a = tsub.add_parser("earliest"); _add_build_ref(a); a.add_argument("--field", default="journal_entry_date"); a.set_defaults(handler=_temporal)
+    a = tsub.add_parser("latest"); _add_build_ref(a); a.add_argument("--field", default="journal_entry_date"); a.set_defaults(handler=_temporal)
+    a = tsub.add_parser("before"); _add_build_ref(a); a.add_argument("--field", default="journal_entry_date"); a.add_argument("--anchor", required=True); a.set_defaults(handler=_temporal)
+    a = tsub.add_parser("after"); _add_build_ref(a); a.add_argument("--field", default="journal_entry_date"); a.add_argument("--anchor", required=True); a.set_defaults(handler=_temporal)
+    a = tsub.add_parser("between"); _add_build_ref(a); a.add_argument("--field", default="journal_entry_date"); a.add_argument("--start", required=True); a.add_argument("--end", required=True); a.set_defaults(handler=_temporal)
+    a = tsub.add_parser("ordered"); _add_build_ref(a); a.add_argument("--field", default="journal_entry_date"); a.add_argument("--direction", choices=["ascending", "descending"], required=True); a.set_defaults(handler=_temporal)
     runtime = sub.add_parser("runtime"); rsub = runtime.add_subparsers(dest="runtime_command", required=True)
     a = rsub.add_parser("init"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_init)
     a = rsub.add_parser("migrate"); a.add_argument("--database", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_migrate)

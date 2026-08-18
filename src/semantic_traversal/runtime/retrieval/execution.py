@@ -16,6 +16,7 @@ from ...projection.exact import exact_lookup
 from ...projection.graph import GraphError, graph_discover, graph_relation_lookup
 from ...projection.lexical import lexical_lookup
 from ...projection.substrate import SubstrateError
+from ...projection.temporal import TemporalProjectionError, after, before, between, earliest, latest, ordered
 from ...projection.vector import EmbeddingProviderError, VectorError, vector_lookup
 from .control_plane import CATALOG_CONFORMANCE_CONTRACT_VERSION, _canonical_persisted_proposal
 from ..conversation import RuntimeConversationError, _connect_runtime, _timestamp
@@ -162,6 +163,8 @@ def _handle_json(handle: Any) -> dict[str, Any]:
 def _surface_result(operator: str, native: Any) -> dict[str, Any]:
     if operator == "exact.equals":
         return {"kind": "exact", "unit_ids": list(native)}
+    if operator.startswith("temporal."):
+        return {"kind": "temporal", "hits": [{"unit_id": hit.unit_id, "date": hit.date.isoformat()} for hit in native]}
     if operator in {"lexical.terms", "lexical.phrase"}:
         return {"kind": "lexical", "hits": [{"unit_id": hit.unit_id, "score": hit.score} for hit in native]}
     if operator == "vector.semantic_similarity":
@@ -195,6 +198,23 @@ def _execute_surface(connection: sqlite3.Connection, package: RetrievalPackage, 
         if vector_provider is None:
             raise RetrievalExecutionError("vector provider is required for vector retrieval")
         native = vector_lookup(connection, package.vectors_path, request["query"], vector_provider)
+    elif operator == "temporal.earliest":
+        native = earliest(connection, request["field_name"])
+    elif operator == "temporal.latest":
+        native = latest(connection, request["field_name"])
+    elif operator == "temporal.before":
+        native = before(connection, dt.date.fromisoformat(request["anchor"]["value"]), request["field_name"])
+    elif operator == "temporal.after":
+        native = after(connection, dt.date.fromisoformat(request["anchor"]["value"]), request["field_name"])
+    elif operator == "temporal.between":
+        native = between(
+            connection,
+            dt.date.fromisoformat(request["start"]["value"]),
+            dt.date.fromisoformat(request["end"]["value"]),
+            request["field_name"],
+        )
+    elif operator == "temporal.ordered":
+        native = ordered(connection, request["direction"], request["field_name"])
     elif operator in {"graph.discovery.terms", "graph.discovery.phrase"}:
         native = graph_discover(
             connection, request["node_kind"], request["dimension_name"],
@@ -215,6 +235,12 @@ _SURFACE_ERRORS: dict[str, tuple[type[BaseException], ...]] = {
     "graph.discovery.terms": (TypeError, ValueError, KeyError, sqlite3.Error, GraphError),
     "graph.discovery.phrase": (TypeError, ValueError, KeyError, sqlite3.Error, GraphError),
     "graph.relation_occurrence_lookup": (TypeError, ValueError, KeyError, sqlite3.Error, GraphError),
+    "temporal.earliest": (TypeError, ValueError, KeyError, sqlite3.Error, TemporalProjectionError),
+    "temporal.latest": (TypeError, ValueError, KeyError, sqlite3.Error, TemporalProjectionError),
+    "temporal.before": (TypeError, ValueError, KeyError, sqlite3.Error, TemporalProjectionError),
+    "temporal.after": (TypeError, ValueError, KeyError, sqlite3.Error, TemporalProjectionError),
+    "temporal.between": (TypeError, ValueError, KeyError, sqlite3.Error, TemporalProjectionError),
+    "temporal.ordered": (TypeError, ValueError, KeyError, sqlite3.Error, TemporalProjectionError),
 }
 
 

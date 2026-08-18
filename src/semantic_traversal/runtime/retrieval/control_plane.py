@@ -116,6 +116,17 @@ def _field_violations(catalog: Mapping[str, Any], request: Mapping[str, Any]) ->
     )
     if access is None:
         return [_violation("field_access_not_advertised", operator=operator, target=request["target"], **identity)]
+    if operator.startswith("temporal."):
+        domains = access.get("domains")
+        if not isinstance(domains, (list, tuple)) or tuple(domains) != ("date",):
+            return [_violation(
+                "operand_domain_not_advertised",
+                operator=operator,
+                target=request["target"],
+                domain="date",
+                **identity,
+            )]
+        return []
     if operator == "exact.equals":
         operand = request["operand"]
         if operand["shape"] == "scalar":
@@ -205,7 +216,7 @@ def _request_violations(catalog: Mapping[str, Any], request: Mapping[str, Any]) 
     operators = catalog.get("operators")
     if not isinstance(operators, Mapping) or operator not in operators:
         return (_violation("operator_not_advertised", operator=operator),)
-    if operator in {"exact.equals", "lexical.terms", "lexical.phrase"}:
+    if operator in {"exact.equals", "lexical.terms", "lexical.phrase", "temporal.earliest", "temporal.latest", "temporal.before", "temporal.after", "temporal.between", "temporal.ordered"}:
         return tuple(_field_violations(catalog, request))
     if operator == "vector.semantic_similarity":
         vector = catalog.get("vector")

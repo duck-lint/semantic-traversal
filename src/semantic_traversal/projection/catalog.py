@@ -120,6 +120,21 @@ def _field_access(field: Mapping[str, Any], vector_catalog: Mapping[str, Any]) -
     if not isinstance(surfaces, dict):
         raise CatalogGenerationError(f"field surfaces are invalid: {field_class}/{field_name}")
     access: list[dict[str, Any]] = []
+    temporal = surfaces.get("temporal")
+    if temporal is not None:
+        if (field_class, field_name) != ("semantic_identifier", "journal_entry_date"):
+            raise CatalogGenerationError("temporal-v1 is licensed only for journal_entry_date")
+        if temporal != {
+            "operators": ["earliest", "latest", "before", "after", "between", "ordered"],
+            "domain": "date",
+            "result_identity": "unit_id / semantic_unit",
+            "coverage": "exhaustive",
+        }:
+            raise CatalogGenerationError("unsupported temporal capability facts")
+        access.extend(
+            _access(f"temporal.{operator}", "complete_value", ["date"])
+            for operator in temporal["operators"]
+        )
     if "exact" in surfaces:
         exact = surfaces["exact"]
         if not isinstance(exact, dict) or exact.get("operators") != ["equals"]:
@@ -233,7 +248,7 @@ def _vector(facts: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _operators(facts: Mapping[str, Any]) -> dict[str, Any]:
-    expected = {"exact": ["equals"], "lexical": ["terms", "phrase"], "vector": ["semantic_similarity"], "graph": ["node_discovery", "relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"]}
+    expected = {"exact": ["equals"], "lexical": ["terms", "phrase"], "vector": ["semantic_similarity"], "graph": ["node_discovery", "relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"], "temporal": ["earliest", "latest", "before", "after", "between", "ordered"]}
     if facts["surface_operation_grammar"] != expected:
         raise CatalogGenerationError("unsupported surface operator grammar")
     return {
@@ -246,6 +261,12 @@ def _operators(facts: Mapping[str, Any]) -> dict[str, Any]:
         "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "locate occurrences of one advertised relation type"},
         "graph.inbound_traversal": {"surface": "graph", "meaning": "follow one advertised relation type one hop inbound from a typed graph handle"},
         "graph.outbound_traversal": {"surface": "graph", "meaning": "follow one advertised relation type one hop outbound from a typed graph handle"},
+        "temporal.earliest": {"surface": "temporal", "meaning": "earliest represented date on the addressed temporal dimension; return all units tied at that date"},
+        "temporal.latest": {"surface": "temporal", "meaning": "latest represented date on the addressed temporal dimension; return all units tied at that date"},
+        "temporal.before": {"surface": "temporal", "meaning": "strictly before the supplied date; exhaustive with nearest preceding dates first"},
+        "temporal.after": {"surface": "temporal", "meaning": "strictly after the supplied date; exhaustive with nearest following dates first"},
+        "temporal.between": {"surface": "temporal", "meaning": "inclusive date range in exhaustive chronological order"},
+        "temporal.ordered": {"surface": "temporal", "meaning": "exhaustive chronological ordering in explicit ascending or descending direction"},
     }
 
 

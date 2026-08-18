@@ -363,7 +363,7 @@ The control plane must:
 - dispatch valid requests to the corresponding deterministic retrieval surface;
 - preserve the retrieval surface's defined semantics;
 - return canonical retrieval identities for hydration.
-The control plane does not invent semantic capabilities, infer unavailable operators, reinterpret canonical values, or expand the capability catalog. Runtime limits, budgets, and other runtime policy remain separate from projection identity and from the capability catalog. The concrete control-plane request schema, dispatch interface, and shared operator representation are intentionally deferred until the constitutive retrieval surfaces have been implemented and validated. That later design must be derived from the actual accepted exact, lexical, vector, and graph surface contracts rather than requiring those surfaces to conform to a prematurely chosen common interface.
+The control plane does not invent semantic capabilities, infer unavailable operators, reinterpret canonical values, or expand the capability catalog. Runtime limits, budgets, and other runtime policy remain separate from projection identity and from the capability catalog. Runtime retrieval v1 exposes the accepted exact, lexical, vector, graph, and temporal request grammar through one closed canonicalizer. Temporal requests address only `semantic_identifier / journal_entry_date`, target `complete_value`, and native `date` values. `temporal.earliest` and `temporal.latest` contain only `operator`, `field_class`, `field_name`, and `target`; `temporal.before` and `temporal.after` additionally contain `anchor`; `temporal.between` additionally contains `start` and `end`; and `temporal.ordered` additionally contains `direction`. Each temporal date literal is exactly `{ "domain": "date", "value": "YYYY-MM-DD" }`; `before` and `after` are strict, `between` is inclusive, and `ordered` requires `ascending` or `descending`. Temporal execution returns unit identity plus represented date, never a score, and uses no embedding provider. Hydration verifies the returned date against the canonical unit's native date field. Packet assembly retains temporal results as surface-specific occurrences while deduplicating only canonical payload storage. Temporal chronology is not relevance, similarity, influence, or causation, and chronological proximity does not establish causation.
 The capability catalog describes retrieval availability and legal operation grammar, not corpus-instance inventory. It may expose available semantic field classes, node classes, relation classes, relation names, retrieval surfaces, and supported operators. It does not enumerate canonical semantic objects, semantic regions, semantic units, or their internal identities for Model 1. Corpus instances are discovered by executing retrieval operations against the completed build.
 ## 12. Build publication and repair behavior
 ### 12.1 Publish only a referentially valid completed build
@@ -479,3 +479,48 @@ The specimen acceptance checks use `07_Tuesday.md` for its note-local object, re
 - An incompatible query-time embedding contract fails explicitly.
 - An over-capacity query fails rather than being truncated or segmented.
 - Failure to embed any vector-eligible canonical target prevents a completed vector build.
+
+## Temporal-v1 projection
+Temporal-v1 is a derivative retrieval surface over canonical inherited
+semantic-identifier state. Its only licensed dimension is
+`semantic_identifier / journal_entry_date`, with native `date` values only.
+`datetime`, date-looking strings, path-derived year/month values, and
+`headspace` are not temporal-v1.
+
+Only `state = present_value` inherited identifiers are eligible. The decoded
+value must be a native Python `date`, not `datetime`, string, or any coerced
+scalar. Absent and present-blank values produce no entry; a malformed value
+for the licensed field fails the projection explicitly. The projection stores
+`unit_id`, `field_class`, `field_name`, `domain`, and canonical `YYYY-MM-DD`
+`date_value` in SQLite, with a foreign key to `canonical_units` and lookup
+ordering by field, date, and unit. It stores no prose, score, topic,
+relevance, inference, or temporal-distance value.
+
+The projection emits one entry for every eligible canonical unit, including
+all units inheriting one object date, and emits none for zero-unit objects.
+Its integrity check is read-only and proves referential validity, exact
+licensed identity, canonical-value equality, exhaustive eligible-unit
+coverage, no extras, no `headspace` or path-derived entries, rejection of
+`datetime`, and exact ISO round-trip fidelity. Completed-build verification
+must fail when this projection is absent or invalid.
+
+The temporal operators are `earliest`, `latest`, `before`, `after`,
+`between`, and `ordered`. `before` and `after` are strict; `between` is
+inclusive and requires `start <= end`. Every mode is exhaustive and
+unbounded. Earliest/latest return every unit on the extreme date. Before is
+ordered by date descending, after by date ascending, between by date
+ascending, and ordered requires an explicit ascending or descending
+direction. Same-date ties always use ascending `unit_id`.
+
+Temporal does not execute, filter, intersect, rank, cap, or fuse lexical,
+vector, exact, or graph retrieval. Cross-surface composition remains a later
+responsibility. Capability observation and schema-1 catalog admission expose
+temporal only for the licensed dimension, with all six operators, `date`
+domain, `unit_id / semantic_unit` identity, and exhaustive coverage. Runtime
+request grammar and execution remain unchanged until the later temporal pass.
+
+Schema-1 admission requires all six temporal field-access entries together,
+each with `target = complete_value` and `domains = ["date"]`, and rejects
+temporal access on `headspace`, string identifiers, intrinsic, region, or path
+dimensions. The global catalog operator set is the existing set plus the six
+temporal operators; the catalog schema remains `"1"`.

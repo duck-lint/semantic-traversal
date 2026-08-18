@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 from typing import Any
 
 
@@ -23,6 +24,12 @@ LEGAL_RETRIEVAL_OPERATORS = frozenset({
     "graph.discovery.terms",
     "graph.discovery.phrase",
     "graph.relation_occurrence_lookup",
+    "temporal.earliest",
+    "temporal.latest",
+    "temporal.before",
+    "temporal.after",
+    "temporal.between",
+    "temporal.ordered",
 })
 
 
@@ -119,6 +126,26 @@ def retrieval_proposal_schema() -> dict[str, Any]:
         {"relation_class": _string_property(), "relation_name": _string_property()},
         ["relation_class", "relation_name"],
     )
+    temporal_date = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["domain", "value"],
+        "properties": {
+            "domain": {"type": "string", "enum": ["date"]},
+            "value": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+        },
+    }
+    temporal_common = {
+        "field_class": _string_property(),
+        "field_name": _string_property(),
+        "target": {"type": "string", "enum": ["complete_value"]},
+    }
+    temporal_earliest = common("temporal.earliest", temporal_common, ["field_class", "field_name", "target"])
+    temporal_latest = common("temporal.latest", temporal_common, ["field_class", "field_name", "target"])
+    temporal_before = common("temporal.before", {**temporal_common, "anchor": temporal_date}, ["field_class", "field_name", "target", "anchor"])
+    temporal_after = common("temporal.after", {**temporal_common, "anchor": temporal_date}, ["field_class", "field_name", "target", "anchor"])
+    temporal_between = common("temporal.between", {**temporal_common, "start": temporal_date, "end": temporal_date}, ["field_class", "field_name", "target", "start", "end"])
+    temporal_ordered = common("temporal.ordered", {**temporal_common, "direction": {"type": "string", "enum": ["ascending", "descending"]}}, ["field_class", "field_name", "target", "direction"])
     return {
         "type": "object",
         "additionalProperties": False,
@@ -126,7 +153,7 @@ def retrieval_proposal_schema() -> dict[str, Any]:
         "properties": {
             "requests": {
                 "type": "array",
-                "items": {"anyOf": [exact, terms, phrase, vector, graph_terms, graph_phrase, relation]},
+                "items": {"anyOf": [exact, terms, phrase, vector, graph_terms, graph_phrase, relation, temporal_earliest, temporal_latest, temporal_before, temporal_after, temporal_between, temporal_ordered]},
             }
         },
     }
@@ -136,6 +163,21 @@ def _nonblank(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise RetrievalRequestError(f"retrieval {name} must be nonblank text")
     return value
+
+
+_TEMPORAL_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _temporal_date(value: Any, name: str) -> str:
+    if not isinstance(value, dict) or set(value) != {"domain", "value"}:
+        raise RetrievalRequestError(f"invalid temporal {name} literal")
+    if value["domain"] != "date" or not isinstance(value["value"], str) or not _TEMPORAL_DATE_PATTERN.fullmatch(value["value"]):
+        raise RetrievalRequestError(f"temporal {name} must use exact YYYY-MM-DD date form")
+    try:
+        dt.date.fromisoformat(value["value"])
+    except ValueError as exc:
+        raise RetrievalRequestError(f"temporal {name} is not a valid calendar date") from exc
+    return value["value"]
 
 
 def _validate_scalar_operand(operand: Any) -> dict[str, Any]:
@@ -174,6 +216,58 @@ def canonicalize_retrieval_request(request: Any) -> dict[str, Any]:
     if not isinstance(request, dict) or "operator" not in request:
         raise RetrievalRequestError("retrieval request must be an object with an operator")
     operator = request["operator"]
+    if operator in {"temporal.earliest", "temporal.latest"}:
+        if set(request) != {"operator", "field_class", "field_name", "target"}:
+            raise RetrievalRequestError("invalid temporal extreme retrieval request shape")
+        if request["target"] != "complete_value":
+            raise RetrievalRequestError("invalid temporal retrieval target")
+        return {
+            "operator": operator,
+            "field_class": _nonblank(request["field_class"], "field_class"),
+            "field_name": _nonblank(request["field_name"], "field_name"),
+            "target": "complete_value",
+        }
+    if operator in {"temporal.before", "temporal.after"}:
+        if set(request) != {"operator", "field_class", "field_name", "target", "anchor"}:
+            raise RetrievalRequestError("invalid temporal anchored retrieval request shape")
+        if request["target"] != "complete_value":
+            raise RetrievalRequestError("invalid temporal retrieval target")
+        return {
+            "operator": operator,
+            "field_class": _nonblank(request["field_class"], "field_class"),
+            "field_name": _nonblank(request["field_name"], "field_name"),
+            "target": "complete_value",
+            "anchor": {"domain": "date", "value": _temporal_date(request["anchor"], "anchor")},
+        }
+    if operator == "temporal.between":
+        if set(request) != {"operator", "field_class", "field_name", "target", "start", "end"}:
+            raise RetrievalRequestError("invalid temporal range retrieval request shape")
+        if request["target"] != "complete_value":
+            raise RetrievalRequestError("invalid temporal retrieval target")
+        start = _temporal_date(request["start"], "start")
+        end = _temporal_date(request["end"], "end")
+        if start > end:
+            raise RetrievalRequestError("temporal between requires start <= end")
+        return {
+            "operator": operator,
+            "field_class": _nonblank(request["field_class"], "field_class"),
+            "field_name": _nonblank(request["field_name"], "field_name"),
+            "target": "complete_value",
+            "start": {"domain": "date", "value": start},
+            "end": {"domain": "date", "value": end},
+        }
+    if operator == "temporal.ordered":
+        if set(request) != {"operator", "field_class", "field_name", "target", "direction"}:
+            raise RetrievalRequestError("invalid temporal ordered retrieval request shape")
+        if request["target"] != "complete_value" or request["direction"] not in {"ascending", "descending"}:
+            raise RetrievalRequestError("invalid temporal ordered retrieval request")
+        return {
+            "operator": operator,
+            "field_class": _nonblank(request["field_class"], "field_class"),
+            "field_name": _nonblank(request["field_name"], "field_name"),
+            "target": "complete_value",
+            "direction": request["direction"],
+        }
     if operator == "exact.equals":
         if set(request) != {"operator", "field_class", "field_name", "target", "operand"}:
             raise RetrievalRequestError("invalid exact retrieval request shape")

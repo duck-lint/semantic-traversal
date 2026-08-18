@@ -24,6 +24,8 @@ from .hydration import (
     HydratedGraphRelationResult,
     HydratedLexicalHit,
     HydratedLexicalResult,
+    HydratedTemporalHit,
+    HydratedTemporalResult,
     HydratedRequestResult,
     HydratedRetrievalResult,
     HydratedVectorHit,
@@ -52,6 +54,7 @@ from .package_verification import (
 from .packet import (
     PACKET_CONTRACT_VERSION, SELECTION_RULE_VERSION, CanonicalTargetPayload, CanonicalTargetRef,
     ExactOccurrence, GraphDiscoveryOccurrence, GraphRelationOccurrence, LexicalOccurrence,
+    TemporalOccurrence,
     PacketAssemblyResult, PacketCoverage, PacketOccurrence, RemovalRecord, RequestCoverage,
     RetrievalPacket, RetrievalPacketError, VectorOccurrence, assemble_retrieval_packet,
 )
@@ -76,6 +79,8 @@ __all__ = [
     "HydratedGraphRelationResult",
     "HydratedLexicalHit",
     "HydratedLexicalResult",
+    "HydratedTemporalHit",
+    "HydratedTemporalResult",
     "HydratedRequestResult",
     "HydratedRetrievalResult",
     "HydratedVectorHit",
@@ -100,7 +105,7 @@ __all__ = [
     "verify_retrieval_package",
     "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
     "CanonicalTargetRef", "CanonicalTargetPayload", "PacketOccurrence", "ExactOccurrence",
-    "LexicalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
+    "LexicalOccurrence", "TemporalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
     "RequestCoverage", "PacketCoverage", "RemovalRecord", "RetrievalPacket", "PacketAssemblyResult",
     "assemble_retrieval_packet",
 ]

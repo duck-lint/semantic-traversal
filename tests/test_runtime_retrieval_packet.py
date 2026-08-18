@@ -1,3 +1,4 @@
+import datetime as dt
 import unittest
 from dataclasses import MISSING
 from pathlib import Path
@@ -8,12 +9,12 @@ from semantic_traversal.runtime.config import PacketConfig, RuntimeConfigError, 
 from semantic_traversal.runtime.retrieval.hydration import (
     HydratedCanonicalTarget, HydratedExactHit, HydratedExactResult,
     HydratedLexicalHit, HydratedLexicalResult, HydratedRequestResult,
-    HydratedRetrievalResult, HydratedVectorHit, HydratedVectorResult,
+    HydratedRetrievalResult, HydratedTemporalHit, HydratedTemporalResult, HydratedVectorHit, HydratedVectorResult,
     HydratedGraphOccurrence, HydratedGraphRelationResult,
 )
 from semantic_traversal.projection.graph import GraphHandle
 from semantic_traversal.runtime.retrieval.packet import (
-    ExactOccurrence, LexicalOccurrence, VectorOccurrence,
+    ExactOccurrence, LexicalOccurrence, TemporalOccurrence, VectorOccurrence,
     assemble_retrieval_packet,
 )
 
@@ -33,6 +34,29 @@ def execution(requests, status="succeeded", failure=None, *, execution_id="execu
 
 
 class RetrievalPacketTests(unittest.TestCase):
+    def test_temporal_lexical_vector_convergence_keeps_three_occurrences(self):
+        target = unit_target(1)
+        result = execution([
+            request(0, "temporal.before", HydratedTemporalResult((HydratedTemporalHit(1, dt.date(2026, 4, 15), target),))),
+            request(1, "lexical.terms", HydratedLexicalResult((HydratedLexicalHit(1, 0.5, target),))),
+            request(2, "vector.semantic_similarity", HydratedVectorResult((HydratedVectorHit("semantic_unit", 1, 0.9, 0, target),))),
+        ])
+        packet = assemble_retrieval_packet(result, PacketConfig(8)).packet
+        self.assertEqual([type(item) for item in packet.selected_occurrences], [TemporalOccurrence, LexicalOccurrence, VectorOccurrence])
+        self.assertEqual(len([payload for payload in packet.canonical_payloads.values() if payload.canonical_unit is not None]), 1)
+
+    def test_temporal_occurrences_keep_date_identity_and_share_canonical_payload(self):
+        target = unit_target(1)
+        result = execution([request(0, "temporal.ordered", HydratedTemporalResult((
+            HydratedTemporalHit(1, dt.date(2026, 4, 16), target),
+            HydratedTemporalHit(1, dt.date(2026, 4, 17), target),
+        )))])
+        assembled = assemble_retrieval_packet(result, PacketConfig(1))
+        self.assertIsInstance(assembled.packet.selected_occurrences[0], TemporalOccurrence)
+        self.assertEqual(assembled.packet.selected_occurrences[0].temporal_date, dt.date(2026, 4, 16))
+        self.assertEqual(assembled.removals[0].native_identity["temporal_date"], "2026-04-17")
+        self.assertEqual(len([item for item in assembled.packet.canonical_payloads.values() if item.canonical_unit is not None]), 1)
+
     def test_lineage_and_capacity_dial_are_preserved_without_reexecution(self):
         result = execution([
             request(0, "exact.equals", HydratedExactResult(tuple(HydratedExactHit(i, unit_target(i)) for i in (1, 2, 3)))),

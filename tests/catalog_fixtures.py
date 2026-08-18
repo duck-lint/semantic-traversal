@@ -11,6 +11,12 @@ _OPERATORS = {
     "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "relation occurrence lookup"},
     "graph.inbound_traversal": {"surface": "graph", "meaning": "graph inbound traversal"},
     "graph.outbound_traversal": {"surface": "graph", "meaning": "graph outbound traversal"},
+    "temporal.earliest": {"surface": "temporal", "meaning": "earliest represented date"},
+    "temporal.latest": {"surface": "temporal", "meaning": "latest represented date"},
+    "temporal.before": {"surface": "temporal", "meaning": "strictly before supplied date"},
+    "temporal.after": {"surface": "temporal", "meaning": "strictly after supplied date"},
+    "temporal.between": {"surface": "temporal", "meaning": "inclusive date range"},
+    "temporal.ordered": {"surface": "temporal", "meaning": "explicit chronological ordering"},
 }
 
 _DISCOVERY_OPERATORS = ["graph.discovery.terms", "graph.discovery.phrase"]
