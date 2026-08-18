@@ -84,6 +84,7 @@ _SURFACE_OPERATIONS = {
         "inbound_traversal",
         "outbound_traversal",
     ),
+    "temporal": ("earliest", "latest", "before", "after", "between", "ordered"),
 }
 
 
@@ -232,6 +233,20 @@ def _field_capabilities(connection: sqlite3.Connection) -> list[dict[str, Any]]:
                     "string"
                 ] if "string" in scalar_domains or "string" in member_domains else []
             surfaces["lexical"] = lexical_fact
+        if (field_class, field_name) == ("semantic_identifier", "journal_entry_date"):
+            temporal = connection.execute(
+                """SELECT 1 FROM temporal_dimension_registry
+                WHERE field_class = 'semantic_identifier'
+                  AND field_name = 'journal_entry_date' AND domain = 'date'"""
+            ).fetchone()
+            if temporal is None:
+                raise CapabilityObservationError("journal_entry_date temporal dimension is absent")
+            surfaces["temporal"] = {
+                "operators": list(_SURFACE_OPERATIONS["temporal"]),
+                "domain": "date",
+                "result_identity": "unit_id / semantic_unit",
+                "coverage": "exhaustive",
+            }
         fact: dict[str, Any] = {
             "field_class": field_class,
             "field_name": field_name,

@@ -23,6 +23,7 @@ from .projection.exact import exact_lookup, build_exact_index
 from .projection.lexical import LexicalHit, build_lexical_index, lexical_integrity_check, lexical_lookup
 from .projection.graph import GraphDiscoveryHit, GraphEdgeOccurrence, GraphError, GraphHandle, GraphTraversalHit, build_graph, graph_discover, graph_integrity_check, graph_relation_lookup, graph_traverse
 from .projection.vector import EmbeddingContract, EmbeddingProviderError, OllamaEmbeddingProvider, VectorError, VectorHit, VectorTarget, build_vector_index, segment_and_embed, validate_vector_index, vector_eligible_targets, vector_lookup
+from .projection.temporal import TemporalHit, TemporalProjectionError, after, before, between, build_temporal_index, earliest, latest, ordered, temporal_integrity_check
 
 __all__ = [
     "FrontmatterField",
@@ -97,4 +98,14 @@ __all__ = [
     "validate_vector_index",
     "vector_eligible_targets",
     "vector_lookup",
+    "TemporalHit",
+    "TemporalProjectionError",
+    "build_temporal_index",
+    "temporal_integrity_check",
+    "earliest",
+    "latest",
+    "before",
+    "after",
+    "between",
+    "ordered",
 ]

@@ -27,7 +27,8 @@ class _DuplicateObjectKey(ValueError):
 
 
 _DOMAIN_VALUES = frozenset({"null", "boolean", "integer", "float", "date", "datetime", "string"})
-_FIELD_ACCESS_OPERATORS = frozenset({"exact.equals", "lexical.terms", "lexical.phrase", "vector.semantic_similarity"})
+_TEMPORAL_OPERATORS = frozenset({"temporal.earliest", "temporal.latest", "temporal.before", "temporal.after", "temporal.between", "temporal.ordered"})
+_FIELD_ACCESS_OPERATORS = frozenset({"exact.equals", "lexical.terms", "lexical.phrase", "vector.semantic_similarity", *_TEMPORAL_OPERATORS})
 _GRAPH_DISCOVERY_OPERATORS = frozenset({"graph.discovery.terms", "graph.discovery.phrase"})
 _GRAPH_RELATION_OPERATIONS = frozenset({"graph.relation_occurrence_lookup", "graph.inbound_traversal", "graph.outbound_traversal"})
 _GRAPH_NODE_KINDS = frozenset({"scope", "semantic_object", "semantic_region", "semantic_unit"})
@@ -45,6 +46,12 @@ _GLOBAL_OPERATOR_SURFACES = {
     "graph.relation_occurrence_lookup": "graph",
     "graph.inbound_traversal": "graph",
     "graph.outbound_traversal": "graph",
+    "temporal.earliest": "temporal",
+    "temporal.latest": "temporal",
+    "temporal.before": "temporal",
+    "temporal.after": "temporal",
+    "temporal.between": "temporal",
+    "temporal.ordered": "temporal",
 }
 _FIELD_CLASSES = frozenset({"intrinsic", "semantic_identifier", "region", "semantic_path"})
 _FIXED_VALUE_MODELS = {
@@ -178,7 +185,12 @@ def _validate_access(access: Any, label: str, value_models: Mapping[str, tuple[s
     if "domains" in access:
         entry = _mapping(access, {"operator", "target", "domains"}, label)
         domains = _domain_list(entry["domains"], f"{label}.domains", nonempty=True)
-        if operator == "exact.equals":
+        if operator in _TEMPORAL_OPERATORS:
+            if field_class != "semantic_identifier" or field_name != "journal_entry_date" or target != "complete_value" or domains != ("date",):
+                raise CapabilityCatalogError(f"{label} is an illegal temporal-v1 access")
+            if value_models.get("scalar") != ("date",):
+                raise CapabilityCatalogError(f"{label} requires the date scalar value model")
+        elif operator == "exact.equals":
             expected_shape = "scalar" if target == "complete_value" else "sequence"
             if expected_shape not in value_models or set(value_models[expected_shape]) != set(domains):
                 raise CapabilityCatalogError(f"{label} is inconsistent with its value model")
@@ -239,6 +251,7 @@ def _validate_fixed_access_grammar(identity: tuple[str, str], access_identities:
 def _validate_semantic_identifier_access(
     value_models: Mapping[str, tuple[str, ...]],
     access_identities: set[tuple[str, str]],
+    field_name: str,
 ) -> None:
     exact = ("exact.equals", "complete_value")
     member_exact = ("exact.equals", "member")
@@ -257,6 +270,11 @@ def _validate_semantic_identifier_access(
         if "string" in value_models["sequence"]:
             expected.update({terms_member, phrase_member})
 
+    temporal = {("temporal." + operator, "complete_value") for operator in ("earliest", "latest", "before", "after", "between", "ordered")}
+    if field_name == "journal_entry_date" and value_models.get("scalar") == ("date",):
+        expected.update(temporal)
+    elif access_identities & temporal:
+        raise CapabilityCatalogError("temporal-v1 access is licensed only for native-date journal_entry_date")
     if access_identities != expected:
         raise CapabilityCatalogError("semantic_identifier has an incompatible access grammar")
 
@@ -296,7 +314,7 @@ def _validate_semantic_dimensions(value: Any) -> tuple[set[str], dict[tuple[str,
             access_identities.add(access_identity)
             references.add(access_identity[0])
         if field_class == "semantic_identifier":
-            _validate_semantic_identifier_access(value_models, access_identities)
+            _validate_semantic_identifier_access(value_models, access_identities, field_name)
         else:
             _validate_fixed_access_grammar(identity, access_identities)
         access_by_dimension[identity] = access_identities
