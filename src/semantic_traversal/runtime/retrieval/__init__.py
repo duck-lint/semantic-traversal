@@ -59,6 +59,14 @@ from .packet import (
     RetrievalPacket, RetrievalPacketError, VectorOccurrence, assemble_retrieval_packet,
 )
 
+from .candidates import (
+    CANDIDATE_WORKSPACE_CONTRACT_VERSION, Candidate, CandidateCompositionError,
+    CandidateRef, CandidateSupport, CandidateWorkspace, CandidateWorkspaceRequest,
+    ExactSupport, GraphDiscoverySupport, LexicalSupport, RelationEvidence,
+    TemporalSupport, VectorSupport, WorkspaceOccurrence, candidate_workspace_json,
+    compose_candidate_workspace, serialize_candidate_workspace,
+)
+
 __all__ = [
     "ConformanceRequestResult",
     "RetrievalConformanceError",
@@ -108,4 +116,8 @@ __all__ = [
     "LexicalOccurrence", "TemporalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
     "RequestCoverage", "PacketCoverage", "RemovalRecord", "RetrievalPacket", "PacketAssemblyResult",
     "assemble_retrieval_packet",
+    "CANDIDATE_WORKSPACE_CONTRACT_VERSION", "CandidateCompositionError", "CandidateRef", "CandidateSupport",
+    "ExactSupport", "LexicalSupport", "TemporalSupport", "VectorSupport", "GraphDiscoverySupport", "Candidate",
+    "RelationEvidence", "WorkspaceOccurrence", "CandidateWorkspaceRequest", "CandidateWorkspace",
+    "compose_candidate_workspace", "candidate_workspace_json", "serialize_candidate_workspace",
 ]

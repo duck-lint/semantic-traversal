@@ -524,3 +524,32 @@ each with `target = complete_value` and `domains = ["date"]`, and rejects
 temporal access on `headspace`, string identifiers, intrinsic, region, or path
 dimensions. The global catalog operator set is the existing set plus the six
 temporal operators; the catalog schema remains `"1"`.
+
+## Candidate Composition v1
+Candidate composition is a deterministic, pure representation transform over a
+completed `RetrievalExecutionResult`, immediately after retrieval execution and
+before canonical hydration. It is versioned as `candidate-workspace-v1` and
+does not change the live production handoff in this pass. Retrieval occurrences
+are access evidence, not the final semantic evidence-selection unit. Candidate
+identity is canonical target kind plus canonical target identity; all targets
+reached by succeeded occurrences enter the immutable, unbounded workspace, and
+occurrences with the same identity compose under one candidate. Every occurrence
+remains separately represented as typed, surface-native support/provenance.
+The common identity envelope is `(unit_id,)` for `semantic_unit`,
+`(source_object_uuid,)` for `semantic_object`,
+`(source_object_uuid, region_path_tuple)` for `semantic_region`, and
+`(scope_path_tuple,)` for `scope`; graph handles and vector target identities
+normalize into these same forms. The workspace retains immutable per-request
+lanes, native occurrence order, request status/failure, and exact returned
+occurrence counts; failed and not-executed requests retain `None`, while a
+succeeded zero-result request retains `0`. Exact, lexical, temporal, vector, and
+graph-discovery supports retain their native facts, including scores and dates,
+without a cross-surface scalar. Relation evidence retains both endpoint roles,
+handles, edge identity, class, and name.
+
+Graph relation occurrences remain relation evidence connecting two endpoint
+candidates; the edge is not collapsed into either endpoint. Composition performs
+no filtering, ranking, cross-surface scoring, candidate bound, or canonical
+hydration. Candidate selection, compact synthesis evidence, and moving hydration
+are later passes. The existing execution, hydration, packet, and synthesis
+production path remains unchanged.
