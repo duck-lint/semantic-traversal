@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import datetime as dt
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -133,6 +135,18 @@ class HydratedLexicalHit:
 @dataclass(frozen=True)
 class HydratedLexicalResult:
     hits: tuple[HydratedLexicalHit, ...]
+
+
+@dataclass(frozen=True)
+class HydratedTemporalHit:
+    unit_id: int
+    date: dt.date
+    target: HydratedCanonicalTarget
+
+
+@dataclass(frozen=True)
+class HydratedTemporalResult:
+    hits: tuple[HydratedTemporalHit, ...]
 
 
 @dataclass(frozen=True)
@@ -413,6 +427,34 @@ def _hydrate_vector(
     return HydratedVectorResult(tuple(hits))
 
 
+def _hydrate_temporal(
+    connection: sqlite3.Connection,
+    result: Mapping[str, Any],
+    caches: _HydrationCaches,
+) -> HydratedTemporalResult:
+    _exact_keys(result, {"kind", "hits"}, "temporal result")
+    if result["kind"] != "temporal":
+        raise RetrievalHydrationError("temporal result kind is malformed")
+    hits: list[HydratedTemporalHit] = []
+    for raw_hit in _sequence(result["hits"], "temporal hits"):
+        hit = _mapping(raw_hit, "temporal hit")
+        _exact_keys(hit, {"unit_id", "date"}, "temporal hit")
+        unit_id = _int_identity(hit["unit_id"], "temporal unit_id")
+        date_text = hit["date"]
+        if not isinstance(date_text, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_text):
+            raise RetrievalHydrationError("temporal date must use exact YYYY-MM-DD form")
+        try:
+            date = dt.date.fromisoformat(date_text)
+        except ValueError as exc:
+            raise RetrievalHydrationError("temporal date is not a valid calendar date") from exc
+        target = _unit_target(connection, unit_id, caches=caches)
+        matching = [field for field in target.canonical_unit.inherited_identifiers if field.name == "journal_entry_date"]
+        if len(matching) != 1 or matching[0].state != "present_value" or type(matching[0].value) is not dt.date or matching[0].value != date:
+            raise RetrievalHydrationError("temporal result date does not match canonical journal_entry_date")
+        hits.append(HydratedTemporalHit(unit_id, date, target))
+    return HydratedTemporalResult(tuple(hits))
+
+
 def _hydrate_graph_discovery(
     connection: sqlite3.Connection,
     request: Mapping[str, Any],
@@ -498,6 +540,8 @@ def _hydrate_surface(
         return _hydrate_exact(connection, result, caches)
     if operator in {"lexical.terms", "lexical.phrase"}:
         return _hydrate_lexical(connection, result, caches)
+    if operator.startswith("temporal."):
+        return _hydrate_temporal(connection, result, caches)
     if operator == "vector.semantic_similarity":
         return _hydrate_vector(connection, result, caches)
     if operator in {"graph.discovery.terms", "graph.discovery.phrase"}:
@@ -617,6 +661,8 @@ __all__ = [
     "HydratedGraphRelationResult",
     "HydratedLexicalHit",
     "HydratedLexicalResult",
+    "HydratedTemporalHit",
+    "HydratedTemporalResult",
     "HydratedRequestResult",
     "HydratedRetrievalResult",
     "HydratedVectorHit",

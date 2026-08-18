@@ -8,6 +8,7 @@ is only a storage normalization.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -16,7 +17,7 @@ from ...projection.graph import GraphHandle
 from .hydration import (
     HydratedCanonicalTarget, HydratedExactResult, HydratedGraphDiscoveryResult,
     HydratedGraphRelationResult, HydratedLexicalResult, HydratedRequestResult,
-    HydratedRetrievalResult, HydratedVectorResult,
+    HydratedRetrievalResult, HydratedTemporalResult, HydratedVectorResult,
 )
 from ..config import PacketConfig
 
@@ -62,6 +63,13 @@ class ExactOccurrence(PacketOccurrence):
 class LexicalOccurrence(PacketOccurrence):
     unit_id: int
     lexical_score: float
+    target_ref: CanonicalTargetRef
+
+
+@dataclass(frozen=True)
+class TemporalOccurrence(PacketOccurrence):
+    unit_id: int
+    temporal_date: dt.date
     target_ref: CanonicalTargetRef
 
 
@@ -187,13 +195,16 @@ def _lane(request: HydratedRequestResult) -> tuple[_Candidate, ...]:
         return ()
     result = request.result
     candidates: list[_Candidate] = []
-    for index, hit in enumerate(result.hits if isinstance(result, (HydratedExactResult, HydratedLexicalResult, HydratedVectorResult, HydratedGraphDiscoveryResult)) else result.occurrences):
+    for index, hit in enumerate(result.hits if isinstance(result, (HydratedExactResult, HydratedLexicalResult, HydratedTemporalResult, HydratedVectorResult, HydratedGraphDiscoveryResult)) else result.occurrences):
         if isinstance(result, HydratedExactResult):
             occurrence = ExactOccurrence(request.ordinal, index, request.operator, hit.unit_id, _ref(hit.target))
             candidates.append(_candidate(request, index, occurrence, {"target_kind": "semantic_unit", "unit_id": hit.unit_id}, (hit.target,)))
         elif isinstance(result, HydratedLexicalResult):
             occurrence = LexicalOccurrence(request.ordinal, index, request.operator, hit.unit_id, hit.score, _ref(hit.target))
             candidates.append(_candidate(request, index, occurrence, {"target_kind": "semantic_unit", "unit_id": hit.unit_id}, (hit.target,)))
+        elif isinstance(result, HydratedTemporalResult):
+            occurrence = TemporalOccurrence(request.ordinal, index, request.operator, hit.unit_id, hit.date, _ref(hit.target))
+            candidates.append(_candidate(request, index, occurrence, {"target_kind": "semantic_unit", "unit_id": hit.unit_id, "temporal_date": hit.date.isoformat()}, (hit.target,)))
         elif isinstance(result, HydratedVectorResult):
             occurrence = VectorOccurrence(request.ordinal, index, request.operator, hit.target_kind, hit.target_identity, hit.score, hit.segment_ordinal, _ref(hit.target))
             candidates.append(_candidate(request, index, occurrence, {"target_kind": hit.target_kind, "target_identity": hit.target_identity, "segment_ordinal": hit.segment_ordinal}, (hit.target,)))
@@ -288,7 +299,7 @@ def assemble_retrieval_packet(hydrated_result: HydratedRetrievalResult, packet_c
 __all__ = [
     "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
     "CanonicalTargetRef", "CanonicalTargetPayload", "PacketOccurrence", "ExactOccurrence",
-    "LexicalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
+    "LexicalOccurrence", "TemporalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
     "RequestCoverage", "PacketCoverage", "RemovalRecord", "RetrievalPacket", "PacketAssemblyResult",
     "assemble_retrieval_packet",
 ]

@@ -107,6 +107,8 @@ retrieval_inference:
       Vector retrieval is appropriate for semantic neighborhoods, paraphrase, conceptual affinity, or evidence whose wording is not known.
       Graph discovery or relation-occurrence lookup is appropriate when the advertised graph representation can expose the needed entities, semantic nodes, or relations.
 
+      Temporal access is chronological access over the licensed native date field. Use it only when the chronological relation itself is the evidence sought. Conversation-established literal dates may be used as anchors. Do not use temporal access to imply relevance, similarity, influence, composition, or causation; chronological proximity does not establish causation.
+
       Do not use a surface merely because it is available.
 
     7. Check the proposal against the actual question.
