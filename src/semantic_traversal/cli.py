@@ -36,7 +36,6 @@ from .runtime.retrieval.control_plane import conform_retrieval
 from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
 from .runtime.router import route_conversation
 from .runtime.retrieval.inference import infer_retrieval
-from .runtime.turn import execute_turn
 
 
 class CliError(ValueError):
@@ -413,33 +412,6 @@ def _runtime_retrieval_infer(args: argparse.Namespace) -> None:
     _load_model_execution_dotenv()
     _emit(infer_retrieval(args.database, config, args.catalog, args.router_run_id), args)
 
-def _runtime_turn_run(args: argparse.Namespace) -> None:
-    config = load_runtime_config(args.config)
-    _load_model_execution_dotenv()
-    result = execute_turn(
-        args.database, config, args.conversation_id,
-        retrieval_build=args.build, ollama_url=args.ollama_url,
-    )
-    if args.json:
-        coverage = result.packet_assembly.packet.coverage if result.packet_assembly is not None else None
-        _emit({
-            "conversation_id": result.conversation_id,
-            "trigger_message_id": result.trigger_message_id,
-            "route": result.route,
-            "router_run_id": result.router_result.run_id,
-            "retrieval_run_id": result.retrieval_inference_result.run_id if result.retrieval_inference_result else None,
-            "conformance_id": result.conformance_result.conformance_id if result.conformance_result else None,
-            "execution_id": result.execution_result.execution_id if result.execution_result else None,
-            "retrieval_package_id": result.execution_result.retrieval_package_id if result.execution_result else None,
-            "packet_selected_occurrences": coverage.selected_occurrences if coverage else None,
-            "packet_omitted_occurrences": coverage.omitted_occurrences if coverage else None,
-            "synthesis_run_id": result.synthesis_result.run_id,
-            "produced_message_id": result.synthesis_result.produced_message_id,
-            "response_text": result.synthesis_result.response_text,
-        }, args)
-    else:
-        sys.stdout.write(result.synthesis_result.response_text or "")
-
 def _add_build(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--vault", required=True); parser.add_argument("--config", required=True); parser.add_argument("--output", required=True); parser.add_argument("--ollama-url", default="http://127.0.0.1:11434"); parser.add_argument("--json", action="store_true")
 
@@ -492,8 +464,6 @@ def _parser() -> argparse.ArgumentParser:
     a = rrouter.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_router_infer)
     retrieval = rsub.add_parser("retrieval-inference"); rretrieval = retrieval.add_subparsers(dest="retrieval_command", required=True)
     a = rretrieval.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--catalog", required=True); a.add_argument("--router-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_retrieval_infer)
-    turn = rsub.add_parser("turn"); tturn = turn.add_subparsers(dest="turn_command", required=True)
-    a = tturn.add_parser("run"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--build", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--ollama-url", default="http://127.0.0.1:11434"); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_turn_run)
     control_plane = rsub.add_parser("control-plane"); cpsub = control_plane.add_subparsers(dest="control_plane_command", required=True)
     a = cpsub.add_parser("conform"); a.add_argument("--database", required=True); a.add_argument("--catalog", required=True); a.add_argument("--retrieval-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_control_plane_conform)
     return p

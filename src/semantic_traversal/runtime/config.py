@@ -25,24 +25,9 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
-class PacketConfig:
-    """Runtime-only retrieval-packet capacity policy."""
-
-    max_occurrences: int
-
-    def __post_init__(self) -> None:
-        if isinstance(self.max_occurrences, bool) or not isinstance(self.max_occurrences, int):
-            raise RuntimeConfigError("packet max_occurrences must be an integer")
-        if self.max_occurrences <= 0:
-            raise RuntimeConfigError("packet max_occurrences must be positive")
-
-
-@dataclass(frozen=True)
 class RuntimeConfig:
     router: ModelConfig
     retrieval_inference: ModelConfig
-    packet: PacketConfig
-    synthesis: ModelConfig
 
 
 def _load_values(path: str | Path) -> dict[str, Any]:
@@ -63,9 +48,9 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     """Load the complete runtime configuration without reading credentials."""
 
     values = _load_values(path)
-    if set(values) != {"router", "retrieval_inference", "packet", "synthesis"}:
+    if set(values) != {"router", "retrieval_inference"}:
         raise RuntimeConfigError(
-            "runtime configuration must contain exactly router, retrieval_inference, packet, and synthesis sections"
+            "runtime configuration must contain exactly router and retrieval_inference sections"
         )
 
     def parse_section(section_name: str) -> ModelConfig:
@@ -93,15 +78,10 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             raise RuntimeConfigError(f"runtime {section_name} prompt must be non-empty text")
         return ModelConfig(provider, model, float(timeout_seconds), prompt)
 
-    packet = values["packet"]
-    if not isinstance(packet, dict) or set(packet) != {"max_occurrences"}:
-        raise RuntimeConfigError("runtime packet configuration requires only max_occurrences")
     return RuntimeConfig(
         parse_section("router"),
         parse_section("retrieval_inference"),
-        PacketConfig(packet["max_occurrences"]),
-        parse_section("synthesis"),
     )
 
 
-__all__ = ["ModelConfig", "PacketConfig", "RuntimeConfig", "RuntimeConfigError", "load_runtime_config"]
+__all__ = ["ModelConfig", "RuntimeConfig", "RuntimeConfigError", "load_runtime_config"]

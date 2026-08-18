@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import Any, Sequence
 
 import openai
 
@@ -16,10 +16,6 @@ from .retrieval.requests import (
     canonicalize_retrieval_requests,
     retrieval_proposal_schema,
 )
-
-if TYPE_CHECKING:
-    from .synthesis import SynthesisInput, SynthesisProviderResult
-
 
 class OpenAIProviderError(RuntimeError):
     """A provider attempt failed with a narrow operational classification."""
@@ -189,48 +185,6 @@ class OpenAIResponsesProvider:
         output_json = json.dumps({"requests": list(requests)}, ensure_ascii=False, separators=(",", ":"))
         response_id = getattr(response, "id", None)
         return RetrievalProviderInference(requests, output_json, response_id if isinstance(response_id, str) else None, _usage(response))
-
-    def synthesize(self, model_config: ModelConfig, synthesis_input: "SynthesisInput") -> "SynthesisProviderResult":
-        """Send the already-canonical synthesis artifact as one model input string."""
-        from .synthesis import SynthesisProviderError, SynthesisProviderResult, SynthesisUsage, serialize_synthesis_input
-
-        input_text = serialize_synthesis_input(synthesis_input)
-        try:
-            client = openai.OpenAI(max_retries=0, timeout=model_config.timeout_seconds)
-            response = client.responses.create(
-                model=model_config.model,
-                instructions=model_config.prompt,
-                input=input_text,
-                store=False,
-                truncation="disabled",
-            )
-        except openai.OpenAIError as exc:
-            raise SynthesisProviderError(_classify_provider_error(exc), _safe_message(exc)) from exc
-
-        status = getattr(response, "status", None)
-        if status != "completed":
-            details = getattr(response, "incomplete_details", None)
-            reason = getattr(details, "reason", None) if details is not None else None
-            suffix = f"; reason={reason}" if reason is not None else ""
-            raise SynthesisProviderError("provider_status", f"synthesis response was not completed: status={status!r}{suffix}")
-
-        response_text = getattr(response, "output_text", None)
-        if not isinstance(response_text, str):
-            raise SynthesisProviderError("structured_output", "provider returned non-text synthesis output")
-        response_id = getattr(response, "id", None)
-        usage = _usage(response)
-        return SynthesisProviderResult(
-            response_text=response_text,
-            provider_response_id=response_id if isinstance(response_id, str) else None,
-            usage=SynthesisUsage(
-                input_tokens=usage.input_tokens,
-                cached_input_tokens=usage.cached_input_tokens,
-                output_tokens=usage.output_tokens,
-                reasoning_tokens=usage.reasoning_tokens,
-                total_tokens=usage.total_tokens,
-            ),
-        )
-
 
 __all__ = [
     "OpenAIProviderError",

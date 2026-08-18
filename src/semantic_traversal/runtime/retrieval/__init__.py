@@ -1,4 +1,4 @@
-"""Retrieval inference, authority, execution, and hydration."""
+"""Retrieval inference, authority, execution, and candidate composition/selection."""
 
 from .control_plane import (
     ConformanceRequestResult,
@@ -13,25 +13,6 @@ from .execution import (
     RetrievalExecutionResult,
     execute_retrieval,
     load_retrieval_execution,
-)
-from .hydration import (
-    HydratedCanonicalTarget,
-    HydratedExactHit,
-    HydratedExactResult,
-    HydratedGraphDiscoveryHit,
-    HydratedGraphDiscoveryResult,
-    HydratedGraphOccurrence,
-    HydratedGraphRelationResult,
-    HydratedLexicalHit,
-    HydratedLexicalResult,
-    HydratedTemporalHit,
-    HydratedTemporalResult,
-    HydratedRequestResult,
-    HydratedRetrievalResult,
-    HydratedVectorHit,
-    HydratedVectorResult,
-    RetrievalHydrationError,
-    hydrate_retrieval_execution,
 )
 from .inference import RetrievalInferenceResult, RuntimeRetrievalError, infer_retrieval
 from .package import (
@@ -50,13 +31,6 @@ from .package_verification import (
     VerifiedRetrievalPackage,
     normalize_verified_retrieval_package,
     verify_retrieval_package,
-)
-from .packet import (
-    PACKET_CONTRACT_VERSION, SELECTION_RULE_VERSION, CanonicalTargetPayload, CanonicalTargetRef,
-    ExactOccurrence, GraphDiscoveryOccurrence, GraphRelationOccurrence, LexicalOccurrence,
-    TemporalOccurrence,
-    PacketAssemblyResult, PacketCoverage, PacketOccurrence, RemovalRecord, RequestCoverage,
-    RetrievalPacket, RetrievalPacketError, VectorOccurrence, assemble_retrieval_packet,
 )
 
 from .candidates import (
@@ -83,23 +57,6 @@ __all__ = [
     "RetrievalExecutionResult",
     "execute_retrieval",
     "load_retrieval_execution",
-    "HydratedCanonicalTarget",
-    "HydratedExactHit",
-    "HydratedExactResult",
-    "HydratedGraphDiscoveryHit",
-    "HydratedGraphDiscoveryResult",
-    "HydratedGraphOccurrence",
-    "HydratedGraphRelationResult",
-    "HydratedLexicalHit",
-    "HydratedLexicalResult",
-    "HydratedTemporalHit",
-    "HydratedTemporalResult",
-    "HydratedRequestResult",
-    "HydratedRetrievalResult",
-    "HydratedVectorHit",
-    "HydratedVectorResult",
-    "RetrievalHydrationError",
-    "hydrate_retrieval_execution",
     "RetrievalInferenceResult",
     "RuntimeRetrievalError",
     "infer_retrieval",
@@ -116,11 +73,6 @@ __all__ = [
     "VerifiedRetrievalPackage",
     "normalize_verified_retrieval_package",
     "verify_retrieval_package",
-    "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
-    "CanonicalTargetRef", "CanonicalTargetPayload", "PacketOccurrence", "ExactOccurrence",
-    "LexicalOccurrence", "TemporalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
-    "RequestCoverage", "PacketCoverage", "RemovalRecord", "RetrievalPacket", "PacketAssemblyResult",
-    "assemble_retrieval_packet",
     "CANDIDATE_WORKSPACE_CONTRACT_VERSION", "CandidateCompositionError", "CandidateRef", "CandidateSupport",
     "ExactSupport", "LexicalSupport", "TemporalSupport", "VectorSupport", "GraphDiscoverySupport", "Candidate",
     "RelationEvidence", "WorkspaceOccurrence", "CandidateWorkspaceRequest", "CandidateWorkspace",

@@ -551,8 +551,8 @@ Graph relation occurrences remain relation evidence connecting two endpoint
 candidates; the edge is not collapsed into either endpoint. Composition performs
 no filtering, ranking, cross-surface scoring, candidate bound, or canonical
 hydration. Candidate selection, compact synthesis evidence, and moving hydration
-are later passes. The existing execution, hydration, packet, and synthesis
-production path remains unchanged.
+are later passes. The former packet and synthesis production path is retired;
+the lower execution-to-selection boundary is the accepted current runtime.
 
 ## Candidate Selection v1
 Candidate Selection v1 is the pure, deterministic bounded transform from one
@@ -574,3 +574,26 @@ closure, and the selected count may reach `max_candidates + 1`. This closure can
 occur at most once. Selection performs no hydration, inference, persistence, or
 production orchestration change; selected candidates retain identity and
 composed retrieval evidence only.
+
+## Reconstruction boundary before 3C
+
+The accepted lower runtime boundary is:
+
+```text
+retrieval execution → Candidate Composition v1 → Candidate Selection v1
+```
+
+The former upper runtime is retired: occurrence-oriented retrieval hydration,
+`retrieval-packet-v1`, `request-round-robin-v1`, packet occurrence bounds,
+packet-facing synthesis, and the old full-turn orchestration are not current
+production paths. There is intentionally no production full-turn path above
+Candidate Selection in this state.
+
+The future sequence is selected-candidate hydration → evidence projection →
+synthesis → restored orchestration. That future work is not implemented here.
+Its hydration proof obligations are: unit targets reconstruct with their
+owning object, object targets reconstruct as objects, region targets
+reconstruct with their owning object, scope targets reconstruct only as a
+`GraphHandle`, each selected target hydrates once, relation endpoints are
+represented without traversal, contradictions hard-fail, provenance survives,
+reconstruction is complete, and trimming remains deferred.
