@@ -221,6 +221,7 @@ class CapabilityFactsTests(unittest.TestCase):
                     "lexical": ["terms", "phrase"],
                     "vector": ["semantic_similarity"],
                     "graph": ["node_discovery", "relation_occurrence_lookup", "inbound_traversal", "outbound_traversal"],
+                    "temporal": ["earliest", "latest", "before", "after", "between", "ordered"],
                 },
             )
 

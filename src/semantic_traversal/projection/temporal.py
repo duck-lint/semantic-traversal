@@ -116,13 +116,21 @@ def _hits(connection: sqlite3.Connection, where: str = "", params: tuple[object,
 
 def earliest(connection: sqlite3.Connection, field_name: str = TEMPORAL_FIELD_NAME) -> tuple[TemporalHit, ...]:
     _check_dimension(connection, field_name)
-    row = connection.execute("SELECT MIN(date_value) FROM temporal_index_entries").fetchone()
+    row = connection.execute(
+        """SELECT MIN(date_value) FROM temporal_index_entries
+        WHERE field_class = ? AND field_name = ? AND domain = ?""",
+        (TEMPORAL_FIELD_CLASS, TEMPORAL_FIELD_NAME, TEMPORAL_DOMAIN),
+    ).fetchone()
     return () if row[0] is None else _hits(connection, "AND date_value = ?", (row[0],), "unit_id ASC")
 
 
 def latest(connection: sqlite3.Connection, field_name: str = TEMPORAL_FIELD_NAME) -> tuple[TemporalHit, ...]:
     _check_dimension(connection, field_name)
-    row = connection.execute("SELECT MAX(date_value) FROM temporal_index_entries").fetchone()
+    row = connection.execute(
+        """SELECT MAX(date_value) FROM temporal_index_entries
+        WHERE field_class = ? AND field_name = ? AND domain = ?""",
+        (TEMPORAL_FIELD_CLASS, TEMPORAL_FIELD_NAME, TEMPORAL_DOMAIN),
+    ).fetchone()
     return () if row[0] is None else _hits(connection, "AND date_value = ?", (row[0],), "unit_id ASC")
 
 
