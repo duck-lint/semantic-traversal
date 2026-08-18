@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
+import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -281,6 +282,8 @@ def compose_candidate_workspace(execution_result: RetrievalExecutionResult) -> C
     """Compose all succeeded execution occurrences without admission policy."""
     if not isinstance(execution_result, RetrievalExecutionResult):
         raise TypeError("execution_result must be RetrievalExecutionResult")
+    if execution_result.status not in {"succeeded", "failed"}:
+        raise _error("candidate composition requires a completed execution")
     candidate_order: list[CandidateRef] = []
     supports: dict[CandidateRef, list[CandidateSupport]] = {}
     relations: list[RelationEvidence] = []
@@ -322,7 +325,10 @@ def compose_candidate_workspace(execution_result: RetrievalExecutionResult) -> C
                     elif kind == "temporal":
                         _keys(item, {"unit_id", "date"}, "temporal hit")
                         unit_id = _int(item["unit_id"], "temporal unit ID")
-                        try: temporal_date = dt.date.fromisoformat(_text(item["date"], "temporal date"))
+                        temporal_text = _text(item["date"], "temporal date")
+                        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", temporal_text) is None:
+                            raise _error("temporal date is not an exact YYYY-MM-DD value")
+                        try: temporal_date = dt.date.fromisoformat(temporal_text)
                         except ValueError as exc: raise _error("temporal date is malformed") from exc
                         ref = _target_ref("semantic_unit", unit_id); admit(ref)
                         supports[ref].append(TemporalSupport(request.ordinal, index, operator, unit_id, temporal_date))
