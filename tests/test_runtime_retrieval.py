@@ -65,6 +65,41 @@ class RuntimeRetrievalTests(unittest.TestCase):
                 "target": "complete_value",
                 "operand": {"shape": "scalar", "domain": "mapping", "value": {"label": "value"}},
             })
+
+    def test_temporal_requests_have_closed_date_grammar(self):
+        base = {
+            "field_class": "semantic_identifier",
+            "field_name": "journal_entry_date",
+            "target": "complete_value",
+        }
+        self.assertEqual(
+            canonicalize_retrieval_request({"operator": "temporal.earliest", **base}),
+            {"operator": "temporal.earliest", **base},
+        )
+        for operator in ("temporal.before", "temporal.after"):
+            self.assertEqual(
+                canonicalize_retrieval_request({"operator": operator, **base, "anchor": {"domain": "date", "value": "2026-04-16"}})["anchor"],
+                {"domain": "date", "value": "2026-04-16"},
+            )
+        self.assertEqual(
+            canonicalize_retrieval_request({"operator": "temporal.between", **base, "start": {"domain": "date", "value": "2026-04-16"}, "end": {"domain": "date", "value": "2026-04-17"}})["operator"],
+            "temporal.between",
+        )
+        self.assertEqual(
+            canonicalize_retrieval_request({"operator": "temporal.ordered", **base, "direction": "descending"})["direction"],
+            "descending",
+        )
+        invalid = [
+            {"operator": "temporal.before", **base, "anchor": {"domain": "date", "value": "2026-02-30"}},
+            {"operator": "temporal.before", **base, "anchor": {"domain": "date", "value": "2026-04-16T00:00:00"}},
+            {"operator": "temporal.before", **base, "anchor": {"domain": "string", "value": "2026-04-16"}},
+            {"operator": "temporal.between", **base, "start": {"domain": "date", "value": "2026-04-17"}, "end": {"domain": "date", "value": "2026-04-16"}},
+            {"operator": "temporal.ordered", **base, "direction": "nearest"},
+            {"operator": "temporal.latest", **base, "operand": "unexpected"},
+        ]
+        for request in invalid:
+            with self.subTest(request=request), self.assertRaises(RetrievalRequestError):
+                canonicalize_retrieval_request(request)
     def test_config_has_two_exact_model_sections_and_hashes_exact_prompt_bytes(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
