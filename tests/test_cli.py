@@ -127,8 +127,16 @@ class CliTests(unittest.TestCase):
                 code, stdout, _ = self._run("inspect", "unit", "--build", str(output), "--unit-id", "1", "--json")
                 self.assertEqual(code, 0)
                 self.assertEqual(json.loads(stdout)["unit_id"], 1)
-                code, _, _ = self._run("inspect", "verify", "--build", str(output), "--json")
+                code, stdout, _ = self._run("inspect", "verify", "--build", str(output), "--json")
                 self.assertEqual(code, 0)
+                self.assertEqual(json.loads(stdout), {
+                    "foreign_keys": 0,
+                    "lexical_integrity": 0,
+                    "graph_integrity": 0,
+                    "temporal_integrity": 0,
+                    "hydration": "ok",
+                    "vector": "ok",
+                })
                 code, stdout, _ = self._run("inspect", "artifacts", "--build", str(output), "--json")
                 self.assertEqual(code, 0)
                 artifacts = json.loads(stdout)

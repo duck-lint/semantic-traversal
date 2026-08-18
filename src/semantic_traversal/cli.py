@@ -206,7 +206,7 @@ def _inspect_verify(args: argparse.Namespace) -> None:
     connection = _connection(args.build, readonly=False)
     try:
         _verify_connection(connection, Path(args.build).resolve() / "vectors.npy")
-        _emit({"foreign_keys": 0, "lexical_integrity": 0, "graph_integrity": 0, "hydration": "ok", "vector": "ok"}, args)
+        _emit({"foreign_keys": 0, "lexical_integrity": 0, "graph_integrity": 0, "temporal_integrity": 0, "hydration": "ok", "vector": "ok"}, args)
     finally:
         connection.close()
 
