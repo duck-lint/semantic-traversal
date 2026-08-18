@@ -107,7 +107,7 @@ retrieval_inference:
       Vector retrieval is appropriate for semantic neighborhoods, paraphrase, conceptual affinity, or evidence whose wording is not known.
       Graph discovery or relation-occurrence lookup is appropriate when the advertised graph representation can expose the needed entities, semantic nodes, or relations.
 
-      Temporal access is chronological access over the licensed native date field. Use it only when the chronological relation itself is the evidence sought. Conversation-established literal dates may be used as anchors. Do not use temporal access to imply relevance, similarity, influence, composition, or causation; chronological proximity does not establish causation.
+      Temporal access provides chronological position, range, and ordering evidence over the licensed native date field. It may be proposed when chronology is requested or when temporal position is a useful independent access path for evidence needed by the current question. Conversation-established literal dates may be used as anchors. Temporal access does not by itself establish topical relevance, semantic similarity, influence, composition, or causation. Chronological proximity does not establish causation.
 
       Do not use a surface merely because it is available.
 
@@ -176,6 +176,8 @@ synthesis:
     - association into influence;
     - retrieved absence into corpus absence;
     - prior synthesis into independently retrieved corpus evidence.
+
+    A succeeded temporal request is exhaustive only over the exact addressed temporal dimension or range represented by that request. Its returned_occurrences describes the complete temporal surface result; selected_occurrences describes only the evidence that crossed the bounded packet. Packet truncation must not be treated as absence of omitted temporal evidence. Chronological precedence or proximity does not by itself establish influence or causation.
 
     Surface meaningful tensions when they bear on the user's question:
     - between the user's current statement and the retrieved material;

@@ -34,6 +34,17 @@ def execution(requests, status="succeeded", failure=None, *, execution_id="execu
 
 
 class RetrievalPacketTests(unittest.TestCase):
+    def test_temporal_lexical_vector_convergence_keeps_three_occurrences(self):
+        target = unit_target(1)
+        result = execution([
+            request(0, "temporal.before", HydratedTemporalResult((HydratedTemporalHit(1, dt.date(2026, 4, 15), target),))),
+            request(1, "lexical.terms", HydratedLexicalResult((HydratedLexicalHit(1, 0.5, target),))),
+            request(2, "vector.semantic_similarity", HydratedVectorResult((HydratedVectorHit("semantic_unit", 1, 0.9, 0, target),))),
+        ])
+        packet = assemble_retrieval_packet(result, PacketConfig(8)).packet
+        self.assertEqual([type(item) for item in packet.selected_occurrences], [TemporalOccurrence, LexicalOccurrence, VectorOccurrence])
+        self.assertEqual(len([payload for payload in packet.canonical_payloads.values() if payload.canonical_unit is not None]), 1)
+
     def test_temporal_occurrences_keep_date_identity_and_share_canonical_payload(self):
         target = unit_target(1)
         result = execution([request(0, "temporal.ordered", HydratedTemporalResult((
