@@ -575,6 +575,31 @@ occur at most once. Selection performs no hydration, inference, persistence, or
 production orchestration change; selected candidates retain identity and
 composed retrieval evidence only.
 
+## Selected-Candidate Hydration v1
+
+Selected-Candidate Hydration v1 takes exactly one `CandidateSelection` and one
+`VerifiedRetrievalPackage`. It hydrates selected canonical targets, not
+retrieval occurrences. Each selected canonical candidate is hydrated exactly
+once; all composed retrieval support remains attached unchanged,
+`CandidateSelection` remains intact and authoritative, and relation evidence
+is carried unchanged. Hydration performs no graph traversal, candidate
+expansion, ranking, selection, filtering, fusion, trimming, or synthesis.
+
+Canonical reconstruction is complete; context trimming is deferred to evidence
+projection. A canonical contradiction hard-fails the whole transform, and no
+partial `HydratedCandidateSelection` is returned. Upstream retrieval execution
+failure does not by itself prevent hydration of successfully selected evidence.
+Hydration is nonpersistent derived turn state with no runtime-config policy,
+and no production orchestration exists above this stage yet.
+
+The fixed `retrieval_package_id` identifies the verified retrieval artifact set,
+not one turn's selected or synthesized evidence. The same package identity may
+legitimately appear across multiple turns using the same build. Future
+orchestration/reporting must distinguish fixed package identity from
+turn-specific execution, selection, and evidence lineage; repeated package
+identity must not imply repeated turn evidence. This pass invents no per-turn
+package identity and changes no reporting.
+
 ## Reconstruction boundary before 3C
 
 The accepted lower runtime boundary is:

@@ -45,6 +45,12 @@ from .selection import (
     CandidateSelectionError, SelectionCoverage, SelectionRequestCoverage,
     candidate_selection_json, select_candidates, serialize_candidate_selection,
 )
+from .candidate_hydration import (
+    CANDIDATE_HYDRATION_CONTRACT_VERSION, CandidateHydrationError,
+    HydratedCanonicalTarget, HydratedCandidate, HydratedCandidateSelection,
+    HydratedObjectTarget, HydratedRegionTarget, HydratedScopeTarget, HydratedUnitTarget,
+    hydrate_candidate_selection,
+)
 
 __all__ = [
     "ConformanceRequestResult",
@@ -80,4 +86,8 @@ __all__ = [
     "CANDIDATE_SELECTION_CONTRACT_VERSION", "CandidateSelectionError", "CandidateAdmission",
     "SelectionRequestCoverage", "SelectionCoverage", "CandidateSelection",
     "select_candidates", "candidate_selection_json", "serialize_candidate_selection",
+    "CANDIDATE_HYDRATION_CONTRACT_VERSION", "CandidateHydrationError",
+    "HydratedCanonicalTarget", "HydratedUnitTarget", "HydratedObjectTarget",
+    "HydratedRegionTarget", "HydratedScopeTarget", "HydratedCandidate",
+    "HydratedCandidateSelection", "hydrate_candidate_selection",
 ]

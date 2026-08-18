@@ -26,6 +26,10 @@ from .retrieval.execution import (
 )
 from .retrieval.candidates import CandidateWorkspace, compose_candidate_workspace
 from .retrieval.selection import CandidateSelection, select_candidates
+from .retrieval.candidate_hydration import (
+    CandidateHydrationError, HydratedCandidate, HydratedCandidateSelection,
+    hydrate_candidate_selection,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -40,4 +44,6 @@ __all__ = [
     "RetrievalExecutionResult", "execute_retrieval", "load_retrieval_execution",
     "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
     "CandidateWorkspace", "compose_candidate_workspace", "CandidateSelection", "select_candidates",
+    "CandidateHydrationError", "HydratedCandidate", "HydratedCandidateSelection",
+    "hydrate_candidate_selection",
 ]
