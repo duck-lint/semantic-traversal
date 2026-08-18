@@ -553,3 +553,24 @@ no filtering, ranking, cross-surface scoring, candidate bound, or canonical
 hydration. Candidate selection, compact synthesis evidence, and moving hydration
 are later passes. The existing execution, hydration, packet, and synthesis
 production path remains unchanged.
+
+## Candidate Selection v1
+Candidate Selection v1 is the pure, deterministic bounded transform from one
+complete `CandidateWorkspace`, versioned as `candidate-selection-v1`. It bounds
+unique canonical candidates, preserves every native request lane, and traverses
+those lanes breadth-first by request ordinal and native occurrence order.
+Candidate identity is globally deduplicated; a candidate consumes capacity only
+on first admission and carries all composed unary support already attached to
+it. No score, support count, surface fact, or relation is normalized, compared,
+combined, or used as semantic ranking. `packet.max_occurrences` is not candidate
+capacity, and Pass 3B chooses no runtime-config value.
+
+Graph relation evidence is induced after admission when both endpoint candidates
+are selected, with duplicate relation occurrences preserved. Candidate capacity
+is hard except for one code-owned one-slot endpoint closure: when a relation has
+two distinct unseen endpoints and exactly one normal slot remains, both endpoints
+are admitted in source-then-target order, the target is marked as structural
+closure, and the selected count may reach `max_candidates + 1`. This closure can
+occur at most once. Selection performs no hydration, inference, persistence, or
+production orchestration change; selected candidates retain identity and
+composed retrieval evidence only.

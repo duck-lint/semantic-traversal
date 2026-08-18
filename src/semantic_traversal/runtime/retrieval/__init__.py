@@ -66,6 +66,11 @@ from .candidates import (
     TemporalSupport, VectorSupport, WorkspaceOccurrence, candidate_workspace_json,
     compose_candidate_workspace, serialize_candidate_workspace,
 )
+from .selection import (
+    CANDIDATE_SELECTION_CONTRACT_VERSION, CandidateAdmission, CandidateSelection,
+    CandidateSelectionError, SelectionCoverage, SelectionRequestCoverage,
+    candidate_selection_json, select_candidates, serialize_candidate_selection,
+)
 
 __all__ = [
     "ConformanceRequestResult",
@@ -120,4 +125,7 @@ __all__ = [
     "ExactSupport", "LexicalSupport", "TemporalSupport", "VectorSupport", "GraphDiscoverySupport", "Candidate",
     "RelationEvidence", "WorkspaceOccurrence", "CandidateWorkspaceRequest", "CandidateWorkspace",
     "compose_candidate_workspace", "candidate_workspace_json", "serialize_candidate_workspace",
+    "CANDIDATE_SELECTION_CONTRACT_VERSION", "CandidateSelectionError", "CandidateAdmission",
+    "SelectionRequestCoverage", "SelectionCoverage", "CandidateSelection",
+    "select_candidates", "candidate_selection_json", "serialize_candidate_selection",
 ]
