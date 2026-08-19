@@ -566,8 +566,8 @@ from unit, object, and region topology; scope targets have no owner.
 The transform receives `max_candidates` and an explicit
 `protected_owner_fraction`. The fraction is finite, numeric, not boolean, and
 strictly within `(0, 1]`; the protected owner limit is
-`ceil(max_candidates * protected_owner_fraction)`. No value is supplied by
-`RuntimeConfig` yet. Candidate identity is globally deduplicated, and every
+`ceil(max_candidates * protected_owner_fraction)`. RuntimeConfig supplies these
+mechanical values through its `candidate_selection` section. Candidate identity is globally deduplicated, and every
 selected candidate retains all composed unary support already attached to it.
 No score, support count, surface fact, or relation is normalized, compared,
 combined, or used as semantic ranking. `packet.max_occurrences` is not
@@ -636,7 +636,8 @@ production paths. There is intentionally no production full-turn path above
 Candidate Selection in this state.
 
 The future sequence is selected-candidate hydration → evidence projection →
-synthesis → restored orchestration. That future work is not implemented here.
+provider-neutral synthesis → restored orchestration. Only the restored
+full-turn orchestration remains outside this bounded runtime pass.
 Its hydration proof obligations are: unit targets reconstruct with their
 owning object, object targets reconstruct as objects, region targets
 reconstruct with their owning object, scope targets reconstruct only as a
@@ -760,3 +761,32 @@ but wording, abstraction, emphasis, or temporal perspective alone is not a
 contradiction. Cross-surface fusion, score normalization, RRF, support-count
 ranking, and confidence multipliers are not required by this architecture and
 are not part of this contract.
+
+## Provider-neutral synthesis runtime
+
+Runtime configuration now has four exact sections: `router`,
+`retrieval_inference`, `candidate_selection`, and `synthesis`. The synthesis
+section uses the existing `ModelConfig` shape. The provider-neutral runtime
+accepts a persisted succeeded router run and an explicitly injected
+`SynthesisProvider`; it does not construct a provider, execute retrieval, call
+`prepare_evidence`, or perform transport-specific role mapping.
+
+For a direct route, the synthesis model run is parented to the router run and
+receives no evidence. For semantic retrieval, it is parented to the persisted
+retrieval-inference run selected by `EvidenceProjection.source.selection`.
+That source is validated against the persisted conformance and execution
+lineage, including package identity, hashes, contracts, and terminal execution
+status; failed retrieval execution remains admissible when the projection
+contains a valid succeeded prefix.
+
+The runtime claims one synthesis attempt under a SQLite write lock, stores the
+exact canonical `SynthesisInput` JSON and its canonical-input SHA-256, commits
+the claim, and invokes the injected provider outside the write transaction.
+Successful message insertion and model-run completion are one atomic
+transaction. Provider failures and invalid provider results mark the attempt
+failed without appending a synthesis message. A valid success is idempotent by
+conversation and trigger message, failed attempts may retry, and a running
+claim prevents a duplicate provider call. A conversation mutation during
+provider execution invalidates the stale answer. `EvidenceProjection` remains
+derived nonpersistent state, schema version remains 6, and no synthesis
+transport adapter or full-turn orchestration is part of this boundary.

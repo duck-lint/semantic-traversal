@@ -38,6 +38,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
             ModelConfig("openai", "router-model", 3.0, "router prompt\n"),
             ModelConfig("openai", "retrieval-model", 4.0, "retrieval prompt\n"),
             CandidateSelectionConfig(120, 0.20),
+            ModelConfig("openai", "synthesis-model", 5.0, "synthesis prompt\n"),
         )
 
     def catalog(self, directory):
@@ -103,7 +104,7 @@ class RuntimeRetrievalTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n",
+                "router:\n  provider: openai\n  model: m\n  timeout_seconds: 1\n  prompt: |\n    line  \nretrieval_inference:\n  provider: openai\n  model: m2\n  timeout_seconds: 2\n  prompt: retrieval\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\nsynthesis:\n  provider: openai\n  model: synthesis\n  timeout_seconds: 3\n  prompt: synthesis\n",
                 encoding="utf-8",
             )
             config = load_runtime_config(path)

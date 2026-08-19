@@ -54,6 +54,7 @@ class TemporalRuntimeTests(unittest.TestCase):
             ModelConfig("openai", "router", 1.0, "router prompt"),
             ModelConfig("openai", "retrieval", 1.0, "retrieval prompt"),
             CandidateSelectionConfig(120, 0.20),
+            ModelConfig("openai", "synthesis", 1.0, "synthesis prompt"),
         )
 
     def _prepared(self, name: str, requests: list[dict[str, object]]):

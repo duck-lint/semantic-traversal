@@ -34,6 +34,7 @@ from semantic_traversal.runtime.prompts import prompt_version
 
 ROUTER_PROMPT_V1 = load_runtime_config(Path(__file__).parents[1] / "docs" / "runtime_config.yaml").router.prompt
 ROUTER_PROMPT_VERSION = prompt_version(ROUTER_PROMPT_V1)
+SYNTHESIS_CONFIG = "synthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 9.5\n  prompt: synthesis prompt\n"
 
 
 
@@ -56,6 +57,7 @@ class RuntimeRouterTests(unittest.TestCase):
             ModelConfig("openai", "explicit-model-id", 7.5, ROUTER_PROMPT_V1),
             ModelConfig("openai", "retrieval-model", 8.5, "retrieval test prompt"),
             CandidateSelectionConfig(120, 0.20),
+            ModelConfig("openai", "synthesis-model", 9.5, "synthesis test prompt"),
         )
 
     def _clock(self, seconds=0):
@@ -91,7 +93,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: explicit-model-id\n  timeout_seconds: 7.5\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 8.5\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n",
+                "router:\n  provider: openai\n  model: explicit-model-id\n  timeout_seconds: 7.5\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 8.5\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
                 encoding="utf-8",
             )
             loaded = load_runtime_config(path)
@@ -99,10 +101,10 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertEqual(loaded.router.prompt, "router prompt")
             self.assertEqual(loaded.retrieval_inference.prompt, "retrieval prompt")
             for invalid in (
-                "router: {}\nretrieval_inference: {}\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n",
-                "router:\n  provider: other\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n",
-                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n",
-                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 0\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n",
+                "router: {}\nretrieval_inference: {}\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
+                "router:\n  provider: other\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
+                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
+                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 0\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
             ):
                 path.write_text(invalid, encoding="utf-8")
                 with self.subTest(invalid=invalid), self.assertRaises(RuntimeConfigError):
@@ -351,7 +353,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
             config = Path(directory) / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             initialize_runtime(database)
             conversation = create_conversation(database)
             append_message(database, conversation.conversation_id, "user", "hello")
@@ -365,7 +367,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cwd = Path(directory)
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
             with patch.dict(os.environ, {"OPENAI_API_KEY": "process-key"}), patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.route_conversation", return_value=self._stub_router_result()):
                 code = main(["runtime", "router", "infer", "--database", str(cwd / "runtime.sqlite3"), "--config", str(config), "--conversation-id", "conversation", "--json"])
@@ -376,7 +378,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cwd = Path(directory)
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
@@ -391,7 +393,7 @@ class RuntimeRouterTests(unittest.TestCase):
             cwd = parent / "child"
             cwd.mkdir()
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             (parent / ".env").write_text("OPENAI_API_KEY=parent-key\n", encoding="utf-8")
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
