@@ -202,6 +202,14 @@ def _relation(relation: CanonicalRelation | CanonicalObjectRelation) -> Mapping[
     return result
 
 
+def _object_relations(object_: CanonicalObject) -> tuple[Mapping[str, Any], ...]:
+    """Project object-owned relations and enforce their canonical ownership."""
+    for relation in object_.relations:
+        if relation.origin != "frontmatter":
+            raise _fail("object-owned relation does not have frontmatter origin")
+    return tuple(_relation(relation) for relation in object_.relations)
+
+
 def _embed(embed: Embed) -> Mapping[str, Any]:
     return {"target": embed.target, "label": embed.label, "target_region_fragment": embed.target_region_fragment}
 
@@ -273,10 +281,15 @@ def _candidate(candidate: Candidate, target: Any) -> EvidenceCandidate:
             raise _fail("unit owning-object identity mismatch")
         if unit.inherited_identifiers != owner.admitted_identifiers:
             raise _fail("unit inherited identifiers disagree with owning object")
+        unit_frontmatter = tuple(_relation(relation) for relation in unit.relations if relation.origin == "frontmatter")
+        if unit_frontmatter != _object_relations(owner):
+            raise _fail("unit frontmatter relations disagree with owning object")
+        if any(relation.origin not in {"frontmatter", "body"} for relation in unit.relations):
+            raise _fail("unit relation has unsupported authored origin")
         object_ref = owner.source_object_uuid
         source_local_order = unit.source_local_order
         address = _address(owner, unit.region_path)
-        parsed_text, relations, embeds = unit.parsed_text, tuple(_relation(item) for item in unit.relations), tuple(_embed(item) for item in unit.embeds)
+        parsed_text, relations, embeds = unit.parsed_text, tuple(_relation(item) for item in unit.relations if item.origin == "body"), tuple(_embed(item) for item in unit.embeds)
     elif isinstance(target, HydratedRegionTarget):
         region, owner = target.region, target.owning_object
         if candidate.target_ref.identity != (region.reference.source_object_uuid, region.reference.region_path) or region.reference.source_object_uuid != owner.source_object_uuid:
@@ -303,6 +316,8 @@ def project_evidence(hydrated_selection: HydratedCandidateSelection) -> Evidence
         raise _fail("unsupported candidate selection contract")
     if len(hydrated_selection.hydrated_candidates) != len(selection.selected_candidates):
         raise _fail("hydrated candidate count disagrees with selection")
+    if tuple(item.candidate for item in hydrated_selection.hydrated_candidates) != selection.selected_candidates:
+        raise _fail("hydrated candidates disagree with selected candidate order or values")
 
     requests = tuple(EvidenceRequest(item.ordinal, item.request, item.status, item.returned_occurrences, item.failure) for item in selection.requests)
     coverage = EvidenceCoverage(
@@ -325,10 +340,10 @@ def project_evidence(hydrated_selection: HydratedCandidateSelection) -> Evidence
         elif isinstance(hydrated.canonical_target, HydratedRegionTarget): owner = hydrated.canonical_target.owning_object
         elif isinstance(hydrated.canonical_target, HydratedObjectTarget): owner = hydrated.canonical_target.object
         if owner is not None and owner.source_object_uuid not in context_by_uuid:
-            context = EvidenceObjectContext(owner.source_object_uuid, owner.source_path, owner.path_hierarchy, tuple(_field(field) for field in owner.admitted_identifiers), tuple(_relation(relation) for relation in owner.relations))
+            context = EvidenceObjectContext(owner.source_object_uuid, owner.source_path, owner.path_hierarchy, tuple(_field(field) for field in owner.admitted_identifiers), _object_relations(owner))
             context_by_uuid[owner.source_object_uuid] = context
             contexts.append(context)
-        elif owner is not None and context_by_uuid[owner.source_object_uuid] != EvidenceObjectContext(owner.source_object_uuid, owner.source_path, owner.path_hierarchy, tuple(_field(field) for field in owner.admitted_identifiers), tuple(_relation(relation) for relation in owner.relations)):
+        elif owner is not None and context_by_uuid[owner.source_object_uuid] != EvidenceObjectContext(owner.source_object_uuid, owner.source_path, owner.path_hierarchy, tuple(_field(field) for field in owner.admitted_identifiers), _object_relations(owner)):
             raise _fail("conflicting normalized object context")
 
     relations: list[EvidenceRetrievalRelation] = []
