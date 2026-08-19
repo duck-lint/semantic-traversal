@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -18,10 +19,20 @@ from .candidates import (
     CANDIDATE_WORKSPACE_CONTRACT_VERSION, Candidate, CandidateRef,
     CandidateWorkspace, RelationEvidence,
 )
+from .ownership_topology import (
+    CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION,
+    CandidateOwnershipTopology,
+)
 
 
-CANDIDATE_SELECTION_CONTRACT_VERSION = "candidate-selection-v1"
+CANDIDATE_SELECTION_CONTRACT_VERSION = "candidate-selection-v2"
 _GRAPH_RELATION_OPERATOR = "graph.relation_occurrence_lookup"
+_PROTECTED_OPERATORS = frozenset({"lexical.terms", "lexical.phrase", "vector.semantic_similarity"})
+_UNAFFECTED_OPERATORS = frozenset({
+    "exact.equals", "graph.discovery.terms", "graph.discovery.phrase",
+    "graph.relation_occurrence_lookup", "temporal.earliest", "temporal.latest",
+    "temporal.before", "temporal.after", "temporal.between", "temporal.ordered",
+})
 
 
 class CandidateSelectionError(ValueError):
@@ -79,6 +90,10 @@ class CandidateSelection:
     execution_status: str
     execution_failure: Mapping[str, Any] | None
     max_candidates: int
+    topology_contract_version: str
+    protected_owner_fraction: float
+    protected_owner_limit: int
+    owner_depth_fallback_used: bool
     requests: tuple[SelectionRequestCoverage, ...]
     admissions: tuple[CandidateAdmission, ...]
     selected_candidates: tuple[Candidate, ...]
@@ -125,6 +140,46 @@ def _validate_capacity(max_candidates: int) -> None:
         raise CandidateSelectionError("max_candidates must be an integer greater than or equal to zero")
 
 
+def _validate_fraction(protected_owner_fraction: float) -> None:
+    if (
+        isinstance(protected_owner_fraction, bool)
+        or not isinstance(protected_owner_fraction, (int, float))
+        or not math.isfinite(float(protected_owner_fraction))
+        or protected_owner_fraction <= 0
+        or protected_owner_fraction > 1
+    ):
+        raise CandidateSelectionError("protected_owner_fraction must be finite and in the interval (0, 1]")
+
+
+def _validate_topology(workspace: CandidateWorkspace, topology: CandidateOwnershipTopology) -> None:
+    if not isinstance(topology, CandidateOwnershipTopology):
+        raise TypeError("topology must be CandidateOwnershipTopology")
+    if topology.contract_version != CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION:
+        raise CandidateSelectionError("unsupported candidate ownership topology contract")
+    workspace_lineage = (
+        workspace.contract_version, workspace.execution_id, workspace.conformance_id,
+        workspace.retrieval_run_id, workspace.retrieval_proposal_sha256,
+        workspace.capability_catalog_sha256, workspace.retrieval_package_id,
+        workspace.retrieval_package_identity_version, workspace.substrate_sha256,
+        workspace.vectors_sha256, workspace.package_verification_contract_version,
+        workspace.execution_contract_version,
+    )
+    topology_lineage = (
+        topology.workspace_contract_version, topology.execution_id, topology.conformance_id,
+        topology.retrieval_run_id, topology.retrieval_proposal_sha256,
+        topology.capability_catalog_sha256, topology.retrieval_package_id,
+        topology.retrieval_package_identity_version, topology.substrate_sha256,
+        topology.vectors_sha256, topology.package_verification_contract_version,
+        topology.execution_contract_version,
+    )
+    if topology_lineage != workspace_lineage:
+        raise CandidateSelectionError("candidate ownership topology lineage disagrees with workspace")
+    expected = tuple(candidate.target_ref for candidate in workspace.candidates)
+    actual = tuple(entry.target_ref for entry in topology.entries)
+    if actual != expected or len(set(actual)) != len(actual):
+        raise CandidateSelectionError("candidate ownership topology coverage or order disagrees with workspace")
+
+
 def _request_coverage(workspace: CandidateWorkspace) -> tuple[SelectionRequestCoverage, ...]:
     return tuple(
         SelectionRequestCoverage(
@@ -135,19 +190,33 @@ def _request_coverage(workspace: CandidateWorkspace) -> tuple[SelectionRequestCo
     )
 
 
-def select_candidates(workspace: CandidateWorkspace, max_candidates: int) -> CandidateSelection:
-    """Select candidates by breadth-first request-lane admission."""
+def select_candidates(
+    workspace: CandidateWorkspace,
+    topology: CandidateOwnershipTopology,
+    max_candidates: int,
+    protected_owner_fraction: float,
+) -> CandidateSelection:
+    """Select candidates by breadth-first request-lane admission with soft owner depth."""
     if not isinstance(workspace, CandidateWorkspace):
         raise TypeError("workspace must be CandidateWorkspace")
     if workspace.contract_version != CANDIDATE_WORKSPACE_CONTRACT_VERSION:
         raise CandidateSelectionError("unsupported candidate workspace contract")
     _validate_capacity(max_candidates)
+    _validate_fraction(protected_owner_fraction)
+    _validate_topology(workspace, topology)
+    protected_owner_limit = math.ceil(max_candidates * protected_owner_fraction)
+
+    for request in workspace.requests:
+        if request.operator not in _PROTECTED_OPERATORS | _UNAFFECTED_OPERATORS:
+            raise CandidateSelectionError(f"request operator is not classified for owner depth: {request.operator!r}")
 
     candidates_by_ref = {candidate.target_ref: candidate for candidate in workspace.candidates}
     selected_refs: list[CandidateRef] = []
     selected_set: set[CandidateRef] = set()
     admissions: list[CandidateAdmission] = []
     closure_used = False
+    owner_counts: dict[str, int] = {}
+    owner_by_ref = {entry.target_ref: entry.owner_object_uuid for entry in topology.entries}
 
     def admit(
         ref: CandidateRef,
@@ -155,6 +224,8 @@ def select_candidates(workspace: CandidateWorkspace, max_candidates: int) -> Can
         occurrence_ordinal: int,
         trigger_role: str,
         admission_kind: str,
+        *,
+        protected: bool,
     ) -> None:
         if ref in selected_set:
             return
@@ -162,47 +233,77 @@ def select_candidates(workspace: CandidateWorkspace, max_candidates: int) -> Can
             raise CandidateSelectionError("workspace occurrence references an unknown candidate")
         selected_set.add(ref)
         selected_refs.append(ref)
+        if protected:
+            owner = owner_by_ref[ref]
+            if owner is None:
+                raise CandidateSelectionError("protected candidate has no owning semantic object")
+            owner_counts[owner] = owner_counts.get(owner, 0) + 1
         admissions.append(CandidateAdmission(
             len(admissions), ref, request_ordinal, occurrence_ordinal,
             trigger_role, admission_kind,
         ))
 
+    def visit(request, occurrence, enforce_owner_depth: bool, fallback: bool) -> None:
+        nonlocal closure_used
+        refs = occurrence.target_refs
+        if request.operator == _GRAPH_RELATION_OPERATOR:
+            if len(refs) != 2:
+                raise CandidateSelectionError("graph relation occurrence must have two endpoints")
+            source_ref, target_ref = refs
+            unseen = []
+            for ref in (source_ref, target_ref):
+                if ref not in selected_set and ref not in unseen:
+                    unseen.append(ref)
+            if not unseen or len(selected_refs) >= max_candidates:
+                return
+            remaining = max_candidates - len(selected_refs)
+            if len(unseen) == 1:
+                admit(unseen[0], request.ordinal, occurrence.occurrence_ordinal,
+                      "source" if unseen[0] == source_ref else "target", "ordinary", protected=False)
+            elif remaining >= 2:
+                admit(source_ref, request.ordinal, occurrence.occurrence_ordinal, "source", "ordinary", protected=False)
+                admit(target_ref, request.ordinal, occurrence.occurrence_ordinal, "target", "ordinary", protected=False)
+            elif remaining == 1 and not closure_used:
+                admit(source_ref, request.ordinal, occurrence.occurrence_ordinal, "source", "ordinary", protected=False)
+                admit(target_ref, request.ordinal, occurrence.occurrence_ordinal, "target", "relation_endpoint_closure", protected=False)
+                closure_used = True
+            return
+        if len(refs) != 1:
+            raise CandidateSelectionError("unary occurrence must have one target")
+        ref = refs[0]
+        if ref in selected_set or len(selected_refs) >= max_candidates:
+            return
+        protected = request.operator in _PROTECTED_OPERATORS
+        if enforce_owner_depth and protected:
+            owner = owner_by_ref[ref]
+            if owner is None:
+                raise CandidateSelectionError("protected candidate has no owning semantic object")
+            if owner_counts.get(owner, 0) >= protected_owner_limit:
+                return
+        admit(ref, request.ordinal, occurrence.occurrence_ordinal, "unary", "owner_depth_fallback" if fallback and protected else "ordinary", protected=protected)
+
     lanes = workspace.requests
     max_rounds = max((len(item.occurrences) for item in lanes), default=0)
     for occurrence_ordinal in range(max_rounds):
         for request in lanes:
-            if occurrence_ordinal >= len(request.occurrences):
-                continue
-            occurrence = request.occurrences[occurrence_ordinal]
-            refs = occurrence.target_refs
-            if request.operator == _GRAPH_RELATION_OPERATOR:
-                if len(refs) != 2:
-                    raise CandidateSelectionError("graph relation occurrence must have two endpoints")
-                source_ref, target_ref = refs
-                unseen = []
-                for ref in (source_ref, target_ref):
-                    if ref not in selected_set and ref not in unseen:
-                        unseen.append(ref)
-                if not unseen:
-                    continue
-                remaining = max_candidates - len(selected_refs)
-                if remaining <= 0:
-                    continue
-                if len(unseen) == 1:
-                    admit(unseen[0], request.ordinal, occurrence.occurrence_ordinal,
-                          "source" if unseen[0] == source_ref else "target", "ordinary")
-                elif remaining >= 2:
-                    admit(source_ref, request.ordinal, occurrence.occurrence_ordinal, "source", "ordinary")
-                    admit(target_ref, request.ordinal, occurrence.occurrence_ordinal, "target", "ordinary")
-                elif remaining == 1 and not closure_used:
-                    admit(source_ref, request.ordinal, occurrence.occurrence_ordinal, "source", "ordinary")
-                    admit(target_ref, request.ordinal, occurrence.occurrence_ordinal, "target", "relation_endpoint_closure")
-                    closure_used = True
-            else:
-                if len(refs) != 1:
-                    raise CandidateSelectionError("unary occurrence must have one target")
-                if refs[0] not in selected_set and len(selected_refs) < max_candidates:
-                    admit(refs[0], request.ordinal, occurrence.occurrence_ordinal, "unary", "ordinary")
+            if occurrence_ordinal < len(request.occurrences):
+                visit(request, request.occurrences[occurrence_ordinal], True, False)
+                if len(selected_refs) > max_candidates or len(selected_refs) >= max_candidates:
+                    break
+        if len(selected_refs) >= max_candidates:
+            break
+
+    fallback_used = False
+    if len(selected_refs) < max_candidates:
+        fallback_used = True
+        for occurrence_ordinal in range(max_rounds):
+            for request in lanes:
+                if occurrence_ordinal < len(request.occurrences):
+                    visit(request, request.occurrences[occurrence_ordinal], False, True)
+                    if len(selected_refs) > max_candidates or len(selected_refs) >= max_candidates:
+                        break
+            if len(selected_refs) >= max_candidates:
+                break
 
     selected_candidates = tuple(candidates_by_ref[ref] for ref in selected_refs)
     selected_relation_evidence = tuple(
@@ -224,6 +325,8 @@ def select_candidates(workspace: CandidateWorkspace, max_candidates: int) -> Can
         workspace.substrate_sha256, workspace.vectors_sha256,
         workspace.package_verification_contract_version, workspace.execution_contract_version,
         workspace.execution_status, workspace.execution_failure, max_candidates,
+        topology.contract_version, float(protected_owner_fraction), protected_owner_limit,
+        fallback_used,
         _request_coverage(workspace), tuple(admissions), selected_candidates,
         selected_relation_evidence, omitted_refs, coverage,
     )

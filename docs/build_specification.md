@@ -554,16 +554,34 @@ hydration. Candidate selection, compact synthesis evidence, and moving hydration
 are later passes. The former packet and synthesis production path is retired;
 the lower execution-to-selection boundary is the accepted current runtime.
 
-## Candidate Selection v1
-Candidate Selection v1 is the pure, deterministic bounded transform from one
-complete `CandidateWorkspace`, versioned as `candidate-selection-v1`. It bounds
-unique canonical candidates, preserves every native request lane, and traverses
-those lanes breadth-first by request ordinal and native occurrence order.
-Candidate identity is globally deduplicated; a candidate consumes capacity only
-on first admission and carries all composed unary support already attached to
-it. No score, support count, surface fact, or relation is normalized, compared,
-combined, or used as semantic ranking. `packet.max_occurrences` is not candidate
-capacity, and Pass 3B chooses no runtime-config value.
+## Candidate Selection v2
+Candidate Selection v2 is the pure, deterministic bounded transform from one
+complete `CandidateWorkspace` and one derived `CandidateOwnershipTopology`,
+versioned as `candidate-selection-v2`. The topology contains only the canonical
+`CandidateRef` to owning semantic-object UUID mapping and sufficient
+package/workspace lineage; it contains no canonical content, supports, or
+hydrated objects. Ownership is derived with one read-only substrate connection
+from unit, object, and region topology; scope targets have no owner.
+
+The transform receives `max_candidates` and an explicit
+`protected_owner_fraction`. The fraction is finite, numeric, not boolean, and
+strictly within `(0, 1]`; the protected owner limit is
+`ceil(max_candidates * protected_owner_fraction)`. No value is supplied by
+`RuntimeConfig` yet. Candidate identity is globally deduplicated, and every
+selected candidate retains all composed unary support already attached to it.
+No score, support count, surface fact, or relation is normalized, compared,
+combined, or used as semantic ranking. `packet.max_occurrences` is not
+candidate capacity.
+
+Protected owner depth applies only to `lexical.terms`, `lexical.phrase`, and
+`vector.semantic_similarity`. During the first pass, a new protected candidate
+is admitted while its owner is below the computed limit; otherwise that native
+occurrence is deferred. Exact, temporal, graph discovery, and graph relation
+occurrence operators are unaffected, and unaffected admissions do not consume
+protected owner depth. If the first pass cannot fill nominal capacity, the same
+request-lane BFS is replayed with owner depth relaxed. Fallback admissions retain
+native trigger provenance and use admission kind `owner_depth_fallback`. No
+score, fusion, diversity, support convergence, or owner ranking is introduced.
 
 Graph relation evidence is induced after admission when both endpoint candidates
 are selected, with duplicate relation occurrences preserved. Candidate capacity
@@ -571,9 +589,12 @@ is hard except for one code-owned one-slot endpoint closure: when a relation has
 two distinct unseen endpoints and exactly one normal slot remains, both endpoints
 are admitted in source-then-target order, the target is marked as structural
 closure, and the selected count may reach `max_candidates + 1`. This closure can
-occur at most once. Selection performs no hydration, inference, persistence, or
-production orchestration change; selected candidates retain identity and
-composed retrieval evidence only.
+occur at most once and is unchanged by owner depth. Selection performs no
+hydration, inference, persistence, or production orchestration change; selected
+candidates retain identity and composed retrieval evidence only. Selection
+lineage retains topology contract version, fraction, computed owner limit,
+fallback usage, and the existing package, workspace, execution, coverage, and
+relation lineage.
 
 ## Selected-Candidate Hydration v1
 
@@ -605,7 +626,7 @@ package identity and changes no reporting.
 The accepted lower runtime boundary is:
 
 ```text
-retrieval execution → Candidate Composition v1 → Candidate Selection v1
+retrieval execution → Candidate Composition v1 → Candidate Ownership Topology v1 → Candidate Selection v2
 ```
 
 The former upper runtime is retired: occurrence-oriented retrieval hydration,

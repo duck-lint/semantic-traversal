@@ -43,6 +43,7 @@ from semantic_traversal.runtime.retrieval.selection import (
     SelectionRequestCoverage,
     select_candidates,
 )
+from semantic_traversal.runtime.retrieval.ownership_topology import derive_candidate_ownership_topology
 from tests.test_cli import CliProvider
 from tests.test_temporal import TemporalProjectionTests
 
@@ -100,7 +101,8 @@ class CandidateHydrationTests(unittest.TestCase):
             CANDIDATE_SELECTION_CONTRACT_VERSION, "candidate-workspace-v1", "execution", "conformance", "retrieval",
             "proposal", identity.capability_catalog_sha256, identity.package_id, "retrieval-package-v1",
             identity.substrate_sha256, identity.vectors_sha256, "retrieval-package-verification-v1", "retrieval-execution-v1",
-            execution_status, execution_failure, len(candidates), requests, admissions, tuple(candidates), tuple(relations), (), coverage,
+            execution_status, execution_failure, len(candidates), "candidate-ownership-topology-v1", 1.0, len(candidates), False,
+            requests, admissions, tuple(candidates), tuple(relations), (), coverage,
         )
 
     def unit(self, unit_id=1, supports=()):
@@ -292,7 +294,8 @@ class CandidateHydrationTests(unittest.TestCase):
         conformance = conform_retrieval(database, self.temporal_build / "capability_catalog.json", "retrieval-cross-stage")
         execution = execute_retrieval(database, self.temporal_package, conformance.conformance_id)
         workspace = compose_candidate_workspace(execution)
-        selection = select_candidates(workspace, 20)
+        topology = derive_candidate_ownership_topology(self.temporal_package, workspace)
+        selection = select_candidates(workspace, topology, 20, 1.0)
         result = hydrate_candidate_selection(self.temporal_package, selection)
         self.assertEqual(result.selection, selection)
         self.assertTrue(all(any(isinstance(support, TemporalSupport) for support in candidate.candidate.supports) for candidate in result.hydrated_candidates))

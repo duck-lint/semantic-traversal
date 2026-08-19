@@ -45,6 +45,12 @@ from .selection import (
     CandidateSelectionError, SelectionCoverage, SelectionRequestCoverage,
     candidate_selection_json, select_candidates, serialize_candidate_selection,
 )
+from .ownership_topology import (
+    CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION, CandidateOwnership,
+    CandidateOwnershipTopology, CandidateOwnershipTopologyError,
+    candidate_ownership_topology_json, derive_candidate_ownership_topology,
+    serialize_candidate_ownership_topology,
+)
 from .candidate_hydration import (
     CANDIDATE_HYDRATION_CONTRACT_VERSION, CandidateHydrationError,
     HydratedCanonicalTarget, HydratedCandidate, HydratedCandidateSelection,
@@ -92,6 +98,10 @@ __all__ = [
     "CANDIDATE_SELECTION_CONTRACT_VERSION", "CandidateSelectionError", "CandidateAdmission",
     "SelectionRequestCoverage", "SelectionCoverage", "CandidateSelection",
     "select_candidates", "candidate_selection_json", "serialize_candidate_selection",
+    "CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION", "CandidateOwnership",
+    "CandidateOwnershipTopology", "CandidateOwnershipTopologyError",
+    "derive_candidate_ownership_topology", "candidate_ownership_topology_json",
+    "serialize_candidate_ownership_topology",
     "CANDIDATE_HYDRATION_CONTRACT_VERSION", "CandidateHydrationError",
     "HydratedCanonicalTarget", "HydratedUnitTarget", "HydratedObjectTarget",
     "HydratedRegionTarget", "HydratedScopeTarget", "HydratedCandidate",
