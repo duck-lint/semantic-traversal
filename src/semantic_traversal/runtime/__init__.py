@@ -34,6 +34,11 @@ from .retrieval.evidence_projection import (
     EVIDENCE_PROJECTION_CONTRACT_VERSION, EvidenceProjection, EvidenceProjectionError,
     measure_evidence_projection, project_evidence, serialize_evidence_projection,
 )
+from .synthesis_input import (
+    SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisInput, SynthesisInputError, SynthesisMessage,
+    build_synthesis_input, serialize_synthesis_input, snapshot_synthesis_conversation,
+    synthesis_input_json, synthesis_input_sha256,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -52,4 +57,7 @@ __all__ = [
     "hydrate_candidate_selection",
     "EVIDENCE_PROJECTION_CONTRACT_VERSION", "EvidenceProjection", "EvidenceProjectionError",
     "project_evidence", "serialize_evidence_projection", "measure_evidence_projection",
+    "SYNTHESIS_INPUT_CONTRACT_VERSION", "SynthesisInputError", "SynthesisMessage", "SynthesisInput",
+    "snapshot_synthesis_conversation", "build_synthesis_input", "synthesis_input_json",
+    "serialize_synthesis_input", "synthesis_input_sha256",
 ]

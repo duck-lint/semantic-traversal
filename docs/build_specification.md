@@ -686,3 +686,77 @@ deterministic in-memory composition boundary from a completed retrieval
 execution through workspace, ownership topology, selection, hydration, and
 EvidenceProjection v1. These evidence stages remain nonpersistent; this
 boundary performs no synthesis.
+
+## Synthesis Input Foundation
+
+The provider-neutral synthesis-input contract is `synthesis-input-v1`. It is
+one upper-runtime input shape, not separate direct and retrieval contracts:
+
+```text
+conversation snapshot + route + EvidenceProjection | None
+```
+
+The direct route requires `route = "direct"` and `evidence = null`. It means
+that no semantic projection was consulted. The semantic-retrieval route
+requires `route = "semantic_retrieval"` and an `evidence-projection-v1`
+`EvidenceProjection`; missing evidence is an input error, never an automatic
+downgrade to direct. A projection may represent either successful execution or
+failed execution with a succeeded prefix. Execution status is not reinterpreted
+by this contract.
+
+Natural dialogue remains dialogue. `SynthesisMessage` contains only a
+non-negative contiguous `ordinal`, the canonical role `user` or `synthesis`,
+and nonblank `content`, preserving content exactly. A synthesis input is
+nonempty and must end in the current `user` message. Snapshot values exclude
+message IDs, conversation IDs, timestamps, database paths, run IDs, retrieval
+IDs, and package hashes. Prior `synthesis` messages remain valid dialogue
+state: they can resolve referents and record prior assertions, but they are not
+independently retrieved corpus evidence.
+
+Canonical serialization is compact deterministic UTF-8 JSON with the fields
+`contract_version`, `route`, `conversation`, and `evidence`. The evidence value
+is embedded as structured JSON from `evidence_projection_json(...)`; it is not
+an escaped JSON string and never includes `EvidenceProjection.source` or
+hydrated canonical state. Its SHA-256 is exact canonical-input content
+identity, formatted `sha256:<hex>`; it is not provider-wire identity,
+database-lineage identity, package identity, or semantic identity. Provider
+role mapping and an explicit evidence-data transport block belong to a later
+provider pass, not this artifact.
+
+EvidenceProjection content remains authored evidence data, including any
+imperative prose, quoted prompt, code, or hostile-looking text. It acquires no
+runtime instruction authority and is not sanitized or rewritten here. Direct
+answers may use ordinary model knowledge without implying semantic retrieval.
+For semantic retrieval, ordinary knowledge may explain general concepts or
+help examine tensions, but cannot silently substitute for missing user,
+authored-corpus, project-state, or represented-relationship evidence.
+
+Synthesis must remain relation-first: topic match is not relation evidence.
+Mention is not explanation; chronology is not causation; similarity is not
+identity; association is not influence; recurrence is not development; and
+occurrence is not motivation. Candidate support records retrieval provenance,
+not truth confidence, relevance weight, or a fusion score. Lexical plus vector
+support means that two retrieval paths exposed one candidate; it does not mean
+twice the truth or a fused rank. Candidate order is deterministic mechanical
+presentation order (including breadth-first and accepted owner-depth fallback),
+not epistemic strength.
+
+Negative and count authority remains scoped to the upstream request contract:
+an exact succeeded request with `returned_occurrences = N` owns the count for
+that exact addressed lookup, even when selection retains fewer candidates;
+selection count is not corpus count. A succeeded temporal request is exhaustive
+only over its addressed native dimension/operator/range/order. A succeeded
+graph-relation lookup is exhaustive only for that addressed represented
+relation lookup. Lexical/vector absence and graph-discovery absence do not
+license corpus absence. Failed and not-executed requests are not zero results;
+selection truncation is not workspace or corpus absence; and no request for the
+relevant relation licenses a negative claim about it.
+
+Poorly matched evidence may remain non-establishing. Partial or failed
+execution must be reasoned from successful evidence while respecting failed and
+not-executed status. Relevant tensions may be surfaced between the user and
+evidence, within evidence, or between general knowledge and supplied claims,
+but wording, abstraction, emphasis, or temporal perspective alone is not a
+contradiction. Cross-surface fusion, score normalization, RRF, support-count
+ranking, and confidence multipliers are not required by this architecture and
+are not part of this contract.
