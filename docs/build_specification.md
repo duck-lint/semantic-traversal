@@ -622,3 +622,35 @@ reconstruct with their owning object, scope targets reconstruct only as a
 `GraphHandle`, each selected target hydrates once, relation endpoints are
 represented without traversal, contradictions hard-fail, provenance survives,
 reconstruction is complete, and trimming remains deferred.
+
+## Evidence Projection v1
+
+Evidence Projection v1 is the deterministic derived boundary after
+`HydratedCandidateSelection`:
+
+```text
+HydratedCandidateSelection → deterministic normalized evidence → future synthesis
+```
+
+It is nonpersistent turn state. It receives no `RuntimeConfig`, selects no
+candidates, and preserves every hydrated selected candidate in CandidateSelection
+admission order. Repeated object context and object-owned relations are
+normalized once; unit body relations and embeds remain with their selected unit.
+Model-facing linguistic content is `parsed_text`, not `raw_markdown`; raw
+canonical state remains upstream and is recoverable through the embedded source
+hydration. Internal audit data, omitted candidate identities, package paths and
+hashes, and native surface scores are not model-facing.
+
+The projection retains exact typed identifier presence states (`absent`,
+`present_blank`, and `present_value`) and typed authored values. It verifies
+unit inherited identifiers against the owning object's admitted identifiers
+before deduplication, preserves request and support provenance, and hard-fails
+contradictory canonical state with `EvidenceProjectionError`. It does not infer
+relations, traverse graph endpoints, hydrate embeds, expand selected objects
+into whole-note text, or invoke a synthesis provider.
+
+Canonical serialization is compact deterministic JSON with `ensure_ascii=False`,
+stable ordering, and no non-finite numbers. Size measurement reports exact
+characters and UTF-8 bytes only; no tokenizer or token-budget policy exists in
+this pass. Runtime schema remains v6 and no evidence persistence or runtime
+capacity knob is introduced.

@@ -51,6 +51,12 @@ from .candidate_hydration import (
     HydratedObjectTarget, HydratedRegionTarget, HydratedScopeTarget, HydratedUnitTarget,
     hydrate_candidate_selection,
 )
+from .evidence_projection import (
+    EVIDENCE_PROJECTION_CONTRACT_VERSION, EvidenceCandidate, EvidenceCoverage,
+    EvidenceObjectContext, EvidenceProjection, EvidenceProjectionError,
+    EvidenceRequest, EvidenceRetrievalRelation, evidence_projection_json,
+    measure_evidence_projection, project_evidence, serialize_evidence_projection,
+)
 
 __all__ = [
     "ConformanceRequestResult",
@@ -90,4 +96,8 @@ __all__ = [
     "HydratedCanonicalTarget", "HydratedUnitTarget", "HydratedObjectTarget",
     "HydratedRegionTarget", "HydratedScopeTarget", "HydratedCandidate",
     "HydratedCandidateSelection", "hydrate_candidate_selection",
+    "EVIDENCE_PROJECTION_CONTRACT_VERSION", "EvidenceProjectionError", "EvidenceRequest",
+    "EvidenceCoverage", "EvidenceObjectContext", "EvidenceCandidate",
+    "EvidenceRetrievalRelation", "EvidenceProjection", "project_evidence",
+    "evidence_projection_json", "serialize_evidence_projection", "measure_evidence_projection",
 ]

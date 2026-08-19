@@ -30,6 +30,10 @@ from .retrieval.candidate_hydration import (
     CandidateHydrationError, HydratedCandidate, HydratedCandidateSelection,
     hydrate_candidate_selection,
 )
+from .retrieval.evidence_projection import (
+    EVIDENCE_PROJECTION_CONTRACT_VERSION, EvidenceProjection, EvidenceProjectionError,
+    measure_evidence_projection, project_evidence, serialize_evidence_projection,
+)
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -46,4 +50,6 @@ __all__ = [
     "CandidateWorkspace", "compose_candidate_workspace", "CandidateSelection", "select_candidates",
     "CandidateHydrationError", "HydratedCandidate", "HydratedCandidateSelection",
     "hydrate_candidate_selection",
+    "EVIDENCE_PROJECTION_CONTRACT_VERSION", "EvidenceProjection", "EvidenceProjectionError",
+    "project_evidence", "serialize_evidence_projection", "measure_evidence_projection",
 ]
