@@ -21,7 +21,12 @@ from .conversation import Conversation, Message, RuntimeConversationError, _conn
 from .model_runs import complete_synthesis_run, fail_synthesis_run, insert_synthesis_run
 from .prompts import prompt_version
 from .retrieval.candidate_hydration import HydratedCandidateSelection
-from .retrieval.evidence_projection import EVIDENCE_PROJECTION_CONTRACT_VERSION, EvidenceProjection
+from .retrieval.evidence_projection import (
+    EVIDENCE_PROJECTION_CONTRACT_VERSION,
+    EvidenceProjection,
+    EvidenceProjectionError,
+    project_evidence,
+)
 from .retrieval.execution import EXECUTION_CONTRACT_VERSION
 from .retrieval.package import IDENTITY_VERSION
 from .retrieval.package_verification import VERIFICATION_CONTRACT_VERSION
@@ -168,6 +173,12 @@ def _validate_semantic_lineage(
         raise _lineage_error("evidence must be EvidenceProjection v1")
     if not isinstance(evidence.source, HydratedCandidateSelection):
         raise _lineage_error("evidence source is malformed")
+    try:
+        expected_projection = project_evidence(evidence.source)
+    except EvidenceProjectionError as exc:
+        raise _lineage_error("evidence source cannot produce a valid projection") from exc
+    if evidence != expected_projection:
+        raise _lineage_error("evidence does not equal the deterministic projection of its source")
     selection = evidence.source.selection
     expected_contract = "candidate-selection-v2"
     if selection.contract_version != expected_contract:

@@ -2,6 +2,7 @@ import hashlib
 import json
 import sqlite3
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -190,6 +191,16 @@ class SynthesisRuntimeTests(unittest.TestCase):
                 tuple(values[field] for field in ("execution_id", "conformance_id", "retrieval_run_id", "retrieval_proposal_sha256", "capability_catalog_sha256", "retrieval_package_id", "retrieval_package_identity_version", "substrate_sha256", "vectors_sha256", "package_verification_contract_version", "execution_contract_version")),
             )
             connection.commit()
+            connection.close()
+            forged_candidates = replace(evidence, candidates=("forged",))
+            forged_coverage = replace(evidence, coverage=replace(evidence.coverage, selected_candidate_count=1))
+            for forged in (forged_candidates, forged_coverage):
+                provider = SynthesisDouble()
+                with self.subTest(forged=forged), self.assertRaisesRegex(SynthesisError, "deterministic projection"):
+                    synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, evidence=forged, provider=provider)
+                self.assertEqual(provider.calls, [])
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind = 'synthesis'").fetchone()[0], 0)
             connection.close()
             provider = SynthesisDouble()
             result = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, evidence=evidence, provider=provider)
