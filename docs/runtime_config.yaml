@@ -137,3 +137,7 @@ retrieval_inference:
 
     Think through the problem first.
     Emit only the required structured retrieval proposal.
+
+candidate_selection:
+  max_candidates: 120
+  protected_owner_fraction: 0.20

@@ -25,9 +25,16 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class CandidateSelectionConfig:
+    max_candidates: int
+    protected_owner_fraction: float
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     router: ModelConfig
     retrieval_inference: ModelConfig
+    candidate_selection: CandidateSelectionConfig
 
 
 def _load_values(path: str | Path) -> dict[str, Any]:
@@ -48,9 +55,9 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     """Load the complete runtime configuration without reading credentials."""
 
     values = _load_values(path)
-    if set(values) != {"router", "retrieval_inference"}:
+    if set(values) != {"router", "retrieval_inference", "candidate_selection"}:
         raise RuntimeConfigError(
-            "runtime configuration must contain exactly router and retrieval_inference sections"
+            "runtime configuration must contain exactly router, retrieval_inference, and candidate_selection sections"
         )
 
     def parse_section(section_name: str) -> ModelConfig:
@@ -78,10 +85,36 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             raise RuntimeConfigError(f"runtime {section_name} prompt must be non-empty text")
         return ModelConfig(provider, model, float(timeout_seconds), prompt)
 
+    raw_selection = values["candidate_selection"]
+    if not isinstance(raw_selection, dict):
+        raise RuntimeConfigError("runtime configuration candidate_selection must be a mapping")
+    if set(raw_selection) != {"max_candidates", "protected_owner_fraction"}:
+        raise RuntimeConfigError(
+            "runtime candidate_selection configuration requires only max_candidates and protected_owner_fraction"
+        )
+    max_candidates = raw_selection["max_candidates"]
+    if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 0:
+        raise RuntimeConfigError("runtime candidate_selection max_candidates must be an integer greater than or equal to zero")
+    protected_owner_fraction = raw_selection["protected_owner_fraction"]
+    if (
+        isinstance(protected_owner_fraction, bool)
+        or not isinstance(protected_owner_fraction, (int, float))
+        or not math.isfinite(float(protected_owner_fraction))
+        or protected_owner_fraction <= 0
+        or protected_owner_fraction > 1
+    ):
+        raise RuntimeConfigError(
+            "runtime candidate_selection protected_owner_fraction must be finite and in the interval (0, 1]"
+        )
+
     return RuntimeConfig(
         parse_section("router"),
         parse_section("retrieval_inference"),
+        CandidateSelectionConfig(max_candidates, float(protected_owner_fraction)),
     )
 
 
-__all__ = ["ModelConfig", "RuntimeConfig", "RuntimeConfigError", "load_runtime_config"]
+__all__ = [
+    "CandidateSelectionConfig", "ModelConfig", "RuntimeConfig", "RuntimeConfigError",
+    "load_runtime_config",
+]

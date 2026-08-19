@@ -673,5 +673,16 @@ into whole-note text, or invoke a synthesis provider.
 Canonical serialization is compact deterministic JSON with `ensure_ascii=False`,
 stable ordering, and no non-finite numbers. Size measurement reports exact
 characters and UTF-8 bytes only; no tokenizer or token-budget policy exists in
-this pass. Runtime schema remains v6 and no evidence persistence or runtime
-capacity knob is introduced.
+this pass. Runtime database schema remains v6 and no evidence persistence or
+database capacity knob is introduced.
+
+## Runtime candidate policy and evidence preparation
+
+RuntimeConfig owns the mechanical candidate-selection policy through its
+`candidate_selection` section: `max_candidates` and
+`protected_owner_fraction`. Protected/unaffected operator classification
+remains owned by Candidate Selection v2. `prepare_evidence(...)` is the
+deterministic in-memory composition boundary from a completed retrieval
+execution through workspace, ownership topology, selection, hydration, and
+EvidenceProjection v1. These evidence stages remain nonpersistent; this
+boundary performs no synthesis.
