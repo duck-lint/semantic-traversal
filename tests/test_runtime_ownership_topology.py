@@ -87,6 +87,15 @@ class CandidateOwnershipTopologyTests(unittest.TestCase):
             with self.subTest(ref=ref), self.assertRaises(CandidateOwnershipTopologyError):
                 derive_candidate_ownership_topology(self.package, current)
 
+    def test_malformed_semantic_unit_identity_fails_through_topology_boundary(self):
+        from semantic_traversal.runtime.retrieval.candidates import Candidate, CandidateRef
+        current = dataclasses.replace(
+            self.workspace((1,)),
+            candidates=(Candidate(CandidateRef("semantic_unit", ()), ()),),
+        )
+        with self.assertRaises(CandidateOwnershipTopologyError):
+            derive_candidate_ownership_topology(self.package, current)
+
     def test_bare_package_and_lineage_mismatch_are_rejected(self):
         current = self.workspace((1,))
         with self.assertRaises(CandidateOwnershipTopologyError):

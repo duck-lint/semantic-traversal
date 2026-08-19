@@ -52,10 +52,19 @@ def relation_lane(items):
 
 
 def topology_for(current, owners=None):
+    def owner_for(ref):
+        if owners is not None and ref in owners:
+            return owners[ref]
+        if ref.target_kind == "scope":
+            return None
+        if ref.target_kind in {"semantic_object", "semantic_region"}:
+            return ref.identity[0]
+        return f"object-{ref.identity[0]}"
+
     entries = tuple(
         CandidateOwnership(
             candidate.target_ref,
-            (owners or {}).get(candidate.target_ref, f"object-{candidate.target_ref.identity[0]}"),
+            owner_for(candidate.target_ref),
         )
         for candidate in current.candidates
     )
@@ -228,6 +237,46 @@ class CandidateSelectionTests(unittest.TestCase):
         self.assertEqual(selected.protected_owner_limit, 2)
         self.assertTrue(selected.owner_depth_fallback_used)
         self.assertEqual([item.admission_kind for item in selected.admissions], ["ordinary", "ordinary", "ordinary", "owner_depth_fallback"])
+
+    def test_under_capacity_workspaces_do_not_invoke_owner_depth_fallback(self):
+        exact_current = workspace([exact([1])])
+        self.assertFalse(select_candidates(exact_current, 2, 0.2).owner_depth_fallback_used)
+        temporal_current = workspace([(
+            {"operator": "temporal.before"}, "succeeded",
+            {"kind": "temporal", "hits": [{"unit_id": 1, "date": "2026-01-01"}]}, None,
+        )])
+        self.assertFalse(select_candidates(temporal_current, 2, 0.2).owner_depth_fallback_used)
+        protected_current = workspace([(
+            {"operator": "vector.semantic_similarity"}, "succeeded",
+            {"kind": "vector", "hits": [{"target_kind": "semantic_unit", "target_identity": 1, "score": 0.0, "segment_ordinal": 0}]}, None,
+        )])
+        self.assertFalse(select_candidates(protected_current, 2, 0.2).owner_depth_fallback_used)
+
+    def test_topology_owner_shapes_fail_closed(self):
+        cases = (
+            (workspace([exact([1])]), CandidateRef("semantic_unit", (1,)), None),
+            (workspace([({"operator": "graph.discovery.terms"}, "succeeded", {"kind": "graph_discovery", "hits": [{"node": {"node_kind": "semantic_object", "identity": ["object-a"]}, "score": 0.0}]}, None)]), CandidateRef("semantic_object", ("object-a",)), "wrong"),
+            (workspace([({"operator": "graph.discovery.terms"}, "succeeded", {"kind": "graph_discovery", "hits": [{"node": {"node_kind": "semantic_region", "identity": ["object-a", ["R"]]}, "score": 0.0}]}, None)]), CandidateRef("semantic_region", ("object-a", ("R",))), "wrong"),
+            (workspace([({"operator": "graph.discovery.terms"}, "succeeded", {"kind": "graph_discovery", "hits": [{"node": {"node_kind": "scope", "identity": [["vault"]]}, "score": 0.0}]}, None)]), CandidateRef("scope", (("vault",),)), "object-a"),
+        )
+        for current, ref, owner in cases:
+            with self.subTest(ref=ref):
+                topology = topology_for(current, {ref: owner})
+                with self.assertRaises(CandidateSelectionError):
+                    select_candidates(current, topology, 1, 0.2)
+
+    def test_missing_reordered_and_duplicate_topology_entries_fail_closed(self):
+        current = workspace([exact([1, 2])])
+        topology = topology_for(current)
+        variants = (
+            dataclasses.replace(topology, entries=topology.entries[:-1]),
+            dataclasses.replace(topology, entries=tuple(reversed(topology.entries))),
+            dataclasses.replace(topology, entries=(topology.entries[0], topology.entries[0])),
+        )
+        for malformed in variants:
+            with self.subTest(entries=malformed.entries):
+                with self.assertRaises(CandidateSelectionError):
+                    select_candidates(current, malformed, 2, 0.2)
 
     def test_unaffected_admission_does_not_consume_owner_depth(self):
         current = workspace([

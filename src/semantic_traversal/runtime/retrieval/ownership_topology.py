@@ -122,6 +122,21 @@ def _unique_mapping(rows: list[tuple[Any, Any]], label: str) -> dict[Any, Any]:
     return result
 
 
+def _validate_reference_shape(ref: Any) -> CandidateRef:
+    """Reject hand-built references that cannot safely enter topology lookup."""
+    if not isinstance(ref, CandidateRef) or not isinstance(ref.identity, tuple):
+        raise _error("workspace candidate reference is malformed")
+    try:
+        hash(ref)
+    except TypeError as exc:
+        raise _error("workspace candidate reference is not hashable", exc)
+    if ref.target_kind in {"semantic_unit", "semantic_object"} and len(ref.identity) != 1:
+        raise _error(f"canonical {ref.target_kind} identity is malformed: {ref!r}")
+    if ref.target_kind == "semantic_region" and len(ref.identity) != 2:
+        raise _error(f"canonical region identity is malformed: {ref!r}")
+    return ref
+
+
 def derive_candidate_ownership_topology(
     verified_package: VerifiedRetrievalPackage,
     workspace: CandidateWorkspace,
@@ -152,7 +167,7 @@ def derive_candidate_ownership_topology(
     if not all(expected):
         raise _error("workspace does not match the verified retrieval package lineage")
 
-    refs = tuple(candidate.target_ref for candidate in workspace.candidates)
+    refs = tuple(_validate_reference_shape(candidate.target_ref) for candidate in workspace.candidates)
     if len(set(refs)) != len(refs):
         raise _error("workspace contains duplicate candidate references")
     if not refs:

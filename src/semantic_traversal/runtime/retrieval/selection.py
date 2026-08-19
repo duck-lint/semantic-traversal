@@ -178,6 +178,17 @@ def _validate_topology(workspace: CandidateWorkspace, topology: CandidateOwnersh
     actual = tuple(entry.target_ref for entry in topology.entries)
     if actual != expected or len(set(actual)) != len(actual):
         raise CandidateSelectionError("candidate ownership topology coverage or order disagrees with workspace")
+    for entry in topology.entries:
+        ref = entry.target_ref
+        owner = entry.owner_object_uuid
+        if ref.target_kind == "scope":
+            if owner is not None:
+                raise CandidateSelectionError("scope candidate topology owner must be None")
+        elif ref.target_kind in {"semantic_unit", "semantic_object", "semantic_region"}:
+            if not isinstance(owner, str) or not owner:
+                raise CandidateSelectionError("semantic candidate topology owner must be a non-empty string")
+            if ref.target_kind in {"semantic_object", "semantic_region"} and owner != ref.identity[0]:
+                raise CandidateSelectionError("semantic object or region topology owner disagrees with its identity")
 
 
 def _request_coverage(workspace: CandidateWorkspace) -> tuple[SelectionRequestCoverage, ...]:
@@ -215,6 +226,7 @@ def select_candidates(
     selected_set: set[CandidateRef] = set()
     admissions: list[CandidateAdmission] = []
     closure_used = False
+    owner_depth_deferred = False
     owner_counts: dict[str, int] = {}
     owner_by_ref = {entry.target_ref: entry.owner_object_uuid for entry in topology.entries}
 
@@ -244,7 +256,7 @@ def select_candidates(
         ))
 
     def visit(request, occurrence, enforce_owner_depth: bool, fallback: bool) -> None:
-        nonlocal closure_used
+        nonlocal closure_used, owner_depth_deferred
         refs = occurrence.target_refs
         if request.operator == _GRAPH_RELATION_OPERATOR:
             if len(refs) != 2:
@@ -279,6 +291,7 @@ def select_candidates(
             if owner is None:
                 raise CandidateSelectionError("protected candidate has no owning semantic object")
             if owner_counts.get(owner, 0) >= protected_owner_limit:
+                owner_depth_deferred = True
                 return
         admit(ref, request.ordinal, occurrence.occurrence_ordinal, "unary", "owner_depth_fallback" if fallback and protected else "ordinary", protected=protected)
 
@@ -294,7 +307,7 @@ def select_candidates(
             break
 
     fallback_used = False
-    if len(selected_refs) < max_candidates:
+    if len(selected_refs) < max_candidates and owner_depth_deferred:
         fallback_used = True
         for occurrence_ordinal in range(max_rounds):
             for request in lanes:
