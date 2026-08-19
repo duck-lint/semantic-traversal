@@ -1,7 +1,11 @@
 import json
+import os
 import types
 import unittest
 from unittest.mock import MagicMock, patch
+
+import httpx
+import openai
 
 from semantic_traversal.runtime.config import CandidateSelectionConfig, ModelConfig, RuntimeConfig
 from semantic_traversal.runtime.openai_provider import OpenAIResponsesProvider
@@ -161,6 +165,78 @@ class OpenAISynthesisAdapterTests(unittest.TestCase):
             OpenAIResponsesProvider().synthesize(_model_config(), object())
         self.assertEqual(raised.exception.error_type, "runtime_validation")
         self.openai.assert_not_called()
+
+    def test_openai_sdk_exceptions_map_to_synthesis_provider_classifications_and_preserve_cause(self):
+        request = httpx.Request("GET", "https://example.test")
+        response = lambda status: httpx.Response(status, request=request)
+        cases = (
+            (openai.APITimeoutError(request), "timeout"),
+            (openai.APIConnectionError(request=request), "connection"),
+            (openai.AuthenticationError("auth", response=response(401), body=None), "authentication"),
+            (openai.RateLimitError("rate", response=response(429), body=None), "rate_limit"),
+            (openai.BadRequestError("bad request", response=response(400), body=None), "bad_request"),
+            (openai.APIStatusError("server", response=response(500), body=None), "provider_status"),
+        )
+        for original, expected_type in cases:
+            with self.subTest(expected_type=expected_type):
+                self.client.responses.create.side_effect = original
+                with self.assertRaises(SynthesisProviderError) as raised:
+                    OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+                self.assertEqual(raised.exception.error_type, expected_type)
+                self.assertIs(raised.exception.__cause__, original)
+                self.client.responses.create.side_effect = None
+
+    def test_secret_is_redacted_from_synthesis_provider_error(self):
+        secret = "temporary-test-secret"
+        original = openai.OpenAIError(f"transport failed with key {secret}")
+        self.client.responses.create.side_effect = original
+        with patch.dict(os.environ, {"OPENAI_API_KEY": secret}):
+            with self.assertRaises(SynthesisProviderError) as raised:
+                OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIn("<redacted>", str(raised.exception))
+        self.assertIs(raised.exception.__cause__, original)
+
+    def test_unexpected_constructor_and_transport_exceptions_are_provider_status(self):
+        constructor_error = RuntimeError("constructor transport failure")
+        self.openai.side_effect = constructor_error
+        with self.assertRaises(SynthesisProviderError) as raised:
+            OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+        self.assertEqual(raised.exception.error_type, "provider_status")
+        self.assertIs(raised.exception.__cause__, constructor_error)
+
+        self.openai.side_effect = None
+        transport_error = RuntimeError("unexpected create failure")
+        self.client.responses.create.side_effect = transport_error
+        with self.assertRaises(SynthesisProviderError) as raised:
+            OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+        self.assertEqual(raised.exception.error_type, "provider_status")
+        self.assertIs(raised.exception.__cause__, transport_error)
+
+    def test_missing_usage_produces_empty_synthesis_usage(self):
+        self.response(usage=None)
+        result = OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+        self.assertEqual(result.usage.input_tokens, None)
+        self.assertEqual(result.usage.cached_input_tokens, None)
+        self.assertEqual(result.usage.output_tokens, None)
+        self.assertEqual(result.usage.reasoning_tokens, None)
+        self.assertEqual(result.usage.total_tokens, None)
+
+    def test_missing_nested_usage_details_preserve_top_level_values(self):
+        self.response(usage=types.SimpleNamespace(input_tokens=11, output_tokens=7, total_tokens=18))
+        result = OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+        self.assertEqual(result.usage.input_tokens, 11)
+        self.assertIsNone(result.usage.cached_input_tokens)
+        self.assertEqual(result.usage.output_tokens, 7)
+        self.assertIsNone(result.usage.reasoning_tokens)
+        self.assertEqual(result.usage.total_tokens, 18)
+
+    def test_boolean_usage_value_is_rejected_by_synthesis_usage_validation(self):
+        self.response(usage=types.SimpleNamespace(input_tokens=True))
+        with self.assertRaises(SynthesisProviderError) as raised:
+            OpenAIResponsesProvider().synthesize(_model_config(), _direct_input(("user", "q")))
+        self.assertEqual(raised.exception.error_type, "runtime_validation")
+        self.assertIn("input_tokens", str(raised.exception))
 
 
 if __name__ == "__main__":
