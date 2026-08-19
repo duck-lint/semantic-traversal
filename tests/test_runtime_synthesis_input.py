@@ -192,13 +192,23 @@ class SynthesisInputTests(unittest.TestCase):
     def test_hash_is_exact_canonical_content_identity(self):
         base = build_synthesis_input(self.conversation(("user", "question")), "direct", None)
         self.assertRegex(synthesis_input_sha256(base), r"^sha256:[0-9a-f]{64}$")
-        self.assertEqual(synthesis_input_sha256(base), synthesis_input_sha256(serialize_synthesis_input(base)))
+        import hashlib
+        self.assertEqual(
+            synthesis_input_sha256(base),
+            "sha256:" + hashlib.sha256(serialize_synthesis_input(base).encode("utf-8")).hexdigest(),
+        )
         variants = (
             replace(base, route="semantic_retrieval", evidence=self.evidence()),
             build_synthesis_input(self.conversation(("user", "changed")), "direct", None),
             build_synthesis_input(self.conversation(("user", "question"), ("synthesis", "answer"), ("user", "again")), "direct", None),
         )
         self.assertEqual(len({synthesis_input_sha256(item) for item in (base, *variants)}), 4)
+
+    def test_hash_rejects_arbitrary_text_and_non_inputs(self):
+        for value in ("{\"route\":\"direct\"}", {}, None, 42):
+            with self.subTest(value=value):
+                with self.assertRaises(SynthesisInputError):
+                    synthesis_input_sha256(value)
 
 
 if __name__ == "__main__":

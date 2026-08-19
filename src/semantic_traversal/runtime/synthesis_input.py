@@ -150,16 +150,12 @@ def serialize_synthesis_input(synthesis_input: SynthesisInput) -> str:
         raise SynthesisInputError(f"could not serialize synthesis input: {exc}") from exc
 
 
-def synthesis_input_sha256(serialized_or_input: str | SynthesisInput) -> str:
+def synthesis_input_sha256(synthesis_input: SynthesisInput) -> str:
     """Return exact canonical-input content identity, not semantic identity."""
 
-    serialized = (
-        serialize_synthesis_input(serialized_or_input)
-        if isinstance(serialized_or_input, SynthesisInput)
-        else serialized_or_input
-    )
-    if not isinstance(serialized, str):
-        raise SynthesisInputError("synthesis input artifact must be text")
+    if not isinstance(synthesis_input, SynthesisInput):
+        raise SynthesisInputError("synthesis input must be SynthesisInput")
+    serialized = serialize_synthesis_input(synthesis_input)
     return "sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
