@@ -136,6 +136,80 @@ class RuntimeRetrievalTests(unittest.TestCase):
             connection.close()
             self.assertEqual(row, ("retrieval_inference", router.run_id, result.capability_catalog_sha256, '{"requests":[{"operator":"exact.equals","field_class":"semantic_identifier","field_name":"made_up","target":"complete_value","operand":{"shape":"scalar","domain":"string","value":"unchanged"}},{"operator":"exact.equals","field_class":"semantic_identifier","field_name":"made_up","target":"complete_value","operand":{"shape":"scalar","domain":"string","value":"unchanged"}}]}', "succeeded"))
 
+    def test_succeeded_retrieval_replays_before_catalog_or_provider(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, router = self.prepared(directory)
+            catalog_path, _ = self.catalog(directory)
+            request = {"operator": "exact.equals", "field_class": "semantic_identifier", "field_name": "made_up", "target": "complete_value", "operand": {"shape": "scalar", "domain": "string", "value": "unchanged"}}
+            provider = RetrievalProviderDouble(RetrievalProviderInference((request,), "ignored", "response", ProviderUsage()))
+            first = infer_retrieval(database, self.config(), catalog_path, router.run_id, provider=provider)
+            replay_provider = RetrievalProviderDouble(RetrievalProviderInference((), "ignored", "other", ProviderUsage()))
+            missing_catalog = Path(directory) / "missing-catalog.json"
+            second = infer_retrieval(database, self.config(), missing_catalog, router.run_id, provider=replay_provider)
+            self.assertEqual(second, first)
+            self.assertEqual(len(provider.calls), 1)
+            self.assertEqual(replay_provider.calls, [])
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind='retrieval_inference'").fetchone()[0], 1)
+            connection.close()
+
+    def test_failed_retrieval_attempt_retries_with_new_run(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, router = self.prepared(directory)
+            catalog_path, _ = self.catalog(directory)
+            failed = RetrievalProviderDouble(RetrievalProviderInference((), "ignored", None, ProviderUsage()))
+            failed.inference = None
+            def fail_infer(config, catalog_text, messages):
+                failed.calls.append((config, catalog_text, tuple(messages)))
+                raise OpenAIProviderError("timeout", "temporary")
+            failed.infer_retrieval = fail_infer
+            with self.assertRaises(RuntimeRetrievalError):
+                infer_retrieval(database, self.config(), catalog_path, router.run_id, provider=failed)
+            request = {"operator": "exact.equals", "field_class": "semantic_identifier", "field_name": "made_up", "target": "complete_value", "operand": {"shape": "scalar", "domain": "string", "value": "retry"}}
+            success = RetrievalProviderDouble(RetrievalProviderInference((request,), "ignored", None, ProviderUsage()))
+            result = infer_retrieval(database, self.config(), catalog_path, router.run_id, provider=success)
+            connection = sqlite3.connect(database)
+            rows = connection.execute("SELECT run_id, status FROM model_runs WHERE run_kind='retrieval_inference' ORDER BY started_at").fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0][1], "failed")
+            self.assertEqual(rows[1], (result.run_id, "succeeded"))
+
+    def test_malformed_retrieval_success_fails_closed_before_catalog(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, router = self.prepared(directory)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, completed_at, output_json) VALUES ('malformed', ?, 1, 'retrieval_inference', ?, 'sha256:" + "0" * 64 + "', 'openai', 'm', 'p', 'succeeded', 'a', 'b', '{\"requests\":[{\"operator\":\"not-legal\"}]}')",
+                (conversation.conversation_id, router.run_id),
+            )
+            connection.commit()
+            connection.close()
+            provider = RetrievalProviderDouble(RetrievalProviderInference((), "ignored", None, ProviderUsage()))
+            with self.assertRaisesRegex(RuntimeRetrievalError, "proposal"):
+                infer_retrieval(database, self.config(), Path(directory) / "missing.json", router.run_id, provider=provider)
+            self.assertEqual(provider.calls, [])
+
+    def test_retrieval_impossible_success_and_running_histories_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, router = self.prepared(directory)
+            catalog_path, _ = self.catalog(directory)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, completed_at, output_json) VALUES ('success-a', ?, 1, 'retrieval_inference', ?, 'sha256:" + "0" * 64 + "', 'openai', 'm', 'p', 'succeeded', 'a', 'b', '{\"requests\":[]}')",
+                (conversation.conversation_id, router.run_id),
+            )
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at) VALUES ('running-b', ?, 1, 'retrieval_inference', ?, 'sha256:" + "0" * 64 + "', 'openai', 'm', 'p', 'running', 'c')",
+                (conversation.conversation_id, router.run_id),
+            )
+            connection.commit()
+            connection.close()
+            provider = RetrievalProviderDouble(RetrievalProviderInference((), "ignored", None, ProviderUsage()))
+            with self.assertRaisesRegex(RuntimeRetrievalError, "impossible"):
+                infer_retrieval(database, self.config(), catalog_path, router.run_id, provider=provider)
+            self.assertEqual(provider.calls, [])
+
     def test_empty_proposal_is_valid_and_parent_preconditions_fail_without_provider_contact(self):
         with TemporaryDirectory() as directory:
             database, conversation, router = self.prepared(directory)

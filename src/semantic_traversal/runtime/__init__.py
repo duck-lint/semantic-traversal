@@ -41,7 +41,7 @@ from .synthesis_input import (
 )
 from .synthesis import (
     SynthesisError, SynthesisProvider, SynthesisProviderError, SynthesisProviderResult,
-    SynthesisResult, SynthesisUsage, synthesize_conversation,
+    SynthesisResult, SynthesisUsage, load_synthesis_success, synthesize_conversation,
 )
 
 __all__ = [
@@ -65,5 +65,5 @@ __all__ = [
     "snapshot_synthesis_conversation", "build_synthesis_input", "synthesis_input_json",
     "serialize_synthesis_input", "synthesis_input_sha256",
     "SynthesisError", "SynthesisProviderError", "SynthesisUsage", "SynthesisProviderResult",
-    "SynthesisProvider", "SynthesisResult", "synthesize_conversation",
+    "SynthesisProvider", "SynthesisResult", "load_synthesis_success", "synthesize_conversation",
 ]
