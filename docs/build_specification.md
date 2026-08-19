@@ -790,3 +790,15 @@ claim prevents a duplicate provider call. A conversation mutation during
 provider execution invalidates the stale answer. `EvidenceProjection` remains
 derived nonpersistent state, schema version remains 6, and no synthesis
 transport adapter or full-turn orchestration is part of this boundary.
+
+The OpenAI adapter activates only the transport seam. It maps persisted
+`user` dialogue to Responses `user` items and prior `synthesis` dialogue to
+`assistant` items, preserving each message as one `input_text` part. Semantic
+retrieval adds one second `input_text` part to the final user item containing a
+stable evidence-data marker and the canonical `evidence_projection_json`
+payload. The evidence block is public model-facing projection data only; it is
+not placed in instructions or a synthetic message. Requests use the configured
+model and prompt with `store=false` and `truncation="disabled"`, and do not
+request tools, streaming, previous-response state, or structured JSON output.
+Completed responses return exact nonblank `output_text`, provider response ID,
+and the available token-usage fields through the provider-neutral result.
