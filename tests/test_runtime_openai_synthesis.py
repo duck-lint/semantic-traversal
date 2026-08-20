@@ -55,6 +55,20 @@ def _semantic_input():
     return SynthesisInput("synthesis-input-v1", "semantic_retrieval", (SynthesisMessage(0, "user", "question"),), evidence)
 
 
+def _semantic_multi_turn_input():
+    base = _semantic_input()
+    return SynthesisInput(
+        "synthesis-input-v1",
+        "semantic_retrieval",
+        (
+            SynthesisMessage(0, "user", "  first café\n"),
+            SynthesisMessage(1, "synthesis", " first answer \n答"),
+            SynthesisMessage(2, "user", "\n follow-up Ω  "),
+        ),
+        base.evidence,
+    )
+
+
 class OpenAISynthesisAdapterTests(unittest.TestCase):
     def setUp(self):
         self.client = MagicMock()
@@ -76,7 +90,7 @@ class OpenAISynthesisAdapterTests(unittest.TestCase):
         defaults.update(kwargs)
         self.client.responses.create.return_value = types.SimpleNamespace(**defaults)
 
-    def test_direct_dialogue_roles_content_fidelity_and_request_policy(self):
+    def test_prior_synthesis_history_must_use_output_text_not_input_text(self):
         self.response()
         synthesis_input = _direct_input(
             ("user", "  café\nquestion  "),
@@ -101,11 +115,44 @@ class OpenAISynthesisAdapterTests(unittest.TestCase):
             request["input"],
             [
                 {"role": "user", "content": [{"type": "input_text", "text": "  café\nquestion  "}]},
-                {"role": "assistant", "content": [{"type": "input_text", "text": "earlier answer"}]},
+                {"role": "assistant", "content": [{"type": "output_text", "text": "earlier answer"}]},
                 {"role": "user", "content": [{"type": "input_text", "text": "final user turn"}]},
             ],
         )
         self.openai.assert_called_once_with(max_retries=0, timeout=7.5)
+
+    def test_semantic_multi_turn_wire_keeps_evidence_on_final_user_only(self):
+        self.response()
+        synthesis_input = _semantic_multi_turn_input()
+        OpenAIResponsesProvider().synthesize(_model_config(), synthesis_input)
+        request = self.client.responses.create.call_args.kwargs
+        messages = request["input"]
+
+        # The mocked responses.create does not perform OpenAI's role-specific
+        # content validation, so this regression asserts the exact pairing.
+        self.assertEqual(messages[0], {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "  first café\n"}],
+        })
+        self.assertEqual(messages[1], {
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": " first answer \n答"}],
+        })
+        self.assertEqual(messages[2]["role"], "user")
+        self.assertEqual(messages[2]["content"][0], {"type": "input_text", "text": "\n follow-up Ω  "})
+        self.assertEqual(messages[2]["content"][1]["type"], "input_text")
+        evidence_text = messages[2]["content"][1]["text"]
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages[0]["content"]), 1)
+        self.assertEqual(len(messages[1]["content"]), 1)
+        self.assertTrue(evidence_text.startswith("SEMANTIC_TRAVERSAL_EVIDENCE_V1\n"))
+        self.assertIn("EVIDENCE_JSON:\n", evidence_text)
+        payload = evidence_text.split("EVIDENCE_JSON:\n", 1)[1]
+        self.assertEqual(json.loads(payload), evidence_projection_json(synthesis_input.evidence))
+        self.assertEqual(request["instructions"], "configured synthesis prompt")
+        self.assertFalse(request["store"])
+        self.assertEqual(request["truncation"], "disabled")
+        self.assertNotIn("text", request)
 
     def test_semantic_evidence_is_second_part_of_final_user_message_and_public_only(self):
         self.response()

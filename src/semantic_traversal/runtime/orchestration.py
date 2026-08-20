@@ -158,22 +158,12 @@ def run_current_turn(
     except Exception as exc:
         _raise("conformance", exc)
 
-    needs_vector = any(request["operator"] == "vector.semantic_similarity" for request in retrieval.requests)
-    vector_provider: EmbeddingProvider | None = None
-    if needs_vector:
-        if vector_provider_factory is None:
-            raise OrchestrationError("vector_provider", "vector_provider_factory is required for vector retrieval")
-        try:
-            vector_provider = vector_provider_factory()
-        except Exception as exc:
-            _raise("vector_provider", exc)
-
     try:
         execution = execute_retrieval(
             database_path,
             verified_package,
             conformance.conformance_id,
-            vector_provider=vector_provider,
+            vector_provider_factory=vector_provider_factory,
             clock=clock,
         )
     except Exception as exc:
