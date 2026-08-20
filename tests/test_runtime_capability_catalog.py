@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 from tests.catalog_fixtures import minimum_catalog
 from semantic_traversal.runtime.retrieval.capability_catalog import CapabilityCatalogError, load_capability_catalog
-from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig
+from semantic_traversal.runtime.config import CandidateSelectionConfig, ModelConfig, RuntimeConfig
 from semantic_traversal.runtime.retrieval.control_plane import RetrievalConformanceError, conform_retrieval
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import ProviderUsage, RetrievalProviderInference
@@ -636,7 +636,7 @@ class CatalogAdmissionTests(unittest.TestCase):
                     load_capability_catalog(self._write(directory, text))
 
     def test_malformed_catalogs_fail_before_retrieval_provider_and_run_insert(self):
-        config = RuntimeConfig(ModelConfig("openai", "router", 1.0, "router"), ModelConfig("openai", "retrieval", 1.0, "retrieval"))
+        config = RuntimeConfig(ModelConfig("openai", "router", 1.0, "router"), ModelConfig("openai", "retrieval", 1.0, "retrieval"), CandidateSelectionConfig(120, 0.20), ModelConfig("openai", "synthesis", 1.0, "synthesis"))
 
         class Provider:
             def __init__(self):

@@ -1,5 +1,7 @@
 """Retrieval inference, authority, execution, and candidate composition/selection."""
 
+from ..config import CandidateSelectionConfig
+
 from .control_plane import (
     ConformanceRequestResult,
     RetrievalConformanceError,
@@ -45,6 +47,12 @@ from .selection import (
     CandidateSelectionError, SelectionCoverage, SelectionRequestCoverage,
     candidate_selection_json, select_candidates, serialize_candidate_selection,
 )
+from .ownership_topology import (
+    CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION, CandidateOwnership,
+    CandidateOwnershipTopology, CandidateOwnershipTopologyError,
+    candidate_ownership_topology_json, derive_candidate_ownership_topology,
+    serialize_candidate_ownership_topology,
+)
 from .candidate_hydration import (
     CANDIDATE_HYDRATION_CONTRACT_VERSION, CandidateHydrationError,
     HydratedCanonicalTarget, HydratedCandidate, HydratedCandidateSelection,
@@ -57,6 +65,7 @@ from .evidence_projection import (
     EvidenceRequest, EvidenceRetrievalRelation, evidence_projection_json,
     measure_evidence_projection, project_evidence, serialize_evidence_projection,
 )
+from .evidence_preparation import prepare_evidence
 
 __all__ = [
     "ConformanceRequestResult",
@@ -92,6 +101,10 @@ __all__ = [
     "CANDIDATE_SELECTION_CONTRACT_VERSION", "CandidateSelectionError", "CandidateAdmission",
     "SelectionRequestCoverage", "SelectionCoverage", "CandidateSelection",
     "select_candidates", "candidate_selection_json", "serialize_candidate_selection",
+    "CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION", "CandidateOwnership",
+    "CandidateOwnershipTopology", "CandidateOwnershipTopologyError",
+    "derive_candidate_ownership_topology", "candidate_ownership_topology_json",
+    "serialize_candidate_ownership_topology",
     "CANDIDATE_HYDRATION_CONTRACT_VERSION", "CandidateHydrationError",
     "HydratedCanonicalTarget", "HydratedUnitTarget", "HydratedObjectTarget",
     "HydratedRegionTarget", "HydratedScopeTarget", "HydratedCandidate",
@@ -100,4 +113,5 @@ __all__ = [
     "EvidenceCoverage", "EvidenceObjectContext", "EvidenceCandidate",
     "EvidenceRetrievalRelation", "EvidenceProjection", "project_evidence",
     "evidence_projection_json", "serialize_evidence_projection", "measure_evidence_projection",
+    "CandidateSelectionConfig", "prepare_evidence",
 ]

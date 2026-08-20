@@ -17,7 +17,7 @@ from ...projection.graph import GraphError, graph_discover, graph_relation_looku
 from ...projection.lexical import lexical_lookup
 from ...projection.substrate import SubstrateError
 from ...projection.temporal import TemporalProjectionError, after, before, between, earliest, latest, ordered
-from ...projection.vector import EmbeddingProviderError, VectorError, vector_lookup
+from ...projection.vector import EmbeddingProvider, EmbeddingProviderError, VectorError, vector_lookup
 from .control_plane import CATALOG_CONFORMANCE_CONTRACT_VERSION, _canonical_persisted_proposal
 from ..conversation import RuntimeConversationError, _connect_runtime, _timestamp
 from .package import (
@@ -38,6 +38,10 @@ Clock = Callable[[], dt.datetime]
 
 class RetrievalExecutionError(ValueError):
     """A retrieval execution precondition or durable evidence is invalid."""
+
+
+class _VectorProviderFactoryError(RetrievalExecutionError):
+    """Keep the factory construction cause at the execution boundary."""
 
 
 def _immutable(value: Any) -> Any:
@@ -422,6 +426,7 @@ def execute_retrieval(
     conformance_id: str,
     *,
     vector_provider: Any | None = None,
+    vector_provider_factory: Callable[[], EmbeddingProvider] | None = None,
     clock: Clock | None = None,
 ) -> RetrievalExecutionResult:
     """Execute one existing valid conformance against one verified package."""
@@ -433,8 +438,8 @@ def execute_retrieval(
             authority = _load_authority(runtime_connection, conformance_id)
             require_catalog_binding(package, authority.capability_catalog_sha256)
             require_current_package_identity(package)
-            if any(item["operator"] == "vector.semantic_similarity" for item in authority.requests) and vector_provider is None:
-                raise RetrievalExecutionError("vector provider is required before retrieval execution can start")
+            if vector_provider is not None and vector_provider_factory is not None:
+                raise RetrievalExecutionError("vector_provider and vector_provider_factory cannot both be supplied")
             existing = runtime_connection.execute(
                 "SELECT * FROM retrieval_executions WHERE conformance_id = ?", (conformance_id,)
             ).fetchone()
@@ -444,6 +449,17 @@ def execute_retrieval(
                 if existing["status"] == "running":
                     raise RetrievalExecutionError("a prior retrieval execution is still running")
                 return _result_from_row(existing, authority.requests)
+
+            if any(item["operator"] == "vector.semantic_similarity" for item in authority.requests):
+                if vector_provider is None:
+                    if vector_provider_factory is None:
+                        raise RetrievalExecutionError("vector provider is required before retrieval execution can start")
+                    try:
+                        vector_provider = vector_provider_factory()
+                    except Exception as exc:
+                        raise _VectorProviderFactoryError(f"vector provider factory failed: {exc}") from exc
+                    if vector_provider is None:
+                        raise RetrievalExecutionError("vector provider factory returned no provider")
 
             execution_id = str(uuid4())
             started_at = _timestamp(clock)
@@ -466,6 +482,8 @@ def execute_retrieval(
             runtime_connection.commit()
         finally:
             runtime_connection.close()
+    except _VectorProviderFactoryError:
+        raise
     except (RetrievalExecutionError, RetrievalPackageError, RetrievalPackageVerificationError, RuntimeConversationError) as exc:
         raise RetrievalExecutionError(str(exc)) from exc
     except sqlite3.Error as exc:
