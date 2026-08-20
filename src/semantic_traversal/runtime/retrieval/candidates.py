@@ -18,7 +18,7 @@ from ...projection.graph import GraphHandle
 from .execution import RetrievalExecutionResult
 
 
-CANDIDATE_WORKSPACE_CONTRACT_VERSION = "candidate-workspace-v1"
+CANDIDATE_WORKSPACE_CONTRACT_VERSION = "candidate-workspace-v2"
 _TARGET_KINDS = {"semantic_unit", "semantic_object", "semantic_region", "scope"}
 _UNARY_OPERATORS = {
     "exact.equals": "exact",
@@ -282,7 +282,7 @@ def compose_candidate_workspace(execution_result: RetrievalExecutionResult) -> C
     """Compose all succeeded execution occurrences without admission policy."""
     if not isinstance(execution_result, RetrievalExecutionResult):
         raise TypeError("execution_result must be RetrievalExecutionResult")
-    if execution_result.status not in {"succeeded", "failed"}:
+    if execution_result.status not in {"succeeded", "partial", "failed"}:
         raise _error("candidate composition requires a completed execution")
     candidate_order: list[CandidateRef] = []
     supports: dict[CandidateRef, list[CandidateSupport]] = {}

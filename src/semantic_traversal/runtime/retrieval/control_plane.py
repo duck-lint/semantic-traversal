@@ -337,7 +337,8 @@ def conform_retrieval(
             _request_result(ordinal, request, catalog.parsed)
             for ordinal, request in enumerate(requests)
         )
-        overall_status = "invalid" if any(result.status == "invalid" for result in results) else "valid"
+        valid_count = sum(result.status == "valid" for result in results)
+        overall_status = "valid" if valid_count == len(results) else "partial" if valid_count else "invalid"
         payload = _result_payload(overall_status, results)
         result_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 

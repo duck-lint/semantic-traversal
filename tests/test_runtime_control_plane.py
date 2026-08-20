@@ -111,7 +111,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database, _, _, _, _ = self.prepared(directory, requests=[])
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             self.assertEqual(
                 {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
                 {"conversations", "messages", "model_runs", "retrieval_conformance", "retrieval_executions"},
@@ -131,7 +131,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
             )
             sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='retrieval_conformance'").fetchone()[0]
             self.assertIn("catalog-conformance-v1", sql)
-            self.assertIn("status IN ('valid', 'invalid')", sql)
+            self.assertIn("status IN ('valid', 'partial', 'invalid')", sql)
             connection.close()
 
     def test_all_legal_surfaces_order_duplicates_and_empty_proposals_conform(self):
@@ -165,7 +165,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
             database, catalog_path, run_id, _, _ = self.prepared(directory, requests=requests)
             result = conform_retrieval(database, catalog_path, run_id)
 
-        self.assertEqual(result.status, "invalid")
+        self.assertEqual(result.status, "partial")
         self.assertEqual([item.status for item in result.requests], ["invalid", "valid", "valid"])
         self.assertEqual(result.requests[0].violations[0]["code"], "lexical_terms_operand_not_tokenizable")
         self.assertIn("plant-based", result.requests[0].violations[0]["message"])
@@ -182,7 +182,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
             database, catalog_path, run_id, _, _ = self.prepared(directory, requests=requests)
             result = conform_retrieval(database, catalog_path, run_id)
 
-        self.assertEqual(result.status, "invalid")
+        self.assertEqual(result.status, "partial")
         self.assertEqual([item.status for item in result.requests], ["invalid", "valid", "valid"])
         self.assertEqual(result.requests[0].violations[0]["code"], "graph_discovery_terms_operand_not_tokenizable")
         self.assertIn("plant-based", result.requests[0].violations[0]["message"])
@@ -215,7 +215,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
                 self.assertEqual(result.requests[0].status, "invalid")
                 self.assertEqual(result.requests[0].violations[0]["code"], expected_code)
 
-    def test_partial_approval_is_all_or_nothing_and_messages_model_runs_unchanged(self):
+    def test_partial_approval_preserves_every_request_and_messages_model_runs_unchanged(self):
         requests = [self.requests()[0], dict(self.requests()[0], field_name="missing"), self.requests()[5]]
         with TemporaryDirectory() as directory:
             database, catalog_path, run_id, _, output_json = self.prepared(directory, requests=requests)
@@ -224,7 +224,7 @@ class RuntimeControlPlaneTests(unittest.TestCase):
             before_runs = tuple(before.execute("SELECT * FROM model_runs"))
             before.close()
             result = conform_retrieval(database, catalog_path, run_id)
-            self.assertEqual(result.status, "invalid")
+            self.assertEqual(result.status, "partial")
             self.assertEqual([item.status for item in result.requests], ["valid", "invalid", "valid"])
             connection = sqlite3.connect(database)
             self.assertEqual(tuple(connection.execute("SELECT * FROM messages")), before_messages)

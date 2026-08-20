@@ -159,7 +159,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             database = Path(directory) / "runtime.sqlite3"
             initialize_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             self.assertEqual(
                 {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")},
                 {"conversations", "messages", "model_runs", "retrieval_conformance", "retrieval_executions"},
@@ -192,7 +192,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             connection.close()
             migrate_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             for table, rows in before.items():
                 if table == "model_runs":
                     columns = "run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, completed_at, provider_response_id, output_json, error_type, error_message, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens"
@@ -224,7 +224,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             migrate_runtime(database)
 
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             actual = tuple(connection.execute(
                 "SELECT run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, "
                 "capability_catalog_sha256, provider, model, prompt_version, status, started_at, "
@@ -547,7 +547,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         database, package, conformance_id = self.prepared("non-tokenizable-terms", [request])
         module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["lexical_lookup"])
         with patch.object(module, "lexical_lookup") as lexical:
-            with self.assertRaisesRegex(RetrievalExecutionError, "valid current approval"):
+            with self.assertRaisesRegex(RetrievalExecutionError, "not executable"):
                 execute_retrieval(database, package, conformance_id)
         lexical.assert_not_called()
 
@@ -559,9 +559,32 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         database, package, conformance_id = self.prepared("non-tokenizable-graph-terms", [request])
         module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["graph_discover"])
         with patch.object(module, "graph_discover") as graph_discover:
-            with self.assertRaisesRegex(RetrievalExecutionError, "valid current approval"):
+            with self.assertRaisesRegex(RetrievalExecutionError, "not executable"):
                 execute_retrieval(database, package, conformance_id)
         graph_discover.assert_not_called()
+
+    def test_partial_conformance_executes_only_valid_ordinals_and_skips_invalid_vector_provider(self):
+        requests = [
+            self.exact("source"),
+            {"operator": "vector.semantic_similarity", "query": "invalid"},
+            self.exact("body"),
+        ]
+        database, package, conformance_id = self.prepared("partial-valid-siblings", requests)
+        connection = sqlite3.connect(database)
+        connection.execute("UPDATE retrieval_conformance SET status = 'partial', result_json = ? WHERE conformance_id = ?", (
+            json.dumps({"status": "partial", "requests": [
+                {"ordinal": 0, "status": "valid", "violations": []},
+                {"ordinal": 1, "status": "invalid", "violations": [{"code": "vector_operator_not_advertised"}]},
+                {"ordinal": 2, "status": "valid", "violations": []},
+            ]}, separators=(",", ":")), conformance_id,
+        ))
+        connection.commit(); connection.close()
+        factory = MagicMock()
+        result = execute_retrieval(database, package, conformance_id, vector_provider_factory=factory)
+        self.assertEqual(result.status, "partial")
+        self.assertEqual([item.status for item in result.requests], ["succeeded", "not_executed", "succeeded"])
+        self.assertEqual(result.requests[1].failure, {"kind": "conformance_rejected"})
+        factory.assert_not_called()
 
     def test_mutated_package_fails_before_execution_row(self):
         database, package, conformance_id = self.prepared("mutated-before", [self.exact()])

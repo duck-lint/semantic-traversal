@@ -19,6 +19,7 @@ from ...projection.substrate import SubstrateError
 from ...projection.temporal import TemporalProjectionError, after, before, between, earliest, latest, ordered
 from ...projection.vector import EmbeddingProvider, EmbeddingProviderError, VectorError, vector_lookup
 from .control_plane import CATALOG_CONFORMANCE_CONTRACT_VERSION, _canonical_persisted_proposal
+from .requests import RETRIEVAL_REQUEST_GRAMMAR_CONTRACT_VERSION
 from ..conversation import RuntimeConversationError, _connect_runtime, _timestamp
 from .package import (
     IDENTITY_VERSION, RetrievalPackage, RetrievalPackageError,
@@ -32,7 +33,7 @@ from .package_verification import (
 )
 
 
-EXECUTION_CONTRACT_VERSION = "retrieval-execution-v1"
+EXECUTION_CONTRACT_VERSION = "retrieval-execution-v2"
 Clock = Callable[[], dt.datetime]
 
 
@@ -96,6 +97,8 @@ class _Authority:
     retrieval_proposal_sha256: str
     capability_catalog_sha256: str
     requests: tuple[dict[str, Any], ...]
+    executable_ordinals: tuple[int, ...]
+    partial: bool
 
 
 def _load_authority(connection: sqlite3.Connection, conformance_id: str) -> _Authority:
@@ -104,8 +107,8 @@ def _load_authority(connection: sqlite3.Connection, conformance_id: str) -> _Aut
     ).fetchone()
     if row is None:
         raise RetrievalExecutionError(f"retrieval conformance does not exist: {conformance_id}")
-    if row["contract_version"] != CATALOG_CONFORMANCE_CONTRACT_VERSION or row["status"] != "valid":
-        raise RetrievalExecutionError("retrieval conformance is not a valid current approval")
+    if row["contract_version"] not in {"catalog-conformance-v1", CATALOG_CONFORMANCE_CONTRACT_VERSION}:
+        raise RetrievalExecutionError("retrieval conformance contract is unsupported")
     run = connection.execute(
         "SELECT run_id, run_kind, status, output_json, capability_catalog_sha256 "
         "FROM model_runs WHERE run_id = ?", (row["retrieval_run_id"],)
@@ -129,14 +132,31 @@ def _load_authority(connection: sqlite3.Connection, conformance_id: str) -> _Aut
         raise RetrievalExecutionError("persisted conformance result is malformed") from exc
     if not isinstance(payload, dict) or set(payload) != {"status", "requests"}:
         raise RetrievalExecutionError("persisted conformance result envelope is malformed")
-    if payload["status"] != "valid" or not isinstance(payload["requests"], list) or len(payload["requests"]) != len(requests):
-        raise RetrievalExecutionError("persisted conformance result is not a complete valid approval")
+    if payload["status"] != row["status"] or not isinstance(payload["requests"], list) or len(payload["requests"]) != len(requests):
+        raise RetrievalExecutionError("persisted conformance result conflicts with row")
+    if row["contract_version"] == "catalog-conformance-v1" and row["status"] != "valid":
+        raise RetrievalExecutionError("historical invalid conformance is not executable")
+    if row["contract_version"] == CATALOG_CONFORMANCE_CONTRACT_VERSION and row["status"] not in {"valid", "partial"}:
+        raise RetrievalExecutionError("retrieval conformance is not executable")
+    if row["status"] == "partial" and RETRIEVAL_REQUEST_GRAMMAR_CONTRACT_VERSION != "independent-retrieval-requests-v1":
+        raise RetrievalExecutionError("partial execution requires the independent retrieval-request grammar")
+    executable: list[int] = []
     for ordinal, item in enumerate(payload["requests"]):
         if not isinstance(item, dict) or set(item) != {"ordinal", "status", "violations"}:
             raise RetrievalExecutionError("persisted conformance request result is malformed")
-        if item["ordinal"] != ordinal or item["status"] != "valid" or item["violations"] != []:
-            raise RetrievalExecutionError("persisted conformance contains a non-valid request result")
-    return _Authority(row["conformance_id"], row["retrieval_run_id"], proposal_sha, row["capability_catalog_sha256"], requests)
+        if item["ordinal"] != ordinal or item["status"] not in {"valid", "invalid"} or not isinstance(item["violations"], list):
+            raise RetrievalExecutionError("persisted conformance request result is malformed")
+        if item["status"] == "valid":
+            if item["violations"]:
+                raise RetrievalExecutionError("valid conformance request has violations")
+            executable.append(ordinal)
+        elif not item["violations"]:
+            raise RetrievalExecutionError("invalid conformance request lacks violations")
+    if row["status"] == "valid" and len(executable) != len(requests):
+        raise RetrievalExecutionError("valid conformance contains an invalid request")
+    if row["status"] == "partial" and (not executable or len(executable) == len(requests)):
+        raise RetrievalExecutionError("partial conformance executable set is malformed")
+    return _Authority(row["conformance_id"], row["retrieval_run_id"], proposal_sha, row["capability_catalog_sha256"], requests, tuple(executable), row["status"] == "partial")
 
 
 def _open_substrate_read_only(path: Path) -> sqlite3.Connection:
@@ -309,7 +329,7 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
             if item["failure"].get("kind") == "prior_request_failed":
                 if set(item["failure"]) != {"kind", "failed_ordinal"} or not isinstance(item["failure"]["failed_ordinal"], int):
                     raise RetrievalExecutionError("persisted prior-request failure evidence is malformed")
-            elif item["failure"] != {"kind": "package_identity_changed"}:
+            elif item["failure"] not in ({"kind": "package_identity_changed"}, {"kind": "conformance_rejected"}):
                 raise RetrievalExecutionError("persisted execution-level failure evidence is malformed")
         outcomes.append(_outcome(ordinal, item["request"], status, item["result"], item["failure"]))
     execution_failure = payload["execution_failure"]
@@ -321,9 +341,12 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
     elif row["status"] == "succeeded":
         if execution_failure is not None or len(outcomes) != len(expected_requests) or any(item.status != "succeeded" for item in outcomes):
             raise RetrievalExecutionError("persisted successful execution is malformed")
+    elif row["status"] == "partial":
+        if execution_failure is not None or len(outcomes) != len(expected_requests) or not any(item.failure == {"kind": "conformance_rejected"} for item in outcomes) or any(item.status not in {"succeeded", "not_executed"} for item in outcomes):
+            raise RetrievalExecutionError("persisted partial execution is malformed")
     elif row["status"] == "failed":
         failed = [item.ordinal for item in outcomes if item.status == "failed"]
-        if failed:
+        if failed and not any(item.failure == {"kind": "conformance_rejected"} for item in outcomes):
             failed_ordinal = failed[0]
             if (
                 len(failed) != 1
@@ -337,7 +360,7 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
                 )
             ):
                 raise RetrievalExecutionError("persisted fail-fast outcomes are malformed")
-        else:
+        elif not failed:
             if (
                 execution_failure is None
                 or execution_failure.get("kind") != "package_identity_changed"
@@ -450,7 +473,7 @@ def execute_retrieval(
                     raise RetrievalExecutionError("a prior retrieval execution is still running")
                 return _result_from_row(existing, authority.requests)
 
-            if any(item["operator"] == "vector.semantic_similarity" for item in authority.requests):
+            if any(authority.requests[index]["operator"] == "vector.semantic_similarity" for index in authority.executable_ordinals):
                 if vector_provider is None:
                     if vector_provider_factory is None:
                         raise RetrievalExecutionError("vector provider is required before retrieval execution can start")
@@ -493,24 +516,22 @@ def execute_retrieval(
     execution_failure: Mapping[str, Any] | None = None
     substrate = _open_substrate_read_only(package.substrate_path)
     try:
+        executable = set(authority.executable_ordinals)
         for ordinal, request in enumerate(authority.requests):
+            if ordinal not in executable:
+                outcomes.append(_outcome(ordinal, request, "not_executed", failure={"kind": "conformance_rejected"}))
+                continue
             try:
                 require_current_package_identity(package)
             except RetrievalPackageError as exc:
                 execution_failure = {"kind": "package_identity_changed", "message": str(exc)}
-                outcomes.extend(
-                    _outcome(index, item, "not_executed", failure={"kind": "package_identity_changed"})
-                    for index, item in enumerate(authority.requests[ordinal:], ordinal)
-                )
+                outcomes.extend(_outcome(index, item, "not_executed", failure={"kind": "conformance_rejected"} if index not in executable else {"kind": "package_identity_changed"}) for index, item in enumerate(authority.requests[ordinal:], ordinal))
                 break
             try:
                 result = _execute_surface(substrate, package, request, vector_provider)
             except _SURFACE_ERRORS[request["operator"]] as exc:
                 outcomes.append(_outcome(ordinal, request, "failed", failure=_surface_failure(request["operator"], exc)))
-                outcomes.extend(
-                    _outcome(index, item, "not_executed", failure={"kind": "prior_request_failed", "failed_ordinal": ordinal})
-                    for index, item in enumerate(authority.requests[ordinal + 1:], ordinal + 1)
-                )
+                outcomes.extend(_outcome(index, item, "not_executed", failure={"kind": "conformance_rejected"} if index not in executable else {"kind": "prior_request_failed", "failed_ordinal": ordinal}) for index, item in enumerate(authority.requests[ordinal + 1:], ordinal + 1))
                 break
             outcomes.append(_outcome(ordinal, request, "succeeded", result=result))
             connection = _connect_runtime(database_path)
@@ -529,7 +550,7 @@ def execute_retrieval(
                 require_current_package_identity(package)
             except RetrievalPackageError as exc:
                 execution_failure = {"kind": "package_identity_changed", "message": str(exc)}
-        status = "failed" if execution_failure is not None or any(item.status == "failed" for item in outcomes) else "succeeded"
+        status = "failed" if execution_failure is not None or any(item.status == "failed" for item in outcomes) else "partial" if authority.partial else "succeeded"
         completed_at = _timestamp(clock)
         connection = _connect_runtime(database_path)
         try:

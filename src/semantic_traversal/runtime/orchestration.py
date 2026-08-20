@@ -151,7 +151,7 @@ def run_current_turn(
             retrieval.run_id,
             clock=clock,
         )
-        if conformance.status != "valid":
+        if conformance.status not in {"valid", "partial"}:
             raise OrchestrationError("conformance", "retrieval conformance is not valid")
     except OrchestrationError:
         raise

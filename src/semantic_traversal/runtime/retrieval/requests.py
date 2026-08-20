@@ -31,6 +31,7 @@ LEGAL_RETRIEVAL_OPERATORS = frozenset({
     "temporal.between",
     "temporal.ordered",
 })
+RETRIEVAL_REQUEST_GRAMMAR_CONTRACT_VERSION = "independent-retrieval-requests-v1"
 
 
 def _string_property() -> dict[str, str]:
@@ -356,6 +357,7 @@ def canonicalize_retrieval_requests(requests: Any) -> tuple[dict[str, Any], ...]
 
 __all__ = [
     "LEGAL_RETRIEVAL_OPERATORS",
+    "RETRIEVAL_REQUEST_GRAMMAR_CONTRACT_VERSION",
     "RetrievalRequestError",
     "canonicalize_retrieval_request",
     "canonicalize_retrieval_requests",

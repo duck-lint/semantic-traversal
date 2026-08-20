@@ -135,7 +135,7 @@ class RuntimeConformanceAuthorityTests(unittest.TestCase):
             database, _, before = self._make_v3(directory)
             migrate_runtime(database)
             connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             for table, rows in before.items():
                 if table == "model_runs":
                     columns = "run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, completed_at, provider_response_id, output_json, error_type, error_message, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens"

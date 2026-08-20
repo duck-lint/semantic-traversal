@@ -312,7 +312,7 @@ def project_evidence(hydrated_selection: HydratedCandidateSelection) -> Evidence
     if not isinstance(hydrated_selection, HydratedCandidateSelection) or hydrated_selection.contract_version != CANDIDATE_HYDRATION_CONTRACT_VERSION:
         raise _fail("unsupported candidate hydration contract")
     selection = hydrated_selection.selection
-    if selection.contract_version != CANDIDATE_SELECTION_CONTRACT_VERSION:
+    if selection.contract_version not in {"candidate-selection-v2", CANDIDATE_SELECTION_CONTRACT_VERSION}:
         raise _fail("unsupported candidate selection contract")
     if len(hydrated_selection.hydrated_candidates) != len(selection.selected_candidates):
         raise _fail("hydrated candidate count disagrees with selection")

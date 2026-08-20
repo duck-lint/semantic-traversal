@@ -190,8 +190,7 @@ def _validate_semantic_lineage(
     if evidence != expected_projection:
         raise _lineage_error("evidence does not equal the deterministic projection of its source")
     selection = evidence.source.selection
-    expected_contract = "candidate-selection-v2"
-    if selection.contract_version != expected_contract:
+    if selection.contract_version not in {"candidate-selection-v2", "candidate-selection-v3"}:
         raise _lineage_error("candidate selection contract is unsupported")
     parent_id = selection.retrieval_run_id
     parent = connection.execute("SELECT * FROM model_runs WHERE run_id = ?", (parent_id,)).fetchone()
@@ -207,7 +206,7 @@ def _validate_semantic_lineage(
     conformance = connection.execute(
         "SELECT * FROM retrieval_conformance WHERE conformance_id = ?", (selection.conformance_id,)
     ).fetchone()
-    if conformance is None or conformance["status"] != "valid" or conformance["contract_version"] != "catalog-conformance-v1":
+    if conformance is None or conformance["status"] not in {"valid", "partial"} or conformance["contract_version"] not in {"catalog-conformance-v1", "catalog-conformance-v2"}:
         raise _lineage_error("conformance is not a valid persisted approval")
     if (
         conformance["retrieval_run_id"] != selection.retrieval_run_id
@@ -218,7 +217,7 @@ def _validate_semantic_lineage(
     execution = connection.execute(
         "SELECT * FROM retrieval_executions WHERE execution_id = ?", (selection.execution_id,)
     ).fetchone()
-    if execution is None or execution["status"] not in {"succeeded", "failed"}:
+    if execution is None or execution["status"] not in {"succeeded", "partial", "failed"}:
         raise _lineage_error("execution is not a terminal persisted result")
     fields = (
         "conformance_id", "retrieval_run_id", "retrieval_proposal_sha256", "capability_catalog_sha256",
@@ -304,12 +303,12 @@ def _validate_persisted_parent(connection: sqlite3.Connection, row: sqlite3.Row,
     conformance = connection.execute(
         "SELECT * FROM retrieval_conformance WHERE retrieval_run_id = ?", (parent["run_id"],)
     ).fetchone()
-    if conformance is None or conformance["status"] != "valid":
+    if conformance is None or conformance["status"] not in {"valid", "partial"}:
         raise SynthesisError("semantic synthesis parent lacks valid conformance")
     execution = connection.execute(
         "SELECT * FROM retrieval_executions WHERE retrieval_run_id = ?", (parent["run_id"],)
     ).fetchone()
-    if execution is None or execution["status"] not in {"succeeded", "failed"}:
+    if execution is None or execution["status"] not in {"succeeded", "partial", "failed"}:
         raise SynthesisError("semantic synthesis parent lacks terminal execution")
     if execution["conformance_id"] != conformance["conformance_id"] or parent["capability_catalog_sha256"] != conformance["capability_catalog_sha256"]:
         raise SynthesisError("semantic synthesis persisted retrieval lineage is inconsistent")

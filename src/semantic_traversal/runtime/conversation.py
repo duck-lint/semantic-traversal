@@ -16,8 +16,9 @@ ROUTER_SCHEMA_VERSION = 2
 MODEL_RUN_SCHEMA_VERSION = 3
 CONFORMANCE_SCHEMA_VERSION = 4
 RETRIEVAL_SCHEMA_VERSION = 5
-SCHEMA_VERSION = 6
-CONFORMANCE_CONTRACT_VERSION = "catalog-conformance-v1"
+SCHEMA_VERSION = 7
+CONFORMANCE_CONTRACT_VERSION = "catalog-conformance-v2"
+HISTORICAL_CONFORMANCE_CONTRACT_VERSION = "catalog-conformance-v1"
 ALLOWED_ROLES = frozenset({"user", "synthesis"})
 HISTORICAL_ROUTER_V1_PROMPT_VERSION = "router-v1"
 HISTORICAL_ROUTER_V1_PROMPT_SHA256 = "sha256:32abaecb56571dd80b6915ac2b6c01a0e02cbbec0487dc3aa1e6aeb74d0ca352"
@@ -157,11 +158,11 @@ def _definitions(schema_version: int) -> dict[str, dict[str, tuple[str, int, str
             for key in _V2_MODEL_RUN_COLUMNS
             if key not in {"parent_run_id", "capability_catalog_sha256"}
         }
-    elif schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
-        definitions["model_runs"] = dict(_V6_MODEL_RUN_DEFINITIONS if schema_version == SCHEMA_VERSION else _MODEL_RUN_DEFINITIONS)
-        if schema_version in {CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+    elif schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
+        definitions["model_runs"] = dict(_V6_MODEL_RUN_DEFINITIONS if schema_version in {6, SCHEMA_VERSION} else _MODEL_RUN_DEFINITIONS)
+        if schema_version in {CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
             definitions["retrieval_conformance"] = dict(_CONFORMANCE_DEFINITIONS)
-        if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+        if schema_version in {RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
             definitions["retrieval_executions"] = dict(_EXECUTION_DEFINITIONS)
     return definitions
 
@@ -204,7 +205,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         _create_model_runs_table(connection)
         _create_retrieval_conformance_table(connection)
         _create_retrieval_executions_table(connection)
-        connection.execute("PRAGMA user_version = 6")
+        connection.execute("PRAGMA user_version = 7")
         _validate_schema(connection, SCHEMA_VERSION)
         connection.commit()
     except Exception:
@@ -265,8 +266,8 @@ def _create_retrieval_conformance_table(connection: sqlite3.Connection) -> None:
             retrieval_run_id TEXT NOT NULL UNIQUE,
             retrieval_proposal_sha256 TEXT NOT NULL,
             capability_catalog_sha256 TEXT NOT NULL,
-            contract_version TEXT NOT NULL CHECK (contract_version = 'catalog-conformance-v1'),
-            status TEXT NOT NULL CHECK (status IN ('valid', 'invalid')),
+            contract_version TEXT NOT NULL CHECK (contract_version IN ('catalog-conformance-v1', 'catalog-conformance-v2')),
+            status TEXT NOT NULL CHECK (status IN ('valid', 'partial', 'invalid')),
             checked_at TEXT NOT NULL,
             result_json TEXT NOT NULL,
             FOREIGN KEY (retrieval_run_id) REFERENCES model_runs(run_id)
@@ -289,15 +290,15 @@ def _create_retrieval_executions_table(connection: sqlite3.Connection) -> None:
             substrate_sha256 TEXT NOT NULL,
             vectors_sha256 TEXT NOT NULL,
             package_verification_contract_version TEXT NOT NULL,
-            execution_contract_version TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+            execution_contract_version TEXT NOT NULL CHECK (execution_contract_version IN ('retrieval-execution-v1', 'retrieval-execution-v2')),
+            status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'partial', 'failed')),
             started_at TEXT NOT NULL,
             completed_at TEXT,
             result_json TEXT NOT NULL,
             CHECK (
                 (status = 'running' AND completed_at IS NULL)
                 OR
-                (status IN ('succeeded', 'failed') AND completed_at IS NOT NULL)
+                (status IN ('succeeded', 'partial', 'failed') AND completed_at IS NOT NULL)
             ),
             FOREIGN KEY (conformance_id) REFERENCES retrieval_conformance(conformance_id),
             FOREIGN KEY (retrieval_run_id) REFERENCES model_runs(run_id)
@@ -322,7 +323,7 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
             else _CONFORMANCE_COLUMNS if table == "retrieval_conformance"
             else _EXECUTION_COLUMNS if table == "retrieval_executions"
             else _V2_MODEL_RUN_COLUMNS if schema_version == ROUTER_SCHEMA_VERSION
-            else _V6_MODEL_RUN_COLUMNS if schema_version == SCHEMA_VERSION
+            else _V6_MODEL_RUN_COLUMNS if schema_version in {6, SCHEMA_VERSION}
             else _V3_MODEL_RUN_COLUMNS
         )
         info = _table_info(connection, table)
@@ -346,9 +347,9 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
     if not re.search(r"CHECK\s*\(\s*role\s+IN\s*\(\s*'user'\s*,\s*'synthesis'\s*\)\s*\)", messages_sql, re.IGNORECASE):
         raise RuntimeConversationError("runtime message role constraint is incompatible")
 
-    if schema_version in {ROUTER_SCHEMA_VERSION, MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+    if schema_version in {ROUTER_SCHEMA_VERSION, MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
         model_runs_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_runs'").fetchone()[0]
-        run_kind = r"'router'\s*\)" if schema_version == ROUTER_SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*\)" if schema_version != SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*,\s*'synthesis'\s*\)"
+        run_kind = r"'router'\s*\)" if schema_version == ROUTER_SCHEMA_VERSION else r"'router'\s*,\s*'retrieval_inference'\s*\)" if schema_version not in {6, SCHEMA_VERSION} else r"'router'\s*,\s*'retrieval_inference'\s*,\s*'synthesis'\s*\)"
         if not re.search(rf"CHECK\s*\(\s*run_kind\s+IN\s*\(\s*{run_kind}", model_runs_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime model-run kind constraint is incompatible")
         if not re.search(r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)", model_runs_sql, re.IGNORECASE):
@@ -365,7 +366,7 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
                 re.IGNORECASE,
             )
             and (
-                schema_version != SCHEMA_VERSION
+                schema_version not in {6, SCHEMA_VERSION}
                 or re.search(r"run_kind\s*=\s*'synthesis'\s+AND\s+parent_run_id\s+IS\s+NOT\s+NULL\s+AND\s+capability_catalog_sha256\s+IS\s+NULL", model_runs_sql, re.IGNORECASE)
             )
         ):
@@ -377,16 +378,18 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
         }
         if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
             required.add(("model_runs", "parent_run_id", "run_id"))
-        if schema_version == SCHEMA_VERSION:
+        if schema_version in {6, SCHEMA_VERSION}:
             required.add(("messages", "produced_message_id", "message_id"))
         if required - model_run_foreign_keys:
             raise RuntimeConversationError("runtime model-run foreign keys are incompatible")
 
-    if schema_version in {CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+    if schema_version in {CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
         conformance_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_conformance'").fetchone()[0]
-        if not re.search(r"CHECK\s*\(\s*contract_version\s*=\s*'catalog-conformance-v1'\s*\)", conformance_sql, re.IGNORECASE):
+        contract_pattern = r"CHECK\s*\(\s*contract_version\s*=\s*'catalog-conformance-v1'\s*\)" if schema_version != SCHEMA_VERSION else r"CHECK\s*\(\s*contract_version\s+IN\s*\(\s*'catalog-conformance-v1'\s*,\s*'catalog-conformance-v2'\s*\)\s*\)"
+        if not re.search(contract_pattern, conformance_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime conformance contract constraint is incompatible")
-        if not re.search(r"CHECK\s*\(\s*status\s+IN\s*\(\s*'valid'\s*,\s*'invalid'\s*\)\s*\)", conformance_sql, re.IGNORECASE):
+        status_pattern = r"CHECK\s*\(\s*status\s+IN\s*\(\s*'valid'\s*,\s*'invalid'\s*\)\s*\)" if schema_version != SCHEMA_VERSION else r"CHECK\s*\(\s*status\s+IN\s*\(\s*'valid'\s*,\s*'partial'\s*,\s*'invalid'\s*\)\s*\)"
+        if not re.search(status_pattern, conformance_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime conformance status constraint is incompatible")
         conformance_foreign_keys = {(row[2], row[3], row[4]) for row in connection.execute("PRAGMA foreign_key_list(retrieval_conformance)")}
         if ("model_runs", "retrieval_run_id", "run_id") not in conformance_foreign_keys:
@@ -398,18 +401,18 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
         if ("retrieval_run_id",) not in unique_pairs:
             raise RuntimeConversationError("runtime conformance uniqueness constraint is incompatible")
 
-    if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+    if schema_version in {RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
         execution_sql = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_executions'"
         ).fetchone()[0]
         if not re.search(
-            r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)",
+            r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'partial'\s*,\s*'failed'\s*\)\s*\)" if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION} else r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)",
             execution_sql,
             re.IGNORECASE,
         ):
             raise RuntimeConversationError("runtime execution status constraint is incompatible")
         if not re.search(
-            r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)",
+            r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'partial'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)" if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION} else r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)",
             execution_sql,
             re.IGNORECASE | re.DOTALL,
         ):
@@ -581,6 +584,19 @@ def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA legacy_alter_table = OFF")
 
 
+def _migrate_v6_to_v7(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA legacy_alter_table = ON")
+    connection.execute("ALTER TABLE retrieval_executions RENAME TO retrieval_executions_v6_legacy")
+    connection.execute("ALTER TABLE retrieval_conformance RENAME TO retrieval_conformance_v6_legacy")
+    _create_retrieval_conformance_table(connection)
+    _create_retrieval_executions_table(connection)
+    connection.execute("INSERT INTO retrieval_conformance SELECT * FROM retrieval_conformance_v6_legacy")
+    connection.execute("INSERT INTO retrieval_executions SELECT * FROM retrieval_executions_v6_legacy")
+    connection.execute("DROP TABLE retrieval_executions_v6_legacy")
+    connection.execute("DROP TABLE retrieval_conformance_v6_legacy")
+    connection.execute("PRAGMA legacy_alter_table = OFF")
+
+
 def migrate_runtime(database_path: str | Path) -> None:
     """Explicitly migrate the supported legacy schemas to schema v6."""
     connection = _open_connection(database_path, allow_create=False)
@@ -594,7 +610,7 @@ def migrate_runtime(database_path: str | Path) -> None:
             _create_model_runs_table(connection)
             _create_retrieval_conformance_table(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 6")
+            connection.execute("PRAGMA user_version = 7")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             transaction_started = False
@@ -606,7 +622,7 @@ def migrate_runtime(database_path: str | Path) -> None:
             _migrate_v2_to_v3(connection)
             _create_retrieval_conformance_table(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 6")
+            connection.execute("PRAGMA user_version = 7")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             transaction_started = False
@@ -619,7 +635,7 @@ def migrate_runtime(database_path: str | Path) -> None:
             _migrate_v5_to_v6(connection)
             _create_retrieval_conformance_table(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 6")
+            connection.execute("PRAGMA user_version = 7")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             connection.execute("PRAGMA legacy_alter_table = OFF")
@@ -632,7 +648,7 @@ def migrate_runtime(database_path: str | Path) -> None:
             transaction_started = True
             _migrate_v5_to_v6(connection)
             _create_retrieval_executions_table(connection)
-            connection.execute("PRAGMA user_version = 6")
+            connection.execute("PRAGMA user_version = 7")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             connection.execute("PRAGMA legacy_alter_table = OFF")
@@ -644,10 +660,20 @@ def migrate_runtime(database_path: str | Path) -> None:
             connection.execute("BEGIN IMMEDIATE")
             transaction_started = True
             _migrate_v5_to_v6(connection)
-            connection.execute("PRAGMA user_version = 6")
+            connection.execute("PRAGMA user_version = 7")
             _validate_schema(connection, SCHEMA_VERSION)
             connection.commit()
             connection.execute("PRAGMA legacy_alter_table = OFF")
+            transaction_started = False
+            return
+        if version == 6:
+            _validate_schema(connection, 6)
+            connection.execute("BEGIN IMMEDIATE")
+            transaction_started = True
+            _migrate_v6_to_v7(connection)
+            connection.execute("PRAGMA user_version = 7")
+            _validate_schema(connection, SCHEMA_VERSION)
+            connection.commit()
             transaction_started = False
             return
         if version == SCHEMA_VERSION:

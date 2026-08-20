@@ -25,7 +25,7 @@ from .ownership_topology import (
 )
 
 
-CANDIDATE_SELECTION_CONTRACT_VERSION = "candidate-selection-v2"
+CANDIDATE_SELECTION_CONTRACT_VERSION = "candidate-selection-v3"
 _GRAPH_RELATION_OPERATOR = "graph.relation_occurrence_lookup"
 _PROTECTED_OPERATORS = frozenset({"lexical.terms", "lexical.phrase", "vector.semantic_similarity"})
 _UNAFFECTED_OPERATORS = frozenset({
