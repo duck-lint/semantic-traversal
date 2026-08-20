@@ -49,7 +49,7 @@ def _semantic_input():
         (), (), (), (), (), SelectionCoverage(0, 0, 0, 0, 0, 0, 120, False, False),
     )
     evidence = EvidenceProjection(
-        "evidence-projection-v1", HydratedCandidateSelection("candidate-hydration-v1", selection, ()),
+        "evidence-projection-v2", HydratedCandidateSelection("candidate-hydration-v1", selection, ()),
         (), EvidenceCoverage("succeeded", None, 0, 0, 0, False, 0, 0, 0), (), (), (),
     )
     return SynthesisInput("synthesis-input-v1", "semantic_retrieval", (SynthesisMessage(0, "user", "question"),), evidence)

@@ -180,7 +180,7 @@ def _validate_semantic_lineage(
     conversation_id: str,
 ) -> str:
     if not isinstance(evidence, EvidenceProjection) or evidence.contract_version != EVIDENCE_PROJECTION_CONTRACT_VERSION:
-        raise _lineage_error("evidence must be EvidenceProjection v1")
+        raise _lineage_error("evidence must use the current EvidenceProjection contract")
     if not isinstance(evidence.source, HydratedCandidateSelection):
         raise _lineage_error("evidence source is malformed")
     try:
@@ -206,7 +206,7 @@ def _validate_semantic_lineage(
     conformance = connection.execute(
         "SELECT * FROM retrieval_conformance WHERE conformance_id = ?", (selection.conformance_id,)
     ).fetchone()
-    if conformance is None or conformance["status"] not in {"valid", "partial"} or conformance["contract_version"] not in {"catalog-conformance-v1", "catalog-conformance-v2"}:
+    if conformance is None or conformance["contract_version"] not in {"catalog-conformance-v1", "catalog-conformance-v2"} or (conformance["contract_version"] == "catalog-conformance-v1" and conformance["status"] not in {"valid", "invalid"}) or (conformance["contract_version"] == "catalog-conformance-v2" and conformance["status"] not in {"valid", "partial", "invalid"}) or conformance["status"] not in {"valid", "partial"}:
         raise _lineage_error("conformance is not a valid persisted approval")
     if (
         conformance["retrieval_run_id"] != selection.retrieval_run_id
@@ -217,7 +217,7 @@ def _validate_semantic_lineage(
     execution = connection.execute(
         "SELECT * FROM retrieval_executions WHERE execution_id = ?", (selection.execution_id,)
     ).fetchone()
-    if execution is None or execution["status"] not in {"succeeded", "partial", "failed"}:
+    if execution is None or execution["execution_contract_version"] not in {"retrieval-execution-v1", EXECUTION_CONTRACT_VERSION} or (execution["execution_contract_version"] == "retrieval-execution-v1" and execution["status"] not in {"succeeded", "failed"}) or (execution["execution_contract_version"] == EXECUTION_CONTRACT_VERSION and execution["status"] not in {"succeeded", "partial", "failed"}):
         raise _lineage_error("execution is not a terminal persisted result")
     fields = (
         "conformance_id", "retrieval_run_id", "retrieval_proposal_sha256", "capability_catalog_sha256",

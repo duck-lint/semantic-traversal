@@ -209,7 +209,30 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
             initialize_runtime(database)
             connection = sqlite3.connect(database)
             self._downgrade_model_runs_to_v3(connection)
-            _create_retrieval_executions_table(connection)
+            connection.execute(
+                """
+                CREATE TABLE retrieval_executions (
+                    execution_id TEXT PRIMARY KEY,
+                    conformance_id TEXT NOT NULL UNIQUE,
+                    retrieval_run_id TEXT NOT NULL,
+                    retrieval_proposal_sha256 TEXT NOT NULL,
+                    capability_catalog_sha256 TEXT NOT NULL,
+                    retrieval_package_id TEXT NOT NULL,
+                    retrieval_package_identity_version TEXT NOT NULL,
+                    substrate_sha256 TEXT NOT NULL,
+                    vectors_sha256 TEXT NOT NULL,
+                    package_verification_contract_version TEXT NOT NULL,
+                    execution_contract_version TEXT NOT NULL CHECK (execution_contract_version = 'retrieval-execution-v1'),
+                    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    result_json TEXT NOT NULL,
+                    CHECK ((status = 'running' AND completed_at IS NULL) OR (status IN ('succeeded', 'failed') AND completed_at IS NOT NULL)),
+                    FOREIGN KEY (conformance_id) REFERENCES retrieval_conformance(conformance_id),
+                    FOREIGN KEY (retrieval_run_id) REFERENCES model_runs(run_id)
+                )
+                """
+            )
             before = tuple(connection.execute(
                 "SELECT run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, "
                 "capability_catalog_sha256, provider, model, prompt_version, status, started_at, "

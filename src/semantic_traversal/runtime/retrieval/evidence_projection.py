@@ -43,7 +43,7 @@ from .candidates import (
 from .selection import CANDIDATE_SELECTION_CONTRACT_VERSION
 
 
-EVIDENCE_PROJECTION_CONTRACT_VERSION = "evidence-projection-v1"
+EVIDENCE_PROJECTION_CONTRACT_VERSION = "evidence-projection-v2"
 
 
 class EvidenceProjectionError(ValueError):

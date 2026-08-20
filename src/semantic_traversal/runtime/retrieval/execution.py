@@ -295,7 +295,13 @@ def _serialize(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], ...]) -> RetrievalExecutionResult:
+def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], ...], authority: _Authority) -> RetrievalExecutionResult:
+    if row["execution_contract_version"] == "retrieval-execution-v1" and row["status"] not in {"running", "succeeded", "failed"}:
+        raise RetrievalExecutionError("historical execution contract has an unsupported status")
+    if row["execution_contract_version"] == EXECUTION_CONTRACT_VERSION and row["status"] not in {"running", "succeeded", "partial", "failed"}:
+        raise RetrievalExecutionError("current execution contract has an unsupported status")
+    if row["execution_contract_version"] not in {"retrieval-execution-v1", EXECUTION_CONTRACT_VERSION}:
+        raise RetrievalExecutionError("retrieval execution contract is unsupported")
     try:
         payload = json.loads(row["result_json"])
     except (TypeError, json.JSONDecodeError) as exc:
@@ -335,6 +341,17 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
     execution_failure = payload["execution_failure"]
     if execution_failure is not None and not isinstance(execution_failure, dict):
         raise RetrievalExecutionError("persisted execution failure is malformed")
+    executable = set(authority.executable_ordinals)
+    if len(outcomes) != len(expected_requests):
+        raise RetrievalExecutionError("persisted retrieval execution does not cover the complete proposal")
+    for item in outcomes:
+        rejected = item.failure == {"kind": "conformance_rejected"}
+        if item.ordinal not in executable and not rejected:
+            raise RetrievalExecutionError("conformance-invalid request has an executable disposition")
+        if item.ordinal in executable and rejected:
+            raise RetrievalExecutionError("conformance-valid request has a conformance-rejected disposition")
+        if item.ordinal not in executable and (item.status != "not_executed" or item.result is not None):
+            raise RetrievalExecutionError("conformance-invalid request was executed")
     if row["status"] == "running":
         if execution_failure is not None or any(item.status != "succeeded" for item in outcomes):
             raise RetrievalExecutionError("persisted running execution is malformed")
@@ -342,20 +359,18 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
         if execution_failure is not None or len(outcomes) != len(expected_requests) or any(item.status != "succeeded" for item in outcomes):
             raise RetrievalExecutionError("persisted successful execution is malformed")
     elif row["status"] == "partial":
-        if execution_failure is not None or len(outcomes) != len(expected_requests) or not any(item.failure == {"kind": "conformance_rejected"} for item in outcomes) or any(item.status not in {"succeeded", "not_executed"} for item in outcomes):
+        if row["execution_contract_version"] != EXECUTION_CONTRACT_VERSION or not authority.partial or execution_failure is not None or any(item.status != "succeeded" for item in outcomes if item.ordinal in executable) or any(item.failure != {"kind": "conformance_rejected"} for item in outcomes if item.ordinal not in executable):
             raise RetrievalExecutionError("persisted partial execution is malformed")
     elif row["status"] == "failed":
         failed = [item.ordinal for item in outcomes if item.status == "failed"]
-        if failed and not any(item.failure == {"kind": "conformance_rejected"} for item in outcomes):
+        if failed:
             failed_ordinal = failed[0]
             if (
                 len(failed) != 1
                 or execution_failure is not None
-                or len(outcomes) != len(expected_requests)
-                or any(item.status != "succeeded" for item in outcomes[:failed_ordinal])
+                or any(item.status != "succeeded" for item in outcomes[:failed_ordinal] if item.ordinal in executable)
                 or any(
-                    item.status != "not_executed"
-                    or item.failure != {"kind": "prior_request_failed", "failed_ordinal": failed_ordinal}
+                    item.ordinal in executable and (item.status != "not_executed" or item.failure != {"kind": "prior_request_failed", "failed_ordinal": failed_ordinal})
                     for item in outcomes[failed_ordinal + 1:]
                 )
             ):
@@ -368,14 +383,22 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
             ):
                 raise RetrievalExecutionError("persisted execution-level failure evidence is malformed")
             saw_not_executed = False
-            for item in outcomes:
+            package_boundary = next((item.ordinal for item in outcomes if item.ordinal in executable and item.failure == {"kind": "package_identity_changed"}), None)
+            if package_boundary is None:
+                if execution_failure is None or not all(item.status == "succeeded" for item in outcomes if item.ordinal in executable):
+                    raise RetrievalExecutionError("persisted package-failure boundary is malformed")
+            for item in (outcomes if package_boundary is not None else ()):
                 if item.status == "succeeded":
-                    if saw_not_executed:
+                    if saw_not_executed or item.ordinal in executable and item.ordinal > package_boundary:
                         raise RetrievalExecutionError("persisted package-failure prefix is malformed")
                 elif item.status == "not_executed":
-                    saw_not_executed = True
-                    if item.failure != {"kind": "package_identity_changed"}:
+                    if item.ordinal not in executable:
+                        if item.failure != {"kind": "conformance_rejected"}:
+                            raise RetrievalExecutionError("persisted package-failure evidence is malformed")
+                    elif item.ordinal < package_boundary or item.failure != {"kind": "package_identity_changed"}:
                         raise RetrievalExecutionError("persisted package-failure evidence is malformed")
+                    else:
+                        saw_not_executed = True
                 else:
                     raise RetrievalExecutionError("persisted package-failure outcome status is malformed")
     else:
@@ -432,7 +455,7 @@ def load_retrieval_execution(
                 raise RetrievalExecutionError(
                     "retrieval execution lineage conflicts with its conformance authority"
                 )
-            return _result_from_row(row, authority.requests)
+            return _result_from_row(row, authority.requests, authority)
         finally:
             connection.close()
     except (RetrievalExecutionError, RuntimeConversationError) as exc:
@@ -471,7 +494,7 @@ def execute_retrieval(
                     raise RetrievalExecutionError("existing retrieval execution lineage conflicts with supplied authority")
                 if existing["status"] == "running":
                     raise RetrievalExecutionError("a prior retrieval execution is still running")
-                return _result_from_row(existing, authority.requests)
+                return _result_from_row(existing, authority.requests, authority)
 
             if any(authority.requests[index]["operator"] == "vector.semantic_similarity" for index in authority.executable_ordinals):
                 if vector_provider is None:
@@ -562,7 +585,7 @@ def execute_retrieval(
             )
             connection.commit()
             row = connection.execute("SELECT * FROM retrieval_executions WHERE execution_id = ?", (execution_id,)).fetchone()
-            return _result_from_row(row, authority.requests)
+            return _result_from_row(row, authority.requests, authority)
         finally:
             connection.close()
     finally:

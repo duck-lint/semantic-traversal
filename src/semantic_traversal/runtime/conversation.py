@@ -267,7 +267,10 @@ def _create_retrieval_conformance_table(connection: sqlite3.Connection) -> None:
             retrieval_proposal_sha256 TEXT NOT NULL,
             capability_catalog_sha256 TEXT NOT NULL,
             contract_version TEXT NOT NULL CHECK (contract_version IN ('catalog-conformance-v1', 'catalog-conformance-v2')),
-            status TEXT NOT NULL CHECK (status IN ('valid', 'partial', 'invalid')),
+            status TEXT NOT NULL CHECK (
+                (contract_version = 'catalog-conformance-v1' AND status IN ('valid', 'invalid'))
+                OR (contract_version = 'catalog-conformance-v2' AND status IN ('valid', 'partial', 'invalid'))
+            ),
             checked_at TEXT NOT NULL,
             result_json TEXT NOT NULL,
             FOREIGN KEY (retrieval_run_id) REFERENCES model_runs(run_id)
@@ -291,7 +294,10 @@ def _create_retrieval_executions_table(connection: sqlite3.Connection) -> None:
             vectors_sha256 TEXT NOT NULL,
             package_verification_contract_version TEXT NOT NULL,
             execution_contract_version TEXT NOT NULL CHECK (execution_contract_version IN ('retrieval-execution-v1', 'retrieval-execution-v2')),
-            status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'partial', 'failed')),
+            status TEXT NOT NULL CHECK (
+                (execution_contract_version = 'retrieval-execution-v1' AND status IN ('running', 'succeeded', 'failed'))
+                OR (execution_contract_version = 'retrieval-execution-v2' AND status IN ('running', 'succeeded', 'partial', 'failed'))
+            ),
             started_at TEXT NOT NULL,
             completed_at TEXT,
             result_json TEXT NOT NULL,
@@ -388,8 +394,8 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
         contract_pattern = r"CHECK\s*\(\s*contract_version\s*=\s*'catalog-conformance-v1'\s*\)" if schema_version != SCHEMA_VERSION else r"CHECK\s*\(\s*contract_version\s+IN\s*\(\s*'catalog-conformance-v1'\s*,\s*'catalog-conformance-v2'\s*\)\s*\)"
         if not re.search(contract_pattern, conformance_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime conformance contract constraint is incompatible")
-        status_pattern = r"CHECK\s*\(\s*status\s+IN\s*\(\s*'valid'\s*,\s*'invalid'\s*\)\s*\)" if schema_version != SCHEMA_VERSION else r"CHECK\s*\(\s*status\s+IN\s*\(\s*'valid'\s*,\s*'partial'\s*,\s*'invalid'\s*\)\s*\)"
-        if not re.search(status_pattern, conformance_sql, re.IGNORECASE):
+        status_pattern = r"CHECK\s*\(\s*status\s+IN\s*\(\s*'valid'\s*,\s*'invalid'\s*\)\s*\)" if schema_version != SCHEMA_VERSION else r"CHECK\s*\(.*contract_version\s*=\s*'catalog-conformance-v1'.*status\s+IN\s*\(\s*'valid'\s*,\s*'invalid'\s*\).*contract_version\s*=\s*'catalog-conformance-v2'.*status\s+IN\s*\(\s*'valid'\s*,\s*'partial'\s*,\s*'invalid'\s*\).*\)"
+        if not re.search(status_pattern, conformance_sql, re.IGNORECASE | re.DOTALL):
             raise RuntimeConversationError("runtime conformance status constraint is incompatible")
         conformance_foreign_keys = {(row[2], row[3], row[4]) for row in connection.execute("PRAGMA foreign_key_list(retrieval_conformance)")}
         if ("model_runs", "retrieval_run_id", "run_id") not in conformance_foreign_keys:
@@ -406,13 +412,13 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_executions'"
         ).fetchone()[0]
         if not re.search(
-            r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'partial'\s*,\s*'failed'\s*\)\s*\)" if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION} else r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)",
+            r"CHECK\s*\(.*execution_contract_version\s*=\s*'retrieval-execution-v1'.*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\).*execution_contract_version\s*=\s*'retrieval-execution-v2'.*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'partial'\s*,\s*'failed'\s*\).*\)" if schema_version == SCHEMA_VERSION else r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)",
             execution_sql,
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         ):
             raise RuntimeConversationError("runtime execution status constraint is incompatible")
         if not re.search(
-            r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'partial'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)" if schema_version in {RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION} else r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)",
+            r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'partial'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)" if schema_version == SCHEMA_VERSION else r"CHECK\s*\(.*status\s*=\s*'running'.*completed_at\s+IS\s+NULL.*status\s+IN\s*\(\s*'succeeded'\s*,\s*'failed'\s*\).*completed_at\s+IS\s+NOT\s+NULL.*\)",
             execution_sql,
             re.IGNORECASE | re.DOTALL,
         ):
@@ -598,7 +604,7 @@ def _migrate_v6_to_v7(connection: sqlite3.Connection) -> None:
 
 
 def migrate_runtime(database_path: str | Path) -> None:
-    """Explicitly migrate the supported legacy schemas to schema v6."""
+    """Explicitly migrate the supported legacy schemas to schema v7."""
     connection = _open_connection(database_path, allow_create=False)
     transaction_started = False
     try:

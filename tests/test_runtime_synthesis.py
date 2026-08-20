@@ -201,7 +201,7 @@ class SynthesisRuntimeTests(unittest.TestCase):
                 SelectionCoverage(0, 0, 0, 0, 0, 0, 120, False, False),
             )
             evidence = EvidenceProjection(
-                "evidence-projection-v1", HydratedCandidateSelection("candidate-hydration-v1", selection, ()), (),
+                "evidence-projection-v2", HydratedCandidateSelection("candidate-hydration-v1", selection, ()), (),
                 EvidenceCoverage("succeeded", None, 0, 0, 0, False, 0, 0, 0), (), (), (),
             )
             connection = sqlite3.connect(database)
