@@ -170,6 +170,23 @@ class RuntimeControlPlaneTests(unittest.TestCase):
         self.assertEqual(result.requests[0].violations[0]["code"], "lexical_terms_operand_not_tokenizable")
         self.assertIn("plant-based", result.requests[0].violations[0]["message"])
 
+    def test_graph_discovery_terms_tokenizability_is_conformance_precondition(self):
+        terms = self.requests()[6]
+        phrase = self.requests()[7]
+        requests = [
+            dict(terms, operand=["plant-based"]),
+            terms,
+            phrase,
+        ]
+        with TemporaryDirectory() as directory:
+            database, catalog_path, run_id, _, _ = self.prepared(directory, requests=requests)
+            result = conform_retrieval(database, catalog_path, run_id)
+
+        self.assertEqual(result.status, "invalid")
+        self.assertEqual([item.status for item in result.requests], ["invalid", "valid", "valid"])
+        self.assertEqual(result.requests[0].violations[0]["code"], "graph_discovery_terms_operand_not_tokenizable")
+        self.assertIn("plant-based", result.requests[0].violations[0]["message"])
+
     def test_invalid_catalog_conformance_collects_exact_mechanical_violations(self):
         cases = []
         catalog = self.catalog()

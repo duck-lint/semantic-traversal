@@ -551,6 +551,18 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
                 execute_retrieval(database, package, conformance_id)
         lexical.assert_not_called()
 
+    def test_non_tokenizable_graph_terms_are_rejected_before_graph_execution(self):
+        request = {
+            "operator": "graph.discovery.terms", "node_kind": "semantic_object",
+            "dimension_name": "address_text", "operand": ["plant-based"],
+        }
+        database, package, conformance_id = self.prepared("non-tokenizable-graph-terms", [request])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["graph_discover"])
+        with patch.object(module, "graph_discover") as graph_discover:
+            with self.assertRaisesRegex(RetrievalExecutionError, "valid current approval"):
+                execute_retrieval(database, package, conformance_id)
+        graph_discover.assert_not_called()
+
     def test_mutated_package_fails_before_execution_row(self):
         database, package, conformance_id = self.prepared("mutated-before", [self.exact()])
         original = package.substrate_path.read_bytes()

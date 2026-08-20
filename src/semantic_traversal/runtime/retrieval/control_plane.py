@@ -239,7 +239,20 @@ def _request_violations(catalog: Mapping[str, Any], request: Mapping[str, Any]) 
             return (_violation("vector_operator_not_advertised", operator=operator),)
         return ()
     if operator in {"graph.discovery.terms", "graph.discovery.phrase"}:
-        return tuple(_graph_discovery_violations(catalog, request))
+        discovery_violations = _graph_discovery_violations(catalog, request)
+        if discovery_violations or operator != "graph.discovery.terms":
+            return tuple(discovery_violations)
+        try:
+            validate_terms_operands(tuple(request["operand"]))
+        except ValueError as exc:
+            return (_violation(
+                "graph_discovery_terms_operand_not_tokenizable",
+                operator=operator,
+                node_kind=request["node_kind"],
+                dimension_name=request["dimension_name"],
+                message=str(exc),
+            ),)
+        return ()
     if operator == "graph.relation_occurrence_lookup":
         return tuple(_graph_relation_violations(catalog, request))
     return (_violation("operator_not_advertised", operator=operator),)
