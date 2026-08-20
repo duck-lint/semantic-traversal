@@ -824,10 +824,11 @@ and evidence preparation. Retrieval inference must not consume an unverified
 package catalog and verify the package only afterward.
 
 The current upper coordinator consumes an already-persisted user turn; it does
-not append a message. The production CLI full-turn command injects the router,
-retrieval-inference, and synthesis providers, and performs no provider
-construction, retrieval fusion, ranking, or second persistence authority. A
-direct route calls synthesis with no evidence and touches no retrieval state.
+not append a message. The production CLI full-turn command constructs and
+injects the router, retrieval-inference, and synthesis providers. The upper
+coordinator performs no provider construction, retrieval fusion, ranking, or
+second persistence authority. A direct route calls synthesis with no evidence
+and touches no retrieval state.
 For a fresh semantic route, package loading and verification precede retrieval
 inference, and the same verified package flows through execution and evidence
 preparation. Vector-provider construction is lazy and occurs only when the
