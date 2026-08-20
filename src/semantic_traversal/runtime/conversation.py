@@ -360,7 +360,7 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
             raise RuntimeConversationError("runtime model-run kind constraint is incompatible")
         if not re.search(r"CHECK\s*\(\s*status\s+IN\s*\(\s*'running'\s*,\s*'succeeded'\s*,\s*'failed'\s*\)\s*\)", model_runs_sql, re.IGNORECASE):
             raise RuntimeConversationError("runtime model-run status constraint is incompatible")
-        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION} and not (
+        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION} and not (
             re.search(
                 r"run_kind\s*=\s*'router'\s+AND\s+parent_run_id\s+IS\s+NULL\s+AND\s+capability_catalog_sha256\s+IS\s+NULL",
                 model_runs_sql,

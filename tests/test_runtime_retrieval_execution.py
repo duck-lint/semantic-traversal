@@ -16,7 +16,7 @@ from semantic_traversal.runtime.conversation import (
     initialize_runtime, migrate_runtime,
 )
 from semantic_traversal.runtime.retrieval.execution import (
-    EXECUTION_CONTRACT_VERSION, RetrievalExecutionError, execute_retrieval,
+    EXECUTION_CONTRACT_VERSION, RetrievalExecutionError, execute_retrieval, load_retrieval_execution,
 )
 from semantic_traversal.runtime.retrieval.package import RetrievalPackageError, load_retrieval_package
 from semantic_traversal.projection.vector import EmbeddingProviderError
@@ -608,6 +608,93 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         self.assertEqual([item.status for item in result.requests], ["succeeded", "not_executed", "succeeded"])
         self.assertEqual(result.requests[1].failure, {"kind": "conformance_rejected"})
         factory.assert_not_called()
+
+    def partial_prepared(self, name):
+        requests = [
+            self.exact("source"),
+            {"operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": ["plant-based"]},
+            self.exact("body"),
+        ]
+        database, package, conformance_id = self.prepared(name, requests)
+        connection = sqlite3.connect(database)
+        connection.execute("UPDATE retrieval_conformance SET status = 'partial', result_json = ? WHERE conformance_id = ?", (
+            json.dumps({"status": "partial", "requests": [
+                {"ordinal": 0, "status": "valid", "violations": []},
+                {"ordinal": 1, "status": "invalid", "violations": [{"code": "lexical_terms_operand_not_tokenizable"}]},
+                {"ordinal": 2, "status": "valid", "violations": []},
+            ]}, separators=(",", ":")), conformance_id,
+        ))
+        connection.commit()
+        connection.close()
+        return database, package, conformance_id
+
+    def _tamper_execution(self, database, mutate):
+        connection = sqlite3.connect(database)
+        execution_id, payload = connection.execute("SELECT execution_id, result_json FROM retrieval_executions").fetchone()
+        payload = json.loads(payload)
+        mutate(payload)
+        connection.execute("UPDATE retrieval_executions SET result_json = ? WHERE execution_id = ?", (json.dumps(payload, separators=(",", ":")), execution_id))
+        connection.commit()
+        connection.close()
+        return execution_id
+
+    def test_partial_execution_reloads_exact_conformance_dispositions(self):
+        database, package, conformance_id = self.partial_prepared("partial-replay")
+        first = execute_retrieval(database, package, conformance_id)
+        second = execute_retrieval(database, package, conformance_id)
+        self.assertEqual(first, second)
+        self.assertEqual([item.status for item in second.requests], ["succeeded", "not_executed", "succeeded"])
+        self.assertEqual(second.requests[1].failure, {"kind": "conformance_rejected"})
+
+    def test_partial_replay_rejects_tampered_conformance_dispositions(self):
+        for name, mutate in (
+            ("valid-rejected", lambda payload: payload["requests"][0].update(status="not_executed", result=None, failure={"kind": "conformance_rejected"})),
+            ("invalid-succeeded", lambda payload: payload["requests"][1].update(status="succeeded", result={}, failure=None)),
+        ):
+            with self.subTest(name=name):
+                database, package, conformance_id = self.partial_prepared(name)
+                execute_retrieval(database, package, conformance_id)
+                self._tamper_execution(database, mutate)
+                with self.assertRaises(RetrievalExecutionError):
+                    execute_retrieval(database, package, conformance_id)
+
+    def test_partial_surface_failure_reloads_and_rejects_tampering(self):
+        database, package, conformance_id = self.partial_prepared("partial-surface-replay")
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup", side_effect=ValueError("surface failure")):
+            first = execute_retrieval(database, package, conformance_id)
+        self.assertEqual(first.status, "failed")
+        self.assertEqual([item.failure for item in first.requests], [first.requests[0].failure, {"kind": "conformance_rejected"}, {"kind": "prior_request_failed", "failed_ordinal": 0}])
+        second = execute_retrieval(database, package, conformance_id)
+        self.assertEqual(first, second)
+        self._tamper_execution(database, lambda payload: payload["requests"][2].update(status="succeeded", result={}, failure=None))
+        with self.assertRaises(RetrievalExecutionError):
+            execute_retrieval(database, package, conformance_id)
+
+    def test_partial_package_failure_reloads_with_rejected_lane_preserved(self):
+        database, package, conformance_id = self.partial_prepared("partial-package-replay")
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup", return_value=()), patch.object(
+            module, "require_current_package_identity", side_effect=[None, None, RetrievalPackageError("package changed")]
+        ):
+            first = execute_retrieval(database, package, conformance_id)
+        self.assertEqual(first.status, "failed")
+        self.assertEqual([item.failure for item in first.requests], [None, {"kind": "conformance_rejected"}, {"kind": "package_identity_changed"}])
+        self.assertEqual(first, execute_retrieval(database, package, conformance_id))
+
+    def test_running_prefix_reloads_and_nonprefix_running_evidence_fails(self):
+        database, package, conformance_id = self.prepared("running-prefix", [self.exact("first"), self.exact("second")])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"])
+        with patch.object(module, "exact_lookup", side_effect=[(), RuntimeError("interrupted")]):
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                execute_retrieval(database, package, conformance_id)
+        connection = sqlite3.connect(database)
+        execution_id, payload = connection.execute("SELECT execution_id, result_json FROM retrieval_executions").fetchone()
+        connection.close()
+        self.assertEqual(load_retrieval_execution(database, execution_id).requests[0].status, "succeeded")
+        self._tamper_execution(database, lambda value: value["requests"].__setitem__(0, {**value["requests"][0], "ordinal": 1}))
+        with self.assertRaises(RetrievalExecutionError):
+            load_retrieval_execution(database, execution_id)
 
     def test_mutated_package_fails_before_execution_row(self):
         database, package, conformance_id = self.prepared("mutated-before", [self.exact()])

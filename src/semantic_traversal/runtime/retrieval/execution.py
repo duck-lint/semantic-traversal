@@ -342,8 +342,6 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
     if execution_failure is not None and not isinstance(execution_failure, dict):
         raise RetrievalExecutionError("persisted execution failure is malformed")
     executable = set(authority.executable_ordinals)
-    if len(outcomes) != len(expected_requests):
-        raise RetrievalExecutionError("persisted retrieval execution does not cover the complete proposal")
     for item in outcomes:
         rejected = item.failure == {"kind": "conformance_rejected"}
         if item.ordinal not in executable and not rejected:
@@ -353,15 +351,21 @@ def _result_from_row(row: sqlite3.Row, expected_requests: tuple[dict[str, Any], 
         if item.ordinal not in executable and (item.status != "not_executed" or item.result is not None):
             raise RetrievalExecutionError("conformance-invalid request was executed")
     if row["status"] == "running":
-        if execution_failure is not None or any(item.status != "succeeded" for item in outcomes):
+        if len(outcomes) > len(expected_requests) or execution_failure is not None or any(
+            (item.ordinal in executable and item.status != "succeeded")
+            or (item.ordinal not in executable and item.failure != {"kind": "conformance_rejected"})
+            for item in outcomes
+        ):
             raise RetrievalExecutionError("persisted running execution is malformed")
     elif row["status"] == "succeeded":
         if execution_failure is not None or len(outcomes) != len(expected_requests) or any(item.status != "succeeded" for item in outcomes):
             raise RetrievalExecutionError("persisted successful execution is malformed")
     elif row["status"] == "partial":
-        if row["execution_contract_version"] != EXECUTION_CONTRACT_VERSION or not authority.partial or execution_failure is not None or any(item.status != "succeeded" for item in outcomes if item.ordinal in executable) or any(item.failure != {"kind": "conformance_rejected"} for item in outcomes if item.ordinal not in executable):
+        if row["execution_contract_version"] != EXECUTION_CONTRACT_VERSION or not authority.partial or execution_failure is not None or len(outcomes) != len(expected_requests) or any(item.status != "succeeded" for item in outcomes if item.ordinal in executable) or any(item.failure != {"kind": "conformance_rejected"} for item in outcomes if item.ordinal not in executable):
             raise RetrievalExecutionError("persisted partial execution is malformed")
     elif row["status"] == "failed":
+        if len(outcomes) != len(expected_requests):
+            raise RetrievalExecutionError("persisted failed execution does not cover the complete proposal")
         failed = [item.ordinal for item in outcomes if item.status == "failed"]
         if failed:
             failed_ordinal = failed[0]
