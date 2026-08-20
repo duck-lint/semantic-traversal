@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from semantic_traversal.projection.temporal import TemporalProjectionError
-from semantic_traversal.runtime.config import ModelConfig, RuntimeConfig
+from semantic_traversal.runtime.config import CandidateSelectionConfig, ModelConfig, RuntimeConfig
 from semantic_traversal.runtime.conversation import append_message, create_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import (
     OpenAIResponsesProvider,
@@ -53,6 +53,8 @@ class TemporalRuntimeTests(unittest.TestCase):
         return RuntimeConfig(
             ModelConfig("openai", "router", 1.0, "router prompt"),
             ModelConfig("openai", "retrieval", 1.0, "retrieval prompt"),
+            CandidateSelectionConfig(120, 0.20),
+            ModelConfig("openai", "synthesis", 1.0, "synthesis prompt"),
         )
 
     def _prepared(self, name: str, requests: list[dict[str, object]]):

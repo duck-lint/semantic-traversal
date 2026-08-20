@@ -1,5 +1,7 @@
 """Retrieval inference, authority, execution, and candidate composition/selection."""
 
+from ..config import CandidateSelectionConfig
+
 from .control_plane import (
     ConformanceRequestResult,
     RetrievalConformanceError,
@@ -63,6 +65,7 @@ from .evidence_projection import (
     EvidenceRequest, EvidenceRetrievalRelation, evidence_projection_json,
     measure_evidence_projection, project_evidence, serialize_evidence_projection,
 )
+from .evidence_preparation import prepare_evidence
 
 __all__ = [
     "ConformanceRequestResult",
@@ -110,4 +113,5 @@ __all__ = [
     "EvidenceCoverage", "EvidenceObjectContext", "EvidenceCandidate",
     "EvidenceRetrievalRelation", "EvidenceProjection", "project_evidence",
     "evidence_projection_json", "serialize_evidence_projection", "measure_evidence_projection",
+    "CandidateSelectionConfig", "prepare_evidence",
 ]
