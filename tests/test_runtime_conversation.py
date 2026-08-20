@@ -19,6 +19,10 @@ from semantic_traversal.runtime.conversation import (
     get_conversation,
     initialize_runtime,
     migrate_runtime,
+    _create_model_runs_table,
+    _create_retrieval_conformance_table,
+    _create_retrieval_executions_table,
+    _validate_schema,
 )
 
 
@@ -291,6 +295,26 @@ class RuntimeConversationTests(unittest.TestCase):
             connection.close()
             with self.assertRaisesRegex(RuntimeConversationError, "lineage"):
                 initialize_runtime(database)
+
+    def test_schema_v6_rejects_model_run_without_parent_lineage_foreign_key(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            initialize_runtime(database)
+            connection = sqlite3.connect(database)
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute("DROP TABLE retrieval_executions")
+            connection.execute("DROP TABLE retrieval_conformance")
+            model_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name = 'model_runs'").fetchone()[0]
+            connection.execute("ALTER TABLE model_runs RENAME TO model_runs_v6")
+            connection.execute(model_sql.replace(",\n            FOREIGN KEY (parent_run_id) REFERENCES model_runs(run_id)", ""))
+            connection.execute("INSERT INTO model_runs SELECT * FROM model_runs_v6")
+            connection.execute("DROP TABLE model_runs_v6")
+            _create_retrieval_conformance_table(connection)
+            _create_retrieval_executions_table(connection)
+            connection.execute("PRAGMA user_version = 6")
+            with self.assertRaisesRegex(RuntimeConversationError, "foreign keys"):
+                _validate_schema(connection, 6)
+            connection.close()
     def test_schema_v1_column_type_must_match(self):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"

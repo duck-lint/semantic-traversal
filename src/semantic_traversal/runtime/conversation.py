@@ -382,7 +382,7 @@ def _validate_schema(connection: sqlite3.Connection, schema_version: int) -> Non
             ("conversations", "conversation_id", "conversation_id"),
             ("messages", "trigger_message_id", "message_id"),
         }
-        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, SCHEMA_VERSION}:
+        if schema_version in {MODEL_RUN_SCHEMA_VERSION, CONFORMANCE_SCHEMA_VERSION, RETRIEVAL_SCHEMA_VERSION, 6, SCHEMA_VERSION}:
             required.add(("model_runs", "parent_run_id", "run_id"))
         if schema_version in {6, SCHEMA_VERSION}:
             required.add(("messages", "produced_message_id", "message_id"))
