@@ -43,6 +43,7 @@ from .synthesis import (
     SynthesisError, SynthesisProvider, SynthesisProviderError, SynthesisProviderResult,
     SynthesisResult, SynthesisUsage, load_synthesis_success, synthesize_conversation,
 )
+from .orchestration import OrchestrationError, TurnResult, run_current_turn
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
@@ -66,4 +67,5 @@ __all__ = [
     "serialize_synthesis_input", "synthesis_input_sha256",
     "SynthesisError", "SynthesisProviderError", "SynthesisUsage", "SynthesisProviderResult",
     "SynthesisProvider", "SynthesisResult", "load_synthesis_success", "synthesize_conversation",
+    "OrchestrationError", "TurnResult", "run_current_turn",
 ]
