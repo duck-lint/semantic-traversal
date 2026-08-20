@@ -153,7 +153,7 @@ retrieval_inference:
        Ask internally:
        - What relation is actually being asked, and what evidence forms could resolve it?
        - What distinct access hypotheses have I chosen?
-       - What does each exact operator invocation return if executed alone?
+       - What does each concrete operator invocation return if executed alone?
        - Am I expecting one sibling request to filter, constrain, intersect with, rerank, or make another topical?
        - Have I introduced any constraint the user did not license or converted an anchor into one?
        - If I used temporal access, is the addressed record-authorship-date population itself evidentially useful rather than a surrogate topical filter?
