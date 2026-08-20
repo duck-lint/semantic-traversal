@@ -32,6 +32,8 @@ from .build.vault import parse_vault
 from .projection.vector import OllamaEmbeddingProvider, build_vector_index, vector_eligible_targets, vector_lookup
 from .projection.verification import verify_completed_build
 from .runtime.config import load_runtime_config
+from .runtime.openai_provider import OpenAIResponsesProvider
+from .runtime.orchestration import OrchestrationError, run_current_turn
 from .runtime.retrieval.control_plane import conform_retrieval
 from .runtime.conversation import SCHEMA_VERSION, append_message, create_conversation, get_conversation, initialize_runtime, migrate_runtime
 from .runtime.router import route_conversation
@@ -412,6 +414,38 @@ def _runtime_retrieval_infer(args: argparse.Namespace) -> None:
     _load_model_execution_dotenv()
     _emit(infer_retrieval(args.database, config, args.catalog, args.router_run_id), args)
 
+
+def _runtime_turn_run(args: argparse.Namespace) -> None:
+    """Run the accepted full-turn coordinator for an existing user turn."""
+
+    config = load_runtime_config(args.config)
+    _load_model_execution_dotenv()
+    openai_provider = OpenAIResponsesProvider()
+
+    # Keep embedding-provider construction behind the execution boundary.  In
+    # particular, replay and non-vector turns must not perform Ollama setup.
+    vector_provider_factory = lambda: OllamaEmbeddingProvider(base_url=args.ollama_url)
+    try:
+        result = run_current_turn(
+            args.database,
+            config,
+            args.conversation_id,
+            router_provider=openai_provider,
+            retrieval_provider=openai_provider,
+            synthesis_provider=openai_provider,
+            retrieval_build_path=args.build,
+            vector_provider_factory=vector_provider_factory,
+        )
+    except OrchestrationError as exc:
+        raise CliError(f"{exc.stage}: {exc}") from exc
+
+    if args.json:
+        _emit(result, args)
+    else:
+        sys.stdout.write(result.response_text)
+        if not result.response_text.endswith("\n"):
+            sys.stdout.write("\n")
+
 def _add_build(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--vault", required=True); parser.add_argument("--config", required=True); parser.add_argument("--output", required=True); parser.add_argument("--ollama-url", default="http://127.0.0.1:11434"); parser.add_argument("--json", action="store_true")
 
@@ -466,6 +500,8 @@ def _parser() -> argparse.ArgumentParser:
     a = rretrieval.add_parser("infer"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--catalog", required=True); a.add_argument("--router-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_retrieval_infer)
     control_plane = rsub.add_parser("control-plane"); cpsub = control_plane.add_subparsers(dest="control_plane_command", required=True)
     a = cpsub.add_parser("conform"); a.add_argument("--database", required=True); a.add_argument("--catalog", required=True); a.add_argument("--retrieval-run-id", required=True); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_control_plane_conform)
+    turn = rsub.add_parser("turn"); tsub = turn.add_subparsers(dest="turn_command", required=True)
+    a = tsub.add_parser("run"); a.add_argument("--database", required=True); a.add_argument("--config", required=True); a.add_argument("--conversation-id", required=True); a.add_argument("--build"); a.add_argument("--ollama-url", default="http://127.0.0.1:11434"); a.add_argument("--json", action="store_true"); a.set_defaults(handler=_runtime_turn_run)
     return p
 
 

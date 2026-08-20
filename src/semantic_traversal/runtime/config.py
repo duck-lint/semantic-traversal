@@ -35,6 +35,7 @@ class RuntimeConfig:
     router: ModelConfig
     retrieval_inference: ModelConfig
     candidate_selection: CandidateSelectionConfig
+    synthesis: ModelConfig
 
 
 def _load_values(path: str | Path) -> dict[str, Any]:
@@ -55,9 +56,9 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     """Load the complete runtime configuration without reading credentials."""
 
     values = _load_values(path)
-    if set(values) != {"router", "retrieval_inference", "candidate_selection"}:
+    if set(values) != {"router", "retrieval_inference", "candidate_selection", "synthesis"}:
         raise RuntimeConfigError(
-            "runtime configuration must contain exactly router, retrieval_inference, and candidate_selection sections"
+            "runtime configuration must contain exactly router, retrieval_inference, candidate_selection, and synthesis sections"
         )
 
     def parse_section(section_name: str) -> ModelConfig:
@@ -111,6 +112,7 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
         parse_section("router"),
         parse_section("retrieval_inference"),
         CandidateSelectionConfig(max_candidates, float(protected_owner_fraction)),
+        parse_section("synthesis"),
     )
 
 

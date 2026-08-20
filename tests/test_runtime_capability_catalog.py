@@ -636,7 +636,7 @@ class CatalogAdmissionTests(unittest.TestCase):
                     load_capability_catalog(self._write(directory, text))
 
     def test_malformed_catalogs_fail_before_retrieval_provider_and_run_insert(self):
-        config = RuntimeConfig(ModelConfig("openai", "router", 1.0, "router"), ModelConfig("openai", "retrieval", 1.0, "retrieval"), CandidateSelectionConfig(120, 0.20))
+        config = RuntimeConfig(ModelConfig("openai", "router", 1.0, "router"), ModelConfig("openai", "retrieval", 1.0, "retrieval"), CandidateSelectionConfig(120, 0.20), ModelConfig("openai", "synthesis", 1.0, "synthesis"))
 
         class Provider:
             def __init__(self):
