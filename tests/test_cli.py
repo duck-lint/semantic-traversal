@@ -12,6 +12,7 @@ import numpy as np
 
 from semantic_traversal import EmbeddingContract, EmbeddingProviderError, GraphHandle, vector_eligible_targets
 from semantic_traversal.cli import _graph_traverse, main
+from semantic_traversal.runtime.orchestration import OrchestrationError, TurnResult
 
 
 class CliProvider:
@@ -51,6 +52,179 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = main(list(argv))
         return code, stdout.getvalue(), stderr.getvalue()
+
+    @staticmethod
+    def _turn_result(response_text="answer"):
+        return TurnResult(
+            conversation_id="conversation",
+            trigger_message_id=7,
+            route="direct",
+            router_run_id="router-run",
+            retrieval_run_id=None,
+            synthesis_run_id="synthesis-run",
+            synthesis_message_id=8,
+            response_text=response_text,
+        )
+
+    def test_runtime_turn_run_constructs_one_shared_openai_provider_without_build(self):
+        provider = object()
+        result = self._turn_result()
+        with patch("semantic_traversal.cli.load_runtime_config", return_value="config") as load_config, patch(
+            "semantic_traversal.cli._load_model_execution_dotenv"
+        ) as load_dotenv, patch(
+            "semantic_traversal.cli.OpenAIResponsesProvider", return_value=provider
+        ) as openai, patch("semantic_traversal.cli.OllamaEmbeddingProvider") as ollama, patch(
+            "semantic_traversal.cli.run_current_turn", return_value=result
+        ) as run:
+            code, stdout, stderr = self._run(
+                "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                "--conversation-id", "conversation",
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "answer\n")
+        self.assertEqual(stderr, "")
+        load_config.assert_called_once_with("runtime.yaml")
+        load_dotenv.assert_called_once_with()
+        openai.assert_called_once_with()
+        ollama.assert_not_called()
+        self.assertIs(run.call_args.kwargs["router_provider"], provider)
+        self.assertIs(run.call_args.kwargs["retrieval_provider"], provider)
+        self.assertIs(run.call_args.kwargs["synthesis_provider"], provider)
+        self.assertIsNone(run.call_args.kwargs["retrieval_build_path"])
+
+    def test_runtime_turn_run_json_emits_only_turn_result_fields(self):
+        result = self._turn_result("réponse")
+        with patch("semantic_traversal.cli.load_runtime_config", return_value="config"), patch(
+            "semantic_traversal.cli._load_model_execution_dotenv"
+        ), patch("semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()), patch(
+            "semantic_traversal.cli.run_current_turn", return_value=result
+        ):
+            code, stdout, stderr = self._run(
+                "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                "--conversation-id", "conversation", "--json",
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout), {
+            "conversation_id": "conversation",
+            "trigger_message_id": 7,
+            "route": "direct",
+            "router_run_id": "router-run",
+            "retrieval_run_id": None,
+            "synthesis_run_id": "synthesis-run",
+            "synthesis_message_id": 8,
+            "response_text": "réponse",
+        })
+        self.assertEqual(set(json.loads(stdout)), {
+            "conversation_id", "trigger_message_id", "route", "router_run_id", "retrieval_run_id",
+            "synthesis_run_id", "synthesis_message_id", "response_text",
+        })
+
+    def test_runtime_turn_run_preserves_response_text_without_strip(self):
+        response = "  leading\n中間\ntrailing  "
+        with patch("semantic_traversal.cli.load_runtime_config", return_value="config"), patch(
+            "semantic_traversal.cli._load_model_execution_dotenv"
+        ), patch("semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()), patch(
+            "semantic_traversal.cli.run_current_turn", return_value=self._turn_result(response)
+        ):
+            code, stdout, _ = self._run(
+                "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                "--conversation-id", "conversation",
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, response + "\n")
+
+    def test_runtime_turn_run_lazy_factory_is_not_invoked_by_handler(self):
+        captured = {}
+
+        def capture(*_args, **kwargs):
+            captured["factory"] = kwargs["vector_provider_factory"]
+            return self._turn_result()
+
+        with patch("semantic_traversal.cli.load_runtime_config", return_value="config"), patch(
+            "semantic_traversal.cli._load_model_execution_dotenv"
+        ), patch("semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()), patch(
+            "semantic_traversal.cli.OllamaEmbeddingProvider", side_effect=AssertionError("eager Ollama construction")
+        ) as ollama, patch("semantic_traversal.cli.run_current_turn", side_effect=capture):
+            code, _, _ = self._run(
+                "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                "--conversation-id", "conversation", "--ollama-url", "http://example.test:12345",
+            )
+        self.assertEqual(code, 0)
+        ollama.assert_not_called()
+
+    def test_runtime_turn_run_factory_uses_exact_custom_ollama_url_when_called(self):
+        captured = {}
+        ollama_provider = object()
+
+        def capture(*_args, **kwargs):
+            captured["provider"] = kwargs["vector_provider_factory"]()
+            return self._turn_result()
+
+        with patch("semantic_traversal.cli.load_runtime_config", return_value="config"), patch(
+            "semantic_traversal.cli._load_model_execution_dotenv"
+        ), patch("semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()), patch(
+            "semantic_traversal.cli.OllamaEmbeddingProvider", return_value=ollama_provider
+        ) as ollama, patch("semantic_traversal.cli.run_current_turn", side_effect=capture):
+            code, _, _ = self._run(
+                "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                "--conversation-id", "conversation", "--ollama-url", "http://example.test:12345",
+            )
+        self.assertEqual(code, 0)
+        self.assertIs(captured["provider"], ollama_provider)
+        ollama.assert_called_once_with(base_url="http://example.test:12345")
+
+    def test_runtime_turn_run_renders_orchestration_failures_without_traceback(self):
+        for stage, message in (("package_verification", "package bad"), ("synthesis", "provider timeout")):
+            with self.subTest(stage=stage):
+                with patch("semantic_traversal.cli.load_runtime_config", return_value="config"), patch(
+                    "semantic_traversal.cli._load_model_execution_dotenv"
+                ), patch("semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()), patch(
+                    "semantic_traversal.cli.run_current_turn",
+                    side_effect=OrchestrationError(stage, message),
+                ):
+                    code, stdout, stderr = self._run(
+                        "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                        "--conversation-id", "conversation",
+                    )
+                self.assertEqual(code, 1)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{stage}: {message}", stderr)
+                self.assertNotIn("Traceback", stderr)
+
+    def test_runtime_turn_run_does_not_append_messages(self):
+        with patch("semantic_traversal.cli.append_message") as append, patch(
+            "semantic_traversal.cli.load_runtime_config", return_value="config"
+        ), patch("semantic_traversal.cli._load_model_execution_dotenv"), patch(
+            "semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()
+        ), patch("semantic_traversal.cli.run_current_turn", return_value=self._turn_result()):
+            code, _, _ = self._run(
+                "runtime", "turn", "run", "--database", "runtime.sqlite3", "--config", "runtime.yaml",
+                "--conversation-id", "conversation",
+            )
+        self.assertEqual(code, 0)
+        append.assert_not_called()
+
+    def test_runtime_turn_run_requires_only_database_config_and_conversation(self):
+        for missing in ("--database", "--config", "--conversation-id"):
+            with self.subTest(missing=missing):
+                arguments = {
+                    "--database": "runtime.sqlite3", "--config": "runtime.yaml", "--conversation-id": "conversation",
+                }
+                arguments.pop(missing)
+                argv = ["runtime", "turn", "run"]
+                for key, value in arguments.items():
+                    argv.extend((key, value))
+                with self.assertRaises(SystemExit):
+                    main(argv)
+
+        with patch("semantic_traversal.cli.load_runtime_config", return_value="config"), patch(
+            "semantic_traversal.cli._load_model_execution_dotenv"
+        ), patch("semantic_traversal.cli.OpenAIResponsesProvider", return_value=object()), patch(
+            "semantic_traversal.cli.run_current_turn", return_value=self._turn_result()
+        ) as run:
+            self.assertEqual(self._run("runtime", "turn", "run", "--database", "db", "--config", "cfg", "--conversation-id", "c")[0], 0)
+            self.assertEqual(run.call_args.kwargs["retrieval_build_path"], None)
 
     def test_command_tree_requires_explicit_build_paths(self):
         with self.assertRaises(SystemExit):
