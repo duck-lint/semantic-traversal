@@ -8,7 +8,7 @@ import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from semantic_traversal.runtime.retrieval.control_plane import conform_retrieval
 from semantic_traversal.runtime.conversation import (
@@ -19,6 +19,7 @@ from semantic_traversal.runtime.retrieval.execution import (
     EXECUTION_CONTRACT_VERSION, RetrievalExecutionError, execute_retrieval,
 )
 from semantic_traversal.runtime.retrieval.package import RetrievalPackageError, load_retrieval_package
+from semantic_traversal.projection.vector import EmbeddingProviderError
 
 
 class RuntimeRetrievalExecutionTests(unittest.TestCase):
@@ -425,11 +426,103 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
     def test_vector_provider_is_required_before_running_evidence(self):
         request = {"operator": "vector.semantic_similarity", "query": "query"}
         database, package, conformance_id = self.prepared("vector-precondition", [request])
-        with self.assertRaises(RetrievalExecutionError):
-            execute_retrieval(database, package, conformance_id)
+        with patch("semantic_traversal.runtime.retrieval.execution.vector_lookup") as vector_lookup:
+            with self.assertRaises(RetrievalExecutionError):
+                execute_retrieval(database, package, conformance_id)
+        vector_lookup.assert_not_called()
         connection = sqlite3.connect(database)
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM retrieval_executions").fetchone()[0], 0)
         connection.close()
+
+    def test_new_nonvector_execution_does_not_invoke_factory(self):
+        database, package, conformance_id = self.prepared("lazy-nonvector", [self.exact("value")])
+        provider_factory = MagicMock(side_effect=RuntimeError("non-vector factory must not be called"))
+        result = execute_retrieval(database, package, conformance_id, vector_provider_factory=provider_factory)
+        self.assertEqual(result.status, "succeeded")
+        provider_factory.assert_not_called()
+
+    def test_new_vector_execution_invokes_factory_once_and_uses_returned_provider(self):
+        request = {"operator": "vector.semantic_similarity", "query": "query"}
+        database, package, conformance_id = self.prepared("lazy-vector-new", [request])
+        provider = object()
+        provider_factory = MagicMock(return_value=provider)
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["vector_lookup"])
+        with patch.object(module, "vector_lookup", return_value=()) as vector_lookup:
+            result = execute_retrieval(
+                database, package, conformance_id, vector_provider_factory=provider_factory
+            )
+        self.assertEqual(result.status, "succeeded")
+        provider_factory.assert_called_once_with()
+        self.assertIs(vector_lookup.call_args.args[3], provider)
+
+    def test_terminal_succeeded_vector_execution_replays_without_factory(self):
+        request = {"operator": "vector.semantic_similarity", "query": "query"}
+        database, package, conformance_id = self.prepared("lazy-vector-succeeded-replay", [request])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["vector_lookup"])
+        with patch.object(module, "vector_lookup", return_value=()) as vector_lookup:
+            first = execute_retrieval(database, package, conformance_id, vector_provider=object())
+            provider_factory = MagicMock(side_effect=RuntimeError("replay factory must not be called"))
+            second = execute_retrieval(
+                database, package, conformance_id, vector_provider_factory=provider_factory
+            )
+        self.assertEqual(first, second)
+        provider_factory.assert_not_called()
+        self.assertEqual(vector_lookup.call_count, 1)
+
+    def test_terminal_failed_vector_execution_replays_without_factory(self):
+        request = {"operator": "vector.semantic_similarity", "query": "query"}
+        database, package, conformance_id = self.prepared("lazy-vector-failed-replay", [request])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["vector_lookup"])
+        failure = EmbeddingProviderError("embedding failed")
+        with patch.object(module, "vector_lookup", side_effect=failure) as vector_lookup:
+            first = execute_retrieval(database, package, conformance_id, vector_provider=object())
+            provider_factory = MagicMock(side_effect=RuntimeError("replay factory must not be called"))
+            second = execute_retrieval(
+                database, package, conformance_id, vector_provider_factory=provider_factory
+            )
+        self.assertEqual(first.status, "failed")
+        self.assertEqual(first, second)
+        provider_factory.assert_not_called()
+        self.assertEqual(vector_lookup.call_count, 1)
+
+    def test_running_vector_execution_preserves_running_error_without_factory(self):
+        request = {"operator": "vector.semantic_similarity", "query": "query"}
+        database, package, conformance_id = self.prepared("lazy-vector-running", [request])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["_execute_surface"])
+        with patch.object(module, "_execute_surface", side_effect=RuntimeError("simulated interruption")):
+            with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                execute_retrieval(database, package, conformance_id, vector_provider=object())
+        provider_factory = MagicMock(side_effect=RuntimeError("running replay factory must not be called"))
+        with self.assertRaisesRegex(RetrievalExecutionError, "still running"):
+            execute_retrieval(database, package, conformance_id, vector_provider_factory=provider_factory)
+        provider_factory.assert_not_called()
+
+    def test_new_vector_factory_failure_preserves_cause_before_surface_execution(self):
+        request = {"operator": "vector.semantic_similarity", "query": "query"}
+        database, package, conformance_id = self.prepared("lazy-vector-factory-failure", [request])
+        failure = RuntimeError("factory construction failed")
+        provider_factory = MagicMock(side_effect=failure)
+        with self.assertRaises(RetrievalExecutionError) as raised:
+            execute_retrieval(database, package, conformance_id, vector_provider_factory=provider_factory)
+        self.assertIs(raised.exception.__cause__, failure)
+        provider_factory.assert_called_once_with()
+        connection = sqlite3.connect(database)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM retrieval_executions").fetchone()[0], 0)
+        connection.close()
+
+    def test_provider_and_factory_are_rejected_together(self):
+        request = {"operator": "vector.semantic_similarity", "query": "query"}
+        database, package, conformance_id = self.prepared("lazy-vector-both", [request])
+        provider_factory = MagicMock()
+        with self.assertRaisesRegex(RetrievalExecutionError, "cannot both be supplied"):
+            execute_retrieval(
+                database,
+                package,
+                conformance_id,
+                vector_provider=object(),
+                vector_provider_factory=provider_factory,
+            )
+        provider_factory.assert_not_called()
 
     def test_missing_conformance_and_package_mismatch_fail_before_surface_calls(self):
         database, package, conformance_id = self.prepared("authority", [self.exact()])

@@ -566,8 +566,8 @@ from unit, object, and region topology; scope targets have no owner.
 The transform receives `max_candidates` and an explicit
 `protected_owner_fraction`. The fraction is finite, numeric, not boolean, and
 strictly within `(0, 1]`; the protected owner limit is
-`ceil(max_candidates * protected_owner_fraction)`. No value is supplied by
-`RuntimeConfig` yet. Candidate identity is globally deduplicated, and every
+`ceil(max_candidates * protected_owner_fraction)`. RuntimeConfig supplies these
+mechanical values through its `candidate_selection` section. Candidate identity is globally deduplicated, and every
 selected candidate retains all composed unary support already attached to it.
 No score, support count, surface fact, or relation is normalized, compared,
 combined, or used as semantic ranking. `packet.max_occurrences` is not
@@ -636,7 +636,8 @@ production paths. There is intentionally no production full-turn path above
 Candidate Selection in this state.
 
 The future sequence is selected-candidate hydration → evidence projection →
-synthesis → restored orchestration. That future work is not implemented here.
+provider-neutral synthesis → restored orchestration. Only the restored
+full-turn orchestration remains outside this bounded runtime pass.
 Its hydration proof obligations are: unit targets reconstruct with their
 owning object, object targets reconstruct as objects, region targets
 reconstruct with their owning object, scope targets reconstruct only as a
@@ -686,3 +687,154 @@ deterministic in-memory composition boundary from a completed retrieval
 execution through workspace, ownership topology, selection, hydration, and
 EvidenceProjection v1. These evidence stages remain nonpersistent; this
 boundary performs no synthesis.
+
+## Synthesis Input Foundation
+
+The provider-neutral synthesis-input contract is `synthesis-input-v1`. It is
+one upper-runtime input shape, not separate direct and retrieval contracts:
+
+```text
+conversation snapshot + route + EvidenceProjection | None
+```
+
+The direct route requires `route = "direct"` and `evidence = null`. It means
+that no semantic projection was consulted. The semantic-retrieval route
+requires `route = "semantic_retrieval"` and an `evidence-projection-v1`
+`EvidenceProjection`; missing evidence is an input error, never an automatic
+downgrade to direct. A projection may represent either successful execution or
+failed execution with a succeeded prefix. Execution status is not reinterpreted
+by this contract.
+
+Natural dialogue remains dialogue. `SynthesisMessage` contains only a
+non-negative contiguous `ordinal`, the canonical role `user` or `synthesis`,
+and nonblank `content`, preserving content exactly. A synthesis input is
+nonempty and must end in the current `user` message. Snapshot values exclude
+message IDs, conversation IDs, timestamps, database paths, run IDs, retrieval
+IDs, and package hashes. Prior `synthesis` messages remain valid dialogue
+state: they can resolve referents and record prior assertions, but they are not
+independently retrieved corpus evidence.
+
+Canonical serialization is compact deterministic UTF-8 JSON with the fields
+`contract_version`, `route`, `conversation`, and `evidence`. The evidence value
+is embedded as structured JSON from `evidence_projection_json(...)`; it is not
+an escaped JSON string and never includes `EvidenceProjection.source` or
+hydrated canonical state. Its SHA-256 is exact canonical-input content
+identity, formatted `sha256:<hex>`; it is not provider-wire identity,
+database-lineage identity, package identity, or semantic identity. Provider
+role mapping and an explicit evidence-data transport block belong to a later
+provider pass, not this artifact.
+
+EvidenceProjection content remains authored evidence data, including any
+imperative prose, quoted prompt, code, or hostile-looking text. It acquires no
+runtime instruction authority and is not sanitized or rewritten here. Direct
+answers may use ordinary model knowledge without implying semantic retrieval.
+For semantic retrieval, ordinary knowledge may explain general concepts or
+help examine tensions, but cannot silently substitute for missing user,
+authored-corpus, project-state, or represented-relationship evidence.
+
+Synthesis must remain relation-first: topic match is not relation evidence.
+Mention is not explanation; chronology is not causation; similarity is not
+identity; association is not influence; recurrence is not development; and
+occurrence is not motivation. Candidate support records retrieval provenance,
+not truth confidence, relevance weight, or a fusion score. Lexical plus vector
+support means that two retrieval paths exposed one candidate; it does not mean
+twice the truth or a fused rank. Candidate order is deterministic mechanical
+presentation order (including breadth-first and accepted owner-depth fallback),
+not epistemic strength.
+
+Negative and count authority remains scoped to the upstream request contract:
+an exact succeeded request with `returned_occurrences = N` owns the count for
+that exact addressed lookup, even when selection retains fewer candidates;
+selection count is not corpus count. A succeeded temporal request is exhaustive
+only over its addressed native dimension/operator/range/order. A succeeded
+graph-relation lookup is exhaustive only for that addressed represented
+relation lookup. Lexical/vector absence and graph-discovery absence do not
+license corpus absence. Failed and not-executed requests are not zero results;
+selection truncation is not workspace or corpus absence; and no request for the
+relevant relation licenses a negative claim about it.
+
+Poorly matched evidence may remain non-establishing. Partial or failed
+execution must be reasoned from successful evidence while respecting failed and
+not-executed status. Relevant tensions may be surfaced between the user and
+evidence, within evidence, or between general knowledge and supplied claims,
+but wording, abstraction, emphasis, or temporal perspective alone is not a
+contradiction. Cross-surface fusion, score normalization, RRF, support-count
+ranking, and confidence multipliers are not required by this architecture and
+are not part of this contract.
+
+## Provider-neutral synthesis runtime
+
+Runtime configuration now has four exact sections: `router`,
+`retrieval_inference`, `candidate_selection`, and `synthesis`. The synthesis
+section uses the existing `ModelConfig` shape. The provider-neutral runtime
+accepts a persisted succeeded router run and an explicitly injected
+`SynthesisProvider`; it does not construct a provider, execute retrieval, call
+`prepare_evidence`, or perform transport-specific role mapping.
+
+For a direct route, the synthesis model run is parented to the router run and
+receives no evidence. For semantic retrieval, it is parented to the persisted
+retrieval-inference run selected by `EvidenceProjection.source.selection`.
+That source is validated against the persisted conformance and execution
+lineage, including package identity, hashes, contracts, and terminal execution
+status; failed retrieval execution remains admissible when the projection
+contains a valid succeeded prefix.
+
+The runtime claims one synthesis attempt under a SQLite write lock, stores the
+exact canonical `SynthesisInput` JSON and its canonical-input SHA-256, commits
+the claim, and invokes the injected provider outside the write transaction.
+Successful message insertion and model-run completion are one atomic
+transaction. Provider failures and invalid provider results mark the attempt
+failed without appending a synthesis message. A valid success is idempotent by
+conversation and trigger message, failed attempts may retry, and a running
+claim prevents a duplicate provider call. A conversation mutation during
+provider execution invalidates the stale answer. `EvidenceProjection` remains
+derived nonpersistent state, schema version remains 6, and no synthesis
+transport adapter or full-turn orchestration is part of this boundary.
+
+The OpenAI adapter activates only the transport seam. It maps persisted
+`user` dialogue to Responses `user` items and prior `synthesis` dialogue to
+`assistant` items, preserving each message as one `input_text` part. Semantic
+retrieval adds one second `input_text` part to the final user item containing a
+stable evidence-data marker and the canonical `evidence_projection_json`
+payload. The evidence block is public model-facing projection data only; it is
+not placed in instructions or a synthetic message. Requests use the configured
+model and prompt with `store=false` and `truncation="disabled"`, and do not
+request tools, streaming, previous-response state, or structured JSON output.
+Completed responses return exact nonblank `output_text`, provider response ID,
+and the available token-usage fields through the provider-neutral result.
+
+### Attempt authority before upper orchestration
+
+Router attempts are authoritative by `(conversation_id,
+trigger_message_id, run_kind='router')`: one succeeded attempt may be replayed,
+one running attempt blocks a duplicate claim, and failed attempts remain
+retryable history. Retrieval-inference attempts use the authoritative semantic
+router run as their parent and have the same one-success/one-running lifecycle.
+Historical duplicate successes, duplicate running attempts, or success-plus-
+running states fail closed. Running state is not stale-state recovery: this
+pass adds no age heuristic, lease, heartbeat, session ownership, or automatic
+failure of an interrupted attempt.
+
+The future semantic coordinator must look up an existing synthesis success
+before loading or verifying mutable retrieval-package artifacts. When no
+synthesis success exists, it must load and verify the package first, then pass
+the verified package's `capability_catalog_path` to retrieval inference and
+conformance, and pass the same `VerifiedRetrievalPackage` through execution
+and evidence preparation. Retrieval inference must not consume an unverified
+package catalog and verify the package only afterward.
+
+The current upper coordinator consumes an already-persisted user turn; it does
+not append a message. The production CLI full-turn command constructs and
+injects the router, retrieval-inference, and synthesis providers. The upper
+coordinator performs no provider construction, retrieval fusion, ranking, or
+second persistence authority. A direct route calls synthesis with no evidence
+and touches no retrieval state.
+For a fresh semantic route, package loading and verification precede retrieval
+inference, and the same verified package flows through execution and evidence
+preparation. Vector-provider construction is lazy and occurs only when the
+authoritative retrieval proposal contains `vector.semantic_similarity` and a
+new execution actually needs the surface. Terminal execution replay does not
+require or construct an embedding provider.
+Terminal failed execution remains eligible for evidence preparation and
+synthesis of succeeded-prefix evidence; evidence-preparation failure is
+terminal and never downgrades to direct.
