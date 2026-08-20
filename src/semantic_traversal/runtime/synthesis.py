@@ -145,6 +145,16 @@ def _router_authority(connection: sqlite3.Connection, router_run_id: str, conver
         raise SynthesisError("synthesis requires a succeeded router run")
     if row["conversation_id"] != conversation_id:
         raise SynthesisError("router run conversation does not match synthesis conversation")
+    router_rows = tuple(connection.execute(
+        "SELECT status, run_id FROM model_runs WHERE conversation_id = ? AND trigger_message_id = ? AND run_kind = 'router'",
+        (conversation_id, row["trigger_message_id"]),
+    ))
+    if any(item["status"] not in {"running", "succeeded", "failed"} for item in router_rows):
+        raise SynthesisError("persisted router status is unsupported")
+    successes = tuple(item for item in router_rows if item["status"] == "succeeded")
+    running = tuple(item for item in router_rows if item["status"] == "running")
+    if len(successes) != 1 or running or successes[0]["run_id"] != router_run_id:
+        raise SynthesisError("router lineage is not one authoritative succeeded attempt")
     try:
         payload = json.loads(row["output_json"])
     except (TypeError, json.JSONDecodeError) as exc:
@@ -384,6 +394,28 @@ def _existing_synthesis_state(
     return None
 
 
+def load_synthesis_success(
+    database_path: str,
+    conversation_id: str,
+    router_run_id: str,
+) -> SynthesisResult | None:
+    """Read an existing synthesis success without claiming or reconstructing input."""
+
+    if not isinstance(conversation_id, str) or not conversation_id.strip() or not isinstance(router_run_id, str) or not router_run_id.strip():
+        raise SynthesisError("conversation_id and router_run_id must be nonblank text")
+    try:
+        connection = _connect_runtime(database_path)
+        try:
+            router_run, _ = _router_authority(connection, router_run_id, conversation_id)
+            return _existing_synthesis_state(connection, conversation_id, router_run["trigger_message_id"], router_run)
+        finally:
+            connection.close()
+    except SynthesisError:
+        raise
+    except (RuntimeConversationError, sqlite3.Error) as exc:
+        raise SynthesisError(str(exc)) from exc
+
+
 def _mark_failed(database_path: str, run_id: str, error_type: str, error_message: str, clock: Clock | None) -> None:
     try:
         connection = _connect_runtime(database_path)
@@ -561,5 +593,5 @@ def synthesize_conversation(
 
 __all__ = [
     "SynthesisError", "SynthesisProviderError", "SynthesisUsage", "SynthesisProviderResult",
-    "SynthesisProvider", "SynthesisResult", "synthesize_conversation",
+    "SynthesisProvider", "SynthesisResult", "load_synthesis_success", "synthesize_conversation",
 ]

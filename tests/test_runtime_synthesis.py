@@ -22,6 +22,7 @@ from semantic_traversal.runtime.synthesis import (
     SynthesisProviderError,
     SynthesisProviderResult,
     SynthesisUsage,
+    load_synthesis_success,
     synthesize_conversation,
 )
 from semantic_traversal.runtime.synthesis_input import serialize_synthesis_input
@@ -99,6 +100,7 @@ class SynthesisRuntimeTests(unittest.TestCase):
             provider = SynthesisDouble()
             first = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=provider)
             second = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
+            self.assertEqual(load_synthesis_success(database, conversation.conversation_id, router.run_id), second)
             self.assertEqual(first, second)
             self.assertEqual(len(provider.calls), 1)
             connection = sqlite3.connect(database)
@@ -106,12 +108,37 @@ class SynthesisRuntimeTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role = 'synthesis'").fetchone()[0], 1)
             connection.close()
 
+    def test_synthesis_success_lookup_is_non_mutating_and_does_not_need_evidence(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            result = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
+            replay = load_synthesis_success(database, conversation.conversation_id, router.run_id)
+            self.assertEqual(replay, result)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind='synthesis'").fetchone()[0], 1)
+            connection.close()
+
+    def test_synthesis_success_lookup_returns_none_or_blocks_running(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, trigger, router = self.prepared(directory)
+            self.assertIsNone(load_synthesis_success(database, conversation.conversation_id, router.run_id))
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, provider, model, prompt_version, status, started_at, input_json, input_sha256) VALUES ('running', ?, ?, 'synthesis', ?, 'openai', 'synthesis', 'prompt', 'running', 'started', '{}', 'sha256:" + "0" * 64 + "')",
+                (conversation.conversation_id, trigger.message_id, router.run_id),
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(SynthesisError, "already running"):
+                load_synthesis_success(database, conversation.conversation_id, router.run_id)
+
     def test_provider_failure_is_durable_and_retryable(self):
         with TemporaryDirectory() as directory:
             database, conversation, _, router = self.prepared(directory)
             with self.assertRaises(SynthesisError) as raised:
                 synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble(error=SynthesisProviderError("timeout", "provider timed out")))
             self.assertIsInstance(raised.exception.__cause__, SynthesisProviderError)
+            self.assertIsNone(load_synthesis_success(database, conversation.conversation_id, router.run_id))
             second = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
             connection = sqlite3.connect(database)
             rows = connection.execute("SELECT run_id, status, error_type FROM model_runs WHERE run_kind = 'synthesis' ORDER BY started_at").fetchall()
@@ -207,6 +234,7 @@ class SynthesisRuntimeTests(unittest.TestCase):
             self.assertEqual(result.parent_run_id, values["retrieval_run_id"])
             self.assertEqual(provider.calls[0][1].route, "semantic_retrieval")
             self.assertIs(provider.calls[0][1].evidence, evidence)
+            self.assertEqual(load_synthesis_success(database, conversation.conversation_id, router.run_id), result)
 
     def test_conversation_mutation_during_provider_call_invalidates_answer(self):
         with TemporaryDirectory() as directory:

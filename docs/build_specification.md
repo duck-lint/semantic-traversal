@@ -790,3 +790,51 @@ claim prevents a duplicate provider call. A conversation mutation during
 provider execution invalidates the stale answer. `EvidenceProjection` remains
 derived nonpersistent state, schema version remains 6, and no synthesis
 transport adapter or full-turn orchestration is part of this boundary.
+
+The OpenAI adapter activates only the transport seam. It maps persisted
+`user` dialogue to Responses `user` items and prior `synthesis` dialogue to
+`assistant` items, preserving each message as one `input_text` part. Semantic
+retrieval adds one second `input_text` part to the final user item containing a
+stable evidence-data marker and the canonical `evidence_projection_json`
+payload. The evidence block is public model-facing projection data only; it is
+not placed in instructions or a synthetic message. Requests use the configured
+model and prompt with `store=false` and `truncation="disabled"`, and do not
+request tools, streaming, previous-response state, or structured JSON output.
+Completed responses return exact nonblank `output_text`, provider response ID,
+and the available token-usage fields through the provider-neutral result.
+
+### Attempt authority before upper orchestration
+
+Router attempts are authoritative by `(conversation_id,
+trigger_message_id, run_kind='router')`: one succeeded attempt may be replayed,
+one running attempt blocks a duplicate claim, and failed attempts remain
+retryable history. Retrieval-inference attempts use the authoritative semantic
+router run as their parent and have the same one-success/one-running lifecycle.
+Historical duplicate successes, duplicate running attempts, or success-plus-
+running states fail closed. Running state is not stale-state recovery: this
+pass adds no age heuristic, lease, heartbeat, session ownership, or automatic
+failure of an interrupted attempt.
+
+The future semantic coordinator must look up an existing synthesis success
+before loading or verifying mutable retrieval-package artifacts. When no
+synthesis success exists, it must load and verify the package first, then pass
+the verified package's `capability_catalog_path` to retrieval inference and
+conformance, and pass the same `VerifiedRetrievalPackage` through execution
+and evidence preparation. Retrieval inference must not consume an unverified
+package catalog and verify the package only afterward.
+
+The current upper coordinator consumes an already-persisted user turn; it does
+not append a message. The production CLI full-turn command constructs and
+injects the router, retrieval-inference, and synthesis providers. The upper
+coordinator performs no provider construction, retrieval fusion, ranking, or
+second persistence authority. A direct route calls synthesis with no evidence
+and touches no retrieval state.
+For a fresh semantic route, package loading and verification precede retrieval
+inference, and the same verified package flows through execution and evidence
+preparation. Vector-provider construction is lazy and occurs only when the
+authoritative retrieval proposal contains `vector.semantic_similarity` and a
+new execution actually needs the surface. Terminal execution replay does not
+require or construct an embedding provider.
+Terminal failed execution remains eligible for evidence preparation and
+synthesis of succeeded-prefix evidence; evidence-preparation failure is
+terminal and never downgrades to direct.
