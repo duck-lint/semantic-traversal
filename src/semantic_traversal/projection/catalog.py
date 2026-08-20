@@ -253,11 +253,11 @@ def _operators(facts: Mapping[str, Any]) -> dict[str, Any]:
         raise CatalogGenerationError("unsupported surface operator grammar")
     return {
         "exact.equals": {"surface": "exact", "meaning": "typed exact equality using the accepted exact normalization; distinct canonical value domains remain distinct"},
-        "lexical.terms": {"surface": "lexical", "meaning": "OR matching over one-token operands under the accepted lexical tokenizer"},
-        "lexical.phrase": {"surface": "lexical", "meaning": "contiguous token-sequence matching under the accepted lexical tokenizer"},
+        "lexical.terms": {"surface": "lexical", "meaning": "nonempty collection of terms; every individual operand must tokenize to exactly one token under the accepted lexical tokenizer; OR matching across the individual terms"},
+        "lexical.phrase": {"surface": "lexical", "meaning": "nonempty text that may tokenize to multiple tokens; contiguous token-sequence matching under the accepted lexical tokenizer"},
         "vector.semantic_similarity": {"surface": "vector", "meaning": "cosine similarity for exactly the supplied query text, without segmentation, truncation, or deterministic enrichment"},
-        "graph.discovery.terms": {"surface": "graph", "meaning": "discover represented graph instances using OR lexical terms and return an opaque typed graph handle"},
-        "graph.discovery.phrase": {"surface": "graph", "meaning": "discover represented graph instances using a contiguous lexical phrase and return an opaque typed graph handle"},
+        "graph.discovery.terms": {"surface": "graph", "meaning": "each individual term operand must tokenize to exactly one token under the accepted lexical tokenizer; graph discovery uses OR matching across the individual terms and returns graph-discovery handles, not lexical unit hits"},
+        "graph.discovery.phrase": {"surface": "graph", "meaning": "nonempty phrase input may tokenize to multiple tokens; graph discovery uses contiguous token-sequence matching under the accepted lexical tokenizer and returns graph-discovery handles, not lexical unit hits"},
         "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "locate occurrences of one advertised relation type"},
         "graph.inbound_traversal": {"surface": "graph", "meaning": "follow one advertised relation type one hop inbound from a typed graph handle"},
         "graph.outbound_traversal": {"surface": "graph", "meaning": "follow one advertised relation type one hop outbound from a typed graph handle"},

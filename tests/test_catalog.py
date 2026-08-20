@@ -145,6 +145,24 @@ class CatalogTests(unittest.TestCase):
             ])
             self.assertTrue(all("sequence_behavior" not in item for item in sequence["access"]))
 
+            self.assertEqual(catalog["operators"], {
+                "exact.equals": {"surface": "exact", "meaning": "typed exact equality using the accepted exact normalization; distinct canonical value domains remain distinct"},
+                "lexical.terms": {"surface": "lexical", "meaning": "nonempty collection of terms; every individual operand must tokenize to exactly one token under the accepted lexical tokenizer; OR matching across the individual terms"},
+                "lexical.phrase": {"surface": "lexical", "meaning": "nonempty text that may tokenize to multiple tokens; contiguous token-sequence matching under the accepted lexical tokenizer"},
+                "vector.semantic_similarity": {"surface": "vector", "meaning": "cosine similarity for exactly the supplied query text, without segmentation, truncation, or deterministic enrichment"},
+                "graph.discovery.terms": {"surface": "graph", "meaning": "each individual term operand must tokenize to exactly one token under the accepted lexical tokenizer; graph discovery uses OR matching across the individual terms and returns graph-discovery handles, not lexical unit hits"},
+                "graph.discovery.phrase": {"surface": "graph", "meaning": "nonempty phrase input may tokenize to multiple tokens; graph discovery uses contiguous token-sequence matching under the accepted lexical tokenizer and returns graph-discovery handles, not lexical unit hits"},
+                "graph.relation_occurrence_lookup": {"surface": "graph", "meaning": "locate occurrences of one advertised relation type"},
+                "graph.inbound_traversal": {"surface": "graph", "meaning": "follow one advertised relation type one hop inbound from a typed graph handle"},
+                "graph.outbound_traversal": {"surface": "graph", "meaning": "follow one advertised relation type one hop outbound from a typed graph handle"},
+                "temporal.earliest": {"surface": "temporal", "meaning": "earliest represented date on the addressed temporal dimension; return all units tied at that date"},
+                "temporal.latest": {"surface": "temporal", "meaning": "latest represented date on the addressed temporal dimension; return all units tied at that date"},
+                "temporal.before": {"surface": "temporal", "meaning": "strictly before the supplied date; exhaustive with nearest preceding dates first"},
+                "temporal.after": {"surface": "temporal", "meaning": "strictly after the supplied date; exhaustive with nearest following dates first"},
+                "temporal.between": {"surface": "temporal", "meaning": "inclusive date range in exhaustive chronological order"},
+                "temporal.ordered": {"surface": "temporal", "meaning": "exhaustive chronological ordering in explicit ascending or descending direction"},
+            })
+
             mixed = dimensions[("semantic_identifier", "mixed_integer_string")]
             self.assertEqual(mixed["value"], {"shapes": [
                 {"shape": "scalar", "domains": ["integer"]},
