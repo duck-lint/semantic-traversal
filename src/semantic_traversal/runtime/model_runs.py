@@ -141,6 +141,10 @@ def complete_retrieval_run(connection: sqlite3.Connection, **kwargs: object) -> 
     complete_model_run(connection, run_kind="retrieval_inference", **kwargs)  # type: ignore[arg-type]
 
 
+def fail_retrieval_run(connection: sqlite3.Connection, **kwargs: object) -> None:
+    fail_model_run(connection, run_kind="retrieval_inference", **kwargs)  # type: ignore[arg-type]
+
+
 def complete_synthesis_run(
     connection: sqlite3.Connection,
     *,
@@ -173,16 +177,26 @@ def complete_synthesis_run(
         raise sqlite3.IntegrityError(f"synthesis run is not in running state: {run_id}")
 
 
-def fail_synthesis_run(connection: sqlite3.Connection, **kwargs: object) -> None:
-    fail_model_run(connection, run_kind="synthesis", **kwargs)  # type: ignore[arg-type]
-
-
-def fail_retrieval_run(connection: sqlite3.Connection, **kwargs: object) -> None:
-    fail_model_run(connection, run_kind="retrieval_inference", **kwargs)  # type: ignore[arg-type]
+def fail_synthesis_run(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    completed_at: str,
+    error_type: str,
+    error_message: str,
+) -> None:
+    fail_model_run(
+        connection,
+        run_kind="synthesis",
+        run_id=run_id,
+        completed_at=completed_at,
+        error_type=error_type,
+        error_message=error_message,
+    )
 
 
 __all__ = [
-    "complete_retrieval_run", "complete_router_run", "complete_synthesis_run",
-    "fail_retrieval_run", "fail_router_run", "fail_synthesis_run", "insert_model_run",
-    "insert_retrieval_run", "insert_router_run", "insert_synthesis_run",
+    "complete_retrieval_run", "complete_router_run", "fail_retrieval_run", "fail_router_run",
+    "complete_synthesis_run", "fail_synthesis_run", "insert_model_run", "insert_retrieval_run",
+    "insert_router_run", "insert_synthesis_run",
 ]
