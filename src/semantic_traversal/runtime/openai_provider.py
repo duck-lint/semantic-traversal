@@ -150,8 +150,15 @@ def _synthesis_messages(synthesis_input: SynthesisInput) -> list[dict[str, objec
     messages: list[dict[str, object]] = []
     final_index = len(synthesis_input.conversation) - 1
     for index, message in enumerate(synthesis_input.conversation):
-        role = "assistant" if message.role == "synthesis" else "user"
-        parts: list[dict[str, str]] = [{"type": "input_text", "text": message.content}]
+        if message.role == "user":
+            role = "user"
+            content_type = "input_text"
+        elif message.role == "synthesis":
+            role = "assistant"
+            content_type = "output_text"
+        else:
+            raise SynthesisProviderError("runtime_validation", f"unsupported synthesis message role: {message.role!r}")
+        parts: list[dict[str, str]] = [{"type": content_type, "text": message.content}]
         if evidence_text is not None and index == final_index:
             parts.append({"type": "input_text", "text": evidence_text})
         messages.append({"role": role, "content": parts})
