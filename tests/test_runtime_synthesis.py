@@ -1,307 +1,273 @@
-import datetime as dt
+import hashlib
 import json
 import sqlite3
-import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 
-from semantic_traversal.build.canonical import CanonicalObject, CanonicalUnit
-from semantic_traversal.build.parser import FrontmatterField
-from semantic_traversal.runtime.config import ModelConfig, PacketConfig, RuntimeConfig
+from semantic_traversal.runtime.config import CandidateSelectionConfig, ModelConfig, RuntimeConfig
 from semantic_traversal.runtime.conversation import append_message, create_conversation, get_conversation, initialize_runtime
 from semantic_traversal.runtime.openai_provider import ProviderInference, ProviderUsage
-from semantic_traversal.runtime.retrieval.hydration import HydratedCanonicalTarget, HydratedExactHit, HydratedExactResult, HydratedRequestResult, HydratedRetrievalResult
-from semantic_traversal.runtime.retrieval.packet import assemble_retrieval_packet
+from semantic_traversal.runtime.prompts import prompt_version
 from semantic_traversal.runtime.router import route_conversation
+from semantic_traversal.runtime.retrieval.candidate_hydration import HydratedCandidateSelection
+from semantic_traversal.runtime.retrieval.evidence_projection import EvidenceCoverage, EvidenceProjection
+from semantic_traversal.runtime.retrieval.execution import EXECUTION_CONTRACT_VERSION
+from semantic_traversal.runtime.retrieval.package import IDENTITY_VERSION
+from semantic_traversal.runtime.retrieval.package_verification import VERIFICATION_CONTRACT_VERSION
+from semantic_traversal.runtime.retrieval.selection import CandidateSelection, SelectionCoverage
 from semantic_traversal.runtime.synthesis import (
-    SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisError, SynthesisMessage, SynthesisProviderError,
-    SynthesisProviderResult, SynthesisUsage, SynthesisInput, serialize_synthesis_input,
-    synthesis_input_sha256, synthesize_conversation,
+    SynthesisError,
+    SynthesisProviderError,
+    SynthesisProviderResult,
+    SynthesisUsage,
+    load_synthesis_success,
+    synthesize_conversation,
 )
+from semantic_traversal.runtime.synthesis_input import serialize_synthesis_input
 
 
-class RecordingProvider:
-    def __init__(self, response="answer", error=None):
-        self.response = response
+class RouterDouble:
+    def __init__(self, route="direct"):
+        self.route = route
+
+    def infer_router(self, config, messages):
+        return ProviderInference(self.route, json.dumps({"route": self.route}, separators=(",", ":")), None, ProviderUsage())
+
+
+class SynthesisDouble:
+    def __init__(self, result=None, error=None, mutate=None):
+        self.result = result or SynthesisProviderResult("answer")
         self.error = error
-        self.inputs = []
+        self.mutate = mutate
+        self.calls = []
 
     def synthesize(self, config, synthesis_input):
-        self.inputs.append((config, synthesis_input))
+        self.calls.append((config, synthesis_input))
+        if self.mutate is not None:
+            self.mutate()
         if self.error is not None:
             raise self.error
-        return SynthesisProviderResult(self.response, "provider-response", SynthesisUsage(1, 2, 3, 4, 5))
+        return self.result
 
 
-def runtime_config():
-    return RuntimeConfig(
-        ModelConfig("openai", "router", 1.0, "router"),
-        ModelConfig("openai", "retrieval", 1.0, "retrieval"),
-        PacketConfig(32),
-        ModelConfig("openai", "synthesis", 1.0, "synthesis"),
-    )
+class SynthesisRuntimeTests(unittest.TestCase):
+    def config(self):
+        return RuntimeConfig(
+            ModelConfig("openai", "router", 1.0, "router prompt"),
+            ModelConfig("openai", "retrieval", 1.0, "retrieval prompt"),
+            CandidateSelectionConfig(120, 0.20),
+            ModelConfig("openai", "synthesis", 9.0, "synthesis prompt"),
+        )
 
-
-def unit_target(unit_id=1):
-    owner = SimpleNamespace(source_object_uuid="owner")
-    unit = SimpleNamespace(unit_id=unit_id, source_object_uuid="owner")
-    return HydratedCanonicalTarget("semantic_unit", canonical_unit=unit, owning_object=owner)
-
-
-def empty_packet(execution_id="execution", conformance_id="conformance", retrieval_run_id="retrieval", package_id="package"):
-    hydrated = HydratedRetrievalResult(
-        execution_id, conformance_id, retrieval_run_id, package_id, "succeeded", None,
-        (HydratedRequestResult(0, {"operator": "exact.equals"}, "exact.equals", "succeeded", HydratedExactResult(()), None),),
-    )
-    return assemble_retrieval_packet(hydrated, PacketConfig(32)).packet
-
-
-class SynthesisTests(unittest.TestCase):
-    def prepared(self, route="direct"):
-        directory = TemporaryDirectory()
-        database = Path(directory.name) / "runtime.sqlite3"
+    def prepared(self, directory, route="direct"):
+        database = Path(directory) / "runtime.sqlite3"
         initialize_runtime(database)
         conversation = create_conversation(database)
-        append_message(database, conversation.conversation_id, "user", "Explain transcendental arguments.")
-        router = route_conversation(
-            database, runtime_config(), conversation.conversation_id,
-            provider=type("Router", (), {"infer_router": lambda self, config, messages: ProviderInference(route, json.dumps({"route": route}), "router-response", ProviderUsage())})(),
-        )
-        return directory, database, conversation, router
+        trigger = append_message(database, conversation.conversation_id, "user", "hello")
+        router = route_conversation(database, self.config(), conversation.conversation_id, provider=RouterDouble(route))
+        return database, conversation, trigger, router
 
-    def add_semantic_lineage(self, database, conversation, router, packet):
-        connection = sqlite3.connect(database)
-        connection.execute(
-            "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, output_json) VALUES (?, ?, ?, 'retrieval_inference', ?, ?, 'openai', 'retrieval', 'retrieval', 'succeeded', 'started', ?)",
-            (packet.retrieval_run_id, conversation.conversation_id, 1, router.run_id, 'catalog-lineage', '{"requests":[]}'),
-        )
-        connection.execute(
-            "INSERT INTO retrieval_conformance (conformance_id, retrieval_run_id, retrieval_proposal_sha256, capability_catalog_sha256, contract_version, status, checked_at, result_json) VALUES (?, ?, 'proposal', 'catalog', 'catalog-conformance-v1', 'valid', 'checked', '{\"status\":\"valid\",\"requests\":[]}')",
-            (packet.conformance_id, packet.retrieval_run_id),
-        )
-        connection.execute(
-            "INSERT INTO retrieval_executions (execution_id, conformance_id, retrieval_run_id, retrieval_proposal_sha256, capability_catalog_sha256, retrieval_package_id, retrieval_package_identity_version, substrate_sha256, vectors_sha256, package_verification_contract_version, execution_contract_version, status, started_at, completed_at, result_json) VALUES (?, ?, ?, 'proposal', 'catalog', ?, 'retrieval-package-v1', 'substrate', 'vectors', 'verification', 'retrieval-execution-v1', 'succeeded', 'started', 'done', '{\"requests\":[],\"execution_failure\":null}')",
-            (packet.execution_id, packet.conformance_id, packet.retrieval_run_id, packet.retrieval_package_id),
-        )
-        connection.commit()
-        connection.close()
+    def test_direct_happy_path_persists_exact_input_and_atomic_answer(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, trigger, router = self.prepared(directory)
+            provider = SynthesisDouble(SynthesisProviderResult("  exact answer  ", "provider-id", SynthesisUsage(1, 2, 3, 4, 5)))
+            result = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=provider)
+            self.assertEqual(len(provider.calls), 1)
+            config, synthesis_input = provider.calls[0]
+            self.assertEqual(config, self.config().synthesis)
+            self.assertEqual(synthesis_input.route, "direct")
+            self.assertIsNone(synthesis_input.evidence)
+            connection = sqlite3.connect(database)
+            row = connection.execute(
+                "SELECT run_kind, parent_run_id, status, input_json, input_sha256, output_text, produced_message_id, provider_response_id, input_tokens, total_tokens FROM model_runs WHERE run_id = ?",
+                (result.run_id,),
+            ).fetchone()
+            message = connection.execute("SELECT role, content FROM messages WHERE message_id = ?", (result.produced_message_id,)).fetchone()
+            connection.close()
+            self.assertEqual(row[0:3], ("synthesis", router.run_id, "succeeded"))
+            self.assertEqual(row[3], serialize_synthesis_input(synthesis_input))
+            self.assertEqual(row[4], "sha256:" + hashlib.sha256(row[3].encode("utf-8")).hexdigest())
+            self.assertEqual(row[5:10], ("  exact answer  ", result.produced_message_id, "provider-id", 1, 5))
+            self.assertEqual(message, ("synthesis", "  exact answer  "))
+            self.assertEqual(result.prompt_version, prompt_version(self.config().synthesis.prompt))
+            self.assertEqual(result.trigger_message_id, trigger.message_id)
 
-    def test_direct_recording_input_and_idempotent_success(self):
-        directory, database, conversation, router = self.prepared()
-        try:
-            provider = RecordingProvider("exact response")
-            first = synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            second = synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            self.assertEqual(len(provider.inputs), 1)
-            self.assertEqual(provider.inputs[0][1].route, "direct")
-            received_messages = provider.inputs[0][1].conversation
-            self.assertEqual(received_messages[-1].content, "Explain transcendental arguments.")
-            self.assertEqual(received_messages, (SynthesisMessage(0, "user", "Explain transcendental arguments."),))
-            self.assertEqual(set(vars(received_messages[-1])), {"ordinal", "role", "content"})
-            input_json = serialize_synthesis_input(provider.inputs[0][1])
-            self.assertNotIn("message_id", input_json)
-            self.assertNotIn("created_at", input_json)
-            self.assertNotIn("conversation_id", input_json)
-            self.assertIsNone(provider.inputs[0][1].retrieval_packet)
+    def test_success_is_idempotent_without_provider_or_latest_user_precondition(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            provider = SynthesisDouble()
+            first = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=provider)
+            second = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
+            self.assertEqual(load_synthesis_success(database, conversation.conversation_id, router.run_id), second)
             self.assertEqual(first, second)
-            self.assertEqual(get_conversation(database, conversation.conversation_id).messages[-1].role, "synthesis")
+            self.assertEqual(len(provider.calls), 1)
             connection = sqlite3.connect(database)
-            row = connection.execute("SELECT status, parent_run_id, output_text, produced_message_id FROM model_runs WHERE run_kind='synthesis'").fetchone()
-            self.assertEqual(row[0], "succeeded")
-            self.assertEqual(row[1], router.run_id)
-            self.assertEqual(row[2], "exact response")
-            self.assertEqual(row[3], first.produced_message_id)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind = 'synthesis' AND status = 'succeeded'").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role = 'synthesis'").fetchone()[0], 1)
             connection.close()
-        finally:
-            directory.cleanup()
 
-    def test_retrieval_recording_preserves_packet_and_lineage(self):
-        directory, database, conversation, router = self.prepared("semantic_retrieval")
-        try:
-            packet = empty_packet()
-            self.add_semantic_lineage(database, conversation, router, packet)
-            provider = RecordingProvider("retrieval response")
-            result = synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, retrieval_packet=packet, provider=provider)
-            received = provider.inputs[0][1]
-            self.assertEqual(received.retrieval_packet, packet)
-            self.assertEqual((received.retrieval_packet.execution_id, received.retrieval_packet.conformance_id, received.retrieval_packet.retrieval_run_id, received.retrieval_packet.retrieval_package_id), ("execution", "conformance", "retrieval", "package"))
-            self.assertEqual(received.retrieval_packet.coverage.max_occurrences, 32)
-            self.assertEqual(received.retrieval_packet.requests[0].exhaustive_exact_match_count, 0)
-            self.assertEqual(result.parent_run_id, "retrieval")
-        finally:
-            directory.cleanup()
-
-    def test_failed_packet_and_zero_hit_packet_reach_provider(self):
-        directory, database, conversation, router = self.prepared("semantic_retrieval")
-        try:
-            hydrated = HydratedRetrievalResult("execution", "conformance", "retrieval", "package", "failed", {"kind": "partial"}, ())
-            packet = assemble_retrieval_packet(hydrated, PacketConfig(32)).packet
-            self.add_semantic_lineage(database, conversation, router, packet)
+    def test_synthesis_success_lookup_is_non_mutating_and_does_not_need_evidence(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            result = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
+            replay = load_synthesis_success(database, conversation.conversation_id, router.run_id)
+            self.assertEqual(replay, result)
             connection = sqlite3.connect(database)
-            connection.execute(
-                "UPDATE retrieval_executions SET status='failed', result_json=?",
-                ('{"requests":[],"execution_failure":{"kind":"partial"}}',),
-            )
-            connection.commit()
-            connection.close()
-            provider = RecordingProvider("partial response")
-            synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, retrieval_packet=packet, provider=provider)
-            self.assertEqual(provider.inputs[0][1].retrieval_packet.execution_status, "failed")
-            self.assertEqual(provider.inputs[0][1].retrieval_packet.execution_failure["kind"], "partial")
-        finally:
-            directory.cleanup()
-
-    def test_wrong_route_and_lineage_fail_before_provider(self):
-        directory, database, conversation, router = self.prepared("direct")
-        try:
-            provider = RecordingProvider()
-            with self.assertRaises(SynthesisError):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, retrieval_packet=empty_packet(), provider=provider)
-            self.assertEqual(provider.inputs, [])
-        finally:
-            directory.cleanup()
-
-    def test_continuity_and_type_fidelity_have_stable_input_hash(self):
-        directory, database, conversation, router = self.prepared()
-        try:
-            append_message(database, conversation.conversation_id, "synthesis", "It drank milk and later ate hay.")
-            append_message(database, conversation.conversation_id, "user", "When did that change?")
-            # A new router run is required for the new latest user trigger.
-            router = route_conversation(database, runtime_config(), conversation.conversation_id, provider=type("Router", (), {"infer_router": lambda self, config, messages: ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage())})())
-            provider = RecordingProvider("continuity response")
-            synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            messages = provider.inputs[0][1].conversation
-            self.assertEqual([(item.role, item.content) for item in messages], [("user", "Explain transcendental arguments."), ("synthesis", "It drank milk and later ate hay."), ("user", "When did that change?")])
-
-            fields = (FrontmatterField("none", "present_value", None), FrontmatterField("bool", "present_value", True), FrontmatterField("int", "present_value", 4), FrontmatterField("float", "present_value", 1.25), FrontmatterField("date", "present_value", dt.date(2026, 1, 2)), FrontmatterField("datetime", "present_value", dt.datetime(2026, 1, 2, 3, 4, tzinfo=dt.timezone.utc)), FrontmatterField("list", "present_value", ["x", None]), FrontmatterField("mapping", "present_value", {"x": "y"}))
-            unit = CanonicalUnit(1, "owner", "owner.md", 0, (), (), "raw", "parsed", fields, (), ())
-            owner = CanonicalObject("owner", "owner.md", (), fields, (), ())
-            target = HydratedCanonicalTarget("semantic_unit", canonical_unit=unit, owning_object=owner)
-            packet = assemble_retrieval_packet(HydratedRetrievalResult("e", "c", "r", "p", "succeeded", None, (HydratedRequestResult(0, {"operator": "exact.equals"}, "exact.equals", "succeeded", HydratedExactResult((HydratedExactHit(1, target),)), None),)), PacketConfig(1)).packet
-            value = SynthesisInput(
-                SYNTHESIS_INPUT_CONTRACT_VERSION,
-                "semantic_retrieval",
-                tuple(SynthesisMessage(item.ordinal, item.role, item.content) for item in get_conversation(database, conversation.conversation_id).messages),
-                packet,
-            )
-            first, second = serialize_synthesis_input(value), serialize_synthesis_input(value)
-            self.assertEqual(first, second)
-            self.assertEqual(synthesis_input_sha256(first), synthesis_input_sha256(second))
-            self.assertIn('"type":"date"', first)
-            self.assertIn('"type":"datetime"', first)
-            changed = first.replace("owner.md", "changed.md")
-            self.assertNotEqual(synthesis_input_sha256(first), synthesis_input_sha256(changed))
-        finally:
-            directory.cleanup()
-
-    def test_provider_failure_is_durable_and_not_retried(self):
-        directory, database, conversation, router = self.prepared()
-        try:
-            provider = RecordingProvider(error=SynthesisProviderError("connection", "offline"))
-            with self.assertRaises(SynthesisError):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            with self.assertRaises(SynthesisError):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            self.assertEqual(len(provider.inputs), 1)
-            self.assertEqual(get_conversation(database, conversation.conversation_id).messages[-1].role, "user")
-            connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("SELECT status, error_type FROM model_runs WHERE run_kind='synthesis'").fetchone(), ("failed", "connection"))
-            connection.close()
-        finally:
-            directory.cleanup()
-
-    def test_unexpected_provider_error_leaves_running_attempt_and_closes_replay(self):
-        directory, database, conversation, router = self.prepared()
-        try:
-            provider = RecordingProvider(error=RuntimeError("unexpected bug"))
-            with self.assertRaisesRegex(RuntimeError, "unexpected bug"):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("SELECT status, error_type FROM model_runs WHERE run_kind='synthesis'").fetchone(), ("running", None))
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role='synthesis'").fetchone()[0], 0)
-            connection.close()
-            second_provider = RecordingProvider("must not run")
-            with self.assertRaisesRegex(SynthesisError, "incomplete prior synthesis"):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=second_provider)
-            self.assertEqual(second_provider.inputs, [])
-        finally:
-            directory.cleanup()
-
-    def test_concurrent_calls_claim_one_attempt(self):
-        directory, database, conversation, router = self.prepared()
-        try:
-            entered = threading.Event()
-            release = threading.Event()
-
-            class BlockingProvider(RecordingProvider):
-                def synthesize(self, config, synthesis_input):
-                    self.inputs.append((config, synthesis_input))
-                    entered.set()
-                    if not release.wait(5):
-                        raise AssertionError("blocking provider was not released")
-                    return SynthesisProviderResult("concurrent response", "provider-response", SynthesisUsage())
-
-            first_provider = BlockingProvider()
-            first_result = []
-            first_error = []
-
-            def run_first():
-                try:
-                    first_result.append(synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=first_provider))
-                except BaseException as exc:  # pragma: no cover - assertion reports the unexpected thread failure
-                    first_error.append(exc)
-
-            thread = threading.Thread(target=run_first)
-            thread.start()
-            self.assertTrue(entered.wait(5))
-            second_provider = RecordingProvider("must not run")
-            with self.assertRaisesRegex(SynthesisError, "incomplete prior synthesis"):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=second_provider)
-            self.assertEqual(second_provider.inputs, [])
-            release.set()
-            thread.join(5)
-            self.assertFalse(thread.is_alive())
-            self.assertEqual(first_error, [])
-            self.assertEqual(len(first_result), 1)
-            connection = sqlite3.connect(database)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role='synthesis'").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind='synthesis'").fetchone()[0], 1)
             connection.close()
-        finally:
-            release.set() if 'release' in locals() else None
-            directory.cleanup()
 
-    def test_successful_replay_rejects_corrupt_persisted_input_hash(self):
-        directory, database, conversation, router = self.prepared()
-        untouched_directory, untouched_database, untouched_conversation, untouched_router = self.prepared()
-        try:
-            provider = RecordingProvider("stable response")
-            first = synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
+    def test_synthesis_success_lookup_returns_none_or_blocks_running(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, trigger, router = self.prepared(directory)
+            self.assertIsNone(load_synthesis_success(database, conversation.conversation_id, router.run_id))
             connection = sqlite3.connect(database)
-            connection.execute("UPDATE model_runs SET input_json = ? WHERE run_id = ?", ("{\"corrupted\":true}", first.run_id))
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, provider, model, prompt_version, status, started_at, input_json, input_sha256) VALUES ('running', ?, ?, 'synthesis', ?, 'openai', 'synthesis', 'prompt', 'running', 'started', '{}', 'sha256:" + "0" * 64 + "')",
+                (conversation.conversation_id, trigger.message_id, router.run_id),
+            )
             connection.commit()
             connection.close()
-            with self.assertRaisesRegex(SynthesisError, "input hash"):
-                synthesize_conversation(database, runtime_config(), conversation.conversation_id, router.run_id, provider=provider)
-            self.assertEqual(len(provider.inputs), 1)
-            self.assertEqual(get_conversation(database, conversation.conversation_id).messages[-1].content, "stable response")
+            with self.assertRaisesRegex(SynthesisError, "already running"):
+                load_synthesis_success(database, conversation.conversation_id, router.run_id)
 
-            untouched_provider = RecordingProvider("untouched response")
-            untouched_first = synthesize_conversation(
-                untouched_database, runtime_config(), untouched_conversation.conversation_id,
-                untouched_router.run_id, provider=untouched_provider,
+    def test_provider_failure_is_durable_and_retryable(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            with self.assertRaises(SynthesisError) as raised:
+                synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble(error=SynthesisProviderError("timeout", "provider timed out")))
+            self.assertIsInstance(raised.exception.__cause__, SynthesisProviderError)
+            self.assertIsNone(load_synthesis_success(database, conversation.conversation_id, router.run_id))
+            second = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
+            connection = sqlite3.connect(database)
+            rows = connection.execute("SELECT run_id, status, error_type FROM model_runs WHERE run_kind = 'synthesis' ORDER BY started_at").fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0][1:], ("failed", "timeout"))
+            self.assertEqual(rows[1][0], second.run_id)
+            self.assertEqual(rows[1][1], "succeeded")
+            self.assertEqual(len(get_conversation(database, conversation.conversation_id).messages), 2)
+
+    def test_invalid_provider_result_fails_without_message(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            provider = SynthesisDouble(result={"response_text": "not a provider result"})
+            with self.assertRaises(SynthesisError):
+                synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=provider)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT status, error_type FROM model_runs WHERE run_kind = 'synthesis'").fetchone(), ("failed", "runtime_validation"))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role = 'synthesis'").fetchone()[0], 0)
+            connection.close()
+
+    def test_running_claim_blocks_second_public_invocation_without_provider_call(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, trigger, router = self.prepared(directory)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, provider, model, prompt_version, status, started_at, input_json, input_sha256) "
+                "VALUES ('running', ?, ?, 'synthesis', ?, 'openai', 'synthesis', 'prompt', 'running', 'started', '{}', 'sha256:" + "0" * 64 + "')",
+                (conversation.conversation_id, trigger.message_id, router.run_id),
             )
-            untouched_second = synthesize_conversation(
-                untouched_database, runtime_config(), untouched_conversation.conversation_id,
-                untouched_router.run_id, provider=untouched_provider,
+            connection.commit()
+            connection.close()
+            provider = SynthesisDouble()
+            with self.assertRaisesRegex(SynthesisError, "already running"):
+                synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=provider)
+            self.assertEqual(provider.calls, [])
+
+    def test_semantic_happy_path_uses_retrieval_parent_and_validates_lineage(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, trigger, router = self.prepared(directory, "semantic_retrieval")
+            values = {
+                "execution_id": "execution",
+                "conformance_id": "conformance",
+                "retrieval_run_id": "retrieval",
+                "retrieval_proposal_sha256": "proposal",
+                "capability_catalog_sha256": "catalog",
+                "retrieval_package_id": "package",
+                "retrieval_package_identity_version": IDENTITY_VERSION,
+                "substrate_sha256": "substrate",
+                "vectors_sha256": "vectors",
+                "package_verification_contract_version": VERIFICATION_CONTRACT_VERSION,
+                "execution_contract_version": EXECUTION_CONTRACT_VERSION,
+            }
+            selection = CandidateSelection(
+                "candidate-selection-v2", "candidate-workspace-v1", values["execution_id"], values["conformance_id"],
+                values["retrieval_run_id"], values["retrieval_proposal_sha256"], values["capability_catalog_sha256"],
+                values["retrieval_package_id"], values["retrieval_package_identity_version"], values["substrate_sha256"],
+                values["vectors_sha256"], values["package_verification_contract_version"], values["execution_contract_version"],
+                "succeeded", None, 120, "candidate-ownership-topology-v1", 0.20, 24, False, (), (), (), (), (),
+                SelectionCoverage(0, 0, 0, 0, 0, 0, 120, False, False),
             )
-            self.assertEqual(untouched_first, untouched_second)
-            self.assertEqual(len(untouched_provider.inputs), 1)
-        finally:
-            directory.cleanup()
-            untouched_directory.cleanup()
+            evidence = EvidenceProjection(
+                "evidence-projection-v1", HydratedCandidateSelection("candidate-hydration-v1", selection, ()), (),
+                EvidenceCoverage("succeeded", None, 0, 0, 0, False, 0, 0, 0), (), (), (),
+            )
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, parent_run_id, capability_catalog_sha256, provider, model, prompt_version, status, started_at, output_json) VALUES (?, ?, ?, 'retrieval_inference', ?, ?, 'provider', 'model', 'prompt', 'succeeded', 'started', ?)",
+                (values["retrieval_run_id"], conversation.conversation_id, trigger.message_id, router.run_id, values["capability_catalog_sha256"], "{}"),
+            )
+            connection.execute(
+                "INSERT INTO retrieval_conformance VALUES (?, ?, ?, ?, 'catalog-conformance-v1', 'valid', 'checked', '{}')",
+                (values["conformance_id"], values["retrieval_run_id"], values["retrieval_proposal_sha256"], values["capability_catalog_sha256"]),
+            )
+            connection.execute(
+                "INSERT INTO retrieval_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'succeeded', 'started', 'completed', '{}')",
+                tuple(values[field] for field in ("execution_id", "conformance_id", "retrieval_run_id", "retrieval_proposal_sha256", "capability_catalog_sha256", "retrieval_package_id", "retrieval_package_identity_version", "substrate_sha256", "vectors_sha256", "package_verification_contract_version", "execution_contract_version")),
+            )
+            connection.commit()
+            connection.close()
+            forged_candidates = replace(evidence, candidates=("forged",))
+            forged_coverage = replace(evidence, coverage=replace(evidence.coverage, selected_candidate_count=1))
+            for forged in (forged_candidates, forged_coverage):
+                provider = SynthesisDouble()
+                with self.subTest(forged=forged), self.assertRaisesRegex(SynthesisError, "deterministic projection"):
+                    synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, evidence=forged, provider=provider)
+                self.assertEqual(provider.calls, [])
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind = 'synthesis'").fetchone()[0], 0)
+            connection.close()
+            provider = SynthesisDouble()
+            result = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, evidence=evidence, provider=provider)
+            self.assertEqual(result.parent_run_id, values["retrieval_run_id"])
+            self.assertEqual(provider.calls[0][1].route, "semantic_retrieval")
+            self.assertIs(provider.calls[0][1].evidence, evidence)
+            self.assertEqual(load_synthesis_success(database, conversation.conversation_id, router.run_id), result)
+
+    def test_conversation_mutation_during_provider_call_invalidates_answer(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            provider = SynthesisDouble(mutate=lambda: append_message(database, conversation.conversation_id, "user", "new question"))
+            with self.assertRaisesRegex(SynthesisError, "conversation changed"):
+                synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=provider)
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT status FROM model_runs WHERE run_kind = 'synthesis'").fetchone()[0], "failed")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages WHERE role = 'synthesis'").fetchone()[0], 0)
+            connection.close()
+
+    def test_direct_route_rejects_evidence_and_semantic_route_requires_evidence(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory, "direct")
+            with self.assertRaises(SynthesisError):
+                synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, evidence=object(), provider=SynthesisDouble())
+            semantic_directory = Path(directory) / "semantic"
+            semantic_directory.mkdir()
+            database2, conversation2, _, router2 = self.prepared(semantic_directory, "semantic_retrieval")
+            with self.assertRaises(SynthesisError):
+                synthesize_conversation(database2, self.config(), conversation2.conversation_id, router2.run_id, provider=SynthesisDouble())
+
+    def test_malformed_success_replay_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            database, conversation, _, router = self.prepared(directory)
+            first = synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
+            connection = sqlite3.connect(database)
+            connection.execute("UPDATE model_runs SET input_sha256 = 'sha256:" + "0" * 64 + "' WHERE run_id = ?", (first.run_id,))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(SynthesisError, "hash"):
+                synthesize_conversation(database, self.config(), conversation.conversation_id, router.run_id, provider=SynthesisDouble())
 
 
 if __name__ == "__main__":

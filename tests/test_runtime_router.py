@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 from semantic_traversal.cli import main
 from semantic_traversal.runtime.config import (
+    CandidateSelectionConfig,
     ModelConfig,
-    PacketConfig,
     RuntimeConfig,
     RuntimeConfigError,
     load_runtime_config,
@@ -34,6 +34,7 @@ from semantic_traversal.runtime.prompts import prompt_version
 
 ROUTER_PROMPT_V1 = load_runtime_config(Path(__file__).parents[1] / "docs" / "runtime_config.yaml").router.prompt
 ROUTER_PROMPT_VERSION = prompt_version(ROUTER_PROMPT_V1)
+SYNTHESIS_CONFIG = "synthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 9.5\n  prompt: synthesis prompt\n"
 
 
 
@@ -55,7 +56,7 @@ class RuntimeRouterTests(unittest.TestCase):
         return RuntimeConfig(
             ModelConfig("openai", "explicit-model-id", 7.5, ROUTER_PROMPT_V1),
             ModelConfig("openai", "retrieval-model", 8.5, "retrieval test prompt"),
-            PacketConfig(32),
+            CandidateSelectionConfig(120, 0.20),
             ModelConfig("openai", "synthesis-model", 9.5, "synthesis test prompt"),
         )
 
@@ -92,7 +93,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.yaml"
             path.write_text(
-                "router:\n  provider: openai\n  model: explicit-model-id\n  timeout_seconds: 7.5\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 8.5\n  prompt: retrieval prompt\npacket:\n  max_occurrences: 32\nsynthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 9.5\n  prompt: synthesis prompt\n",
+                "router:\n  provider: openai\n  model: explicit-model-id\n  timeout_seconds: 7.5\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 8.5\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
                 encoding="utf-8",
             )
             loaded = load_runtime_config(path)
@@ -100,10 +101,10 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertEqual(loaded.router.prompt, "router prompt")
             self.assertEqual(loaded.retrieval_inference.prompt, "retrieval prompt")
             for invalid in (
-                "router: {}\nretrieval_inference: {}\n",
-                "router:\n  provider: other\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\n",
-                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\n",
-                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 0\n  prompt: p\n",
+                "router: {}\nretrieval_inference: {}\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
+                "router:\n  provider: other\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
+                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
+                "router:\n  provider: openai\n  model: x\n  timeout_seconds: 1\n  prompt: p\nretrieval_inference:\n  provider: openai\n  model: x\n  timeout_seconds: 0\n  prompt: p\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG,
             ):
                 path.write_text(invalid, encoding="utf-8")
                 with self.subTest(invalid=invalid), self.assertRaises(RuntimeConfigError):
@@ -137,6 +138,96 @@ class RuntimeRouterTests(unittest.TestCase):
             self.assertEqual(row, (result.run_id, conversation.conversation_id, trigger.message_id, "router", "openai", "explicit-model-id", ROUTER_PROMPT_VERSION, "succeeded", '{"route":"semantic_retrieval"}', "response-1", 11, 2, 3, 4, 14))
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 3)
             connection.close()
+
+    def test_succeeded_router_replays_without_provider_or_new_row(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, _ = self._conversation_with_latest_user(database)
+            provider = ProviderDouble(ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage()))
+            first = route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            second_provider = ProviderDouble(ProviderInference("semantic_retrieval", '{"route":"semantic_retrieval"}', None, ProviderUsage()))
+            second = route_conversation(database, self._config(), conversation.conversation_id, provider=second_provider)
+            self.assertEqual(second, first)
+            self.assertEqual(len(provider.calls), 1)
+            self.assertEqual(second_provider.calls, [])
+            connection = sqlite3.connect(database)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM model_runs WHERE run_kind='router'").fetchone()[0], 1)
+            connection.close()
+
+    def test_succeeded_router_replays_after_downstream_message(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, _ = self._conversation_with_latest_user(database)
+            provider = ProviderDouble(ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage()))
+            first = route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            append_message(database, conversation.conversation_id, "synthesis", "answer")
+            replay_provider = ProviderDouble(ProviderInference("semantic_retrieval", '{"route":"semantic_retrieval"}', None, ProviderUsage()))
+            replay = route_conversation(database, self._config(), conversation.conversation_id, provider=replay_provider)
+            self.assertEqual(replay, first)
+            self.assertEqual(replay_provider.calls, [])
+
+    def test_router_impossible_success_and_running_histories_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, trigger = self._conversation_with_latest_user(database)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, provider, model, prompt_version, status, started_at, completed_at, output_json) VALUES ('success-a', ?, ?, 'router', 'openai', 'm', 'p', 'succeeded', 'a', 'b', '{\"route\":\"direct\"}')",
+                (conversation.conversation_id, trigger.message_id),
+            )
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, provider, model, prompt_version, status, started_at) VALUES ('running-b', ?, ?, 'router', 'openai', 'm', 'p', 'running', 'c')",
+                (conversation.conversation_id, trigger.message_id),
+            )
+            connection.commit()
+            connection.close()
+            provider = ProviderDouble(ProviderInference("direct", '{}', None, ProviderUsage()))
+            with self.assertRaisesRegex(RuntimeRouterError, "impossible"):
+                route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            self.assertEqual(provider.calls, [])
+
+    def test_failed_router_attempt_retries_with_new_run_and_preserves_history(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, _ = self._conversation_with_latest_user(database)
+            failed_provider = ProviderDouble(error=OpenAIProviderError("timeout", "temporary"))
+            with self.assertRaises(RuntimeRouterError):
+                route_conversation(database, self._config(), conversation.conversation_id, provider=failed_provider)
+            success_provider = ProviderDouble(ProviderInference("direct", '{"route":"direct"}', None, ProviderUsage()))
+            result = route_conversation(database, self._config(), conversation.conversation_id, provider=success_provider)
+            connection = sqlite3.connect(database)
+            rows = connection.execute("SELECT run_id, status FROM model_runs WHERE run_kind='router' ORDER BY started_at").fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0][1], "failed")
+            self.assertEqual(rows[1], (result.run_id, "succeeded"))
+
+    def test_running_router_attempt_blocks_provider_and_malformed_success_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "runtime.sqlite3"
+            conversation, trigger = self._conversation_with_latest_user(database)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, provider, model, prompt_version, status, started_at) VALUES ('running', ?, ?, 'router', 'openai', 'm', 'p', 'running', 'a')",
+                (conversation.conversation_id, trigger.message_id),
+            )
+            connection.commit()
+            connection.close()
+            provider = ProviderDouble(ProviderInference("direct", '{}', None, ProviderUsage()))
+            with self.assertRaisesRegex(RuntimeRouterError, "already running"):
+                route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
+            self.assertEqual(provider.calls, [])
+
+            connection = sqlite3.connect(database)
+            connection.execute("DELETE FROM model_runs WHERE run_id='running'")
+            connection.execute(
+                "INSERT INTO model_runs (run_id, conversation_id, trigger_message_id, run_kind, provider, model, prompt_version, status, started_at, completed_at, output_json) VALUES ('malformed', ?, ?, 'router', 'openai', 'm', 'p', 'succeeded', 'a', 'b', '{\"route\":\"direct\",\"extra\":true}')",
+                (conversation.conversation_id, trigger.message_id),
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(RuntimeRouterError, "output"):
+                route_conversation(database, self._config(), conversation.conversation_id, provider=provider)
 
     def test_direct_and_retrieval_routes_succeed_with_distinct_run_ids(self):
         with TemporaryDirectory() as directory:
@@ -352,7 +443,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "runtime.sqlite3"
             config = Path(directory) / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\npacket:\n  max_occurrences: 32\nsynthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 1\n  prompt: synthesis prompt\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             initialize_runtime(database)
             conversation = create_conversation(database)
             append_message(database, conversation.conversation_id, "user", "hello")
@@ -366,7 +457,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cwd = Path(directory)
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\npacket:\n  max_occurrences: 32\nsynthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 1\n  prompt: synthesis prompt\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
             with patch.dict(os.environ, {"OPENAI_API_KEY": "process-key"}), patch("semantic_traversal.cli.Path.cwd", return_value=cwd), patch("semantic_traversal.cli.route_conversation", return_value=self._stub_router_result()):
                 code = main(["runtime", "router", "infer", "--database", str(cwd / "runtime.sqlite3"), "--config", str(config), "--conversation-id", "conversation", "--json"])
@@ -377,7 +468,7 @@ class RuntimeRouterTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cwd = Path(directory)
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\npacket:\n  max_occurrences: 32\nsynthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 1\n  prompt: synthesis prompt\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             (cwd / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
@@ -392,7 +483,7 @@ class RuntimeRouterTests(unittest.TestCase):
             cwd = parent / "child"
             cwd.mkdir()
             config = cwd / "runtime.yaml"
-            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\npacket:\n  max_occurrences: 32\nsynthesis:\n  provider: openai\n  model: synthesis-model\n  timeout_seconds: 1\n  prompt: synthesis prompt\n", encoding="utf-8")
+            config.write_text("router:\n  provider: openai\n  model: model\n  timeout_seconds: 1\n  prompt: router prompt\nretrieval_inference:\n  provider: openai\n  model: retrieval-model\n  timeout_seconds: 1\n  prompt: retrieval prompt\ncandidate_selection:\n  max_candidates: 120\n  protected_owner_fraction: 0.20\n" + SYNTHESIS_CONFIG, encoding="utf-8")
             (parent / ".env").write_text("OPENAI_API_KEY=parent-key\n", encoding="utf-8")
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
