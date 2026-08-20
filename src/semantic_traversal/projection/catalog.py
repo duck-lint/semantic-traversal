@@ -306,8 +306,10 @@ def generate_catalog(
 ) -> dict[str, Any]:
     """Generate one deterministic catalog from an effective BuildConfig mapping."""
 
-    catalog = catalog_from_facts(facts, semantic_identifier_descriptions)
     output = Path(output_path)
+    if output.exists() and output.is_dir():
+        raise CatalogGenerationError(f"catalog output must be a file path, not a directory: {output}")
+    catalog = catalog_from_facts(facts, semantic_identifier_descriptions)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return catalog
