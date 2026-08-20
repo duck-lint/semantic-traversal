@@ -824,7 +824,7 @@ and evidence preparation. Retrieval inference must not consume an unverified
 package catalog and verify the package only afterward.
 
 The current upper coordinator consumes an already-persisted user turn; it does
-not append a message or activate a CLI full-turn command. It injects the router,
+not append a message. The production CLI full-turn command injects the router,
 retrieval-inference, and synthesis providers, and performs no provider
 construction, retrieval fusion, ranking, or second persistence authority. A
 direct route calls synthesis with no evidence and touches no retrieval state.
