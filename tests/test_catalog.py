@@ -307,6 +307,51 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(json.loads(stdout.getvalue()), {"catalog": str(output.resolve())})
             self.assertTrue(output.is_file())
 
+    def test_cli_catalog_generate_rejects_directory_output(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            descriptions = {
+                "sequence_string": "sequence",
+                "graph_only": "relation",
+                "mixed_integer_string": "mixed",
+                "scalar_integer": "integer",
+            }
+            config = self._config(root, descriptions)
+            output = root / "catalog-output"
+            output.mkdir()
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch("semantic_traversal.cli._connection"), patch("semantic_traversal.cli.observe_capability_facts", return_value=self._facts()):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main([
+                        "catalog", "generate", "--build", str(root / "completed-build"),
+                        "--config", str(config), "--output", str(output), "--json",
+                    ])
+            self.assertNotEqual(code, 0)
+            self.assertIn("catalog output must be a file path, not a directory", stderr.getvalue())
+
+    def test_cli_catalog_generate_accepts_file_inside_existing_directory(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            descriptions = {
+                "sequence_string": "sequence",
+                "graph_only": "relation",
+                "mixed_integer_string": "mixed",
+                "scalar_integer": "integer",
+            }
+            config = self._config(root, descriptions)
+            output_directory = root / "catalog-output"
+            output_directory.mkdir()
+            output = output_directory / "capability_catalog.json"
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch("semantic_traversal.cli._connection"), patch("semantic_traversal.cli.observe_capability_facts", return_value=self._facts()):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main([
+                        "catalog", "generate", "--build", str(root / "completed-build"),
+                        "--config", str(config), "--output", str(output), "--json",
+                    ])
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertTrue(output.is_file())
+
     def test_catalog_generate_help_has_no_homework_option(self):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as raised:

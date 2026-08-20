@@ -1,4 +1,6 @@
-"""Retrieval inference, authority, execution, and hydration."""
+"""Retrieval inference, authority, execution, and candidate composition/selection."""
+
+from ..config import CandidateSelectionConfig
 
 from .control_plane import (
     ConformanceRequestResult,
@@ -13,25 +15,6 @@ from .execution import (
     RetrievalExecutionResult,
     execute_retrieval,
     load_retrieval_execution,
-)
-from .hydration import (
-    HydratedCanonicalTarget,
-    HydratedExactHit,
-    HydratedExactResult,
-    HydratedGraphDiscoveryHit,
-    HydratedGraphDiscoveryResult,
-    HydratedGraphOccurrence,
-    HydratedGraphRelationResult,
-    HydratedLexicalHit,
-    HydratedLexicalResult,
-    HydratedTemporalHit,
-    HydratedTemporalResult,
-    HydratedRequestResult,
-    HydratedRetrievalResult,
-    HydratedVectorHit,
-    HydratedVectorResult,
-    RetrievalHydrationError,
-    hydrate_retrieval_execution,
 )
 from .inference import RetrievalInferenceResult, RuntimeRetrievalError, infer_retrieval
 from .package import (
@@ -51,13 +34,38 @@ from .package_verification import (
     normalize_verified_retrieval_package,
     verify_retrieval_package,
 )
-from .packet import (
-    PACKET_CONTRACT_VERSION, SELECTION_RULE_VERSION, CanonicalTargetPayload, CanonicalTargetRef,
-    ExactOccurrence, GraphDiscoveryOccurrence, GraphRelationOccurrence, LexicalOccurrence,
-    TemporalOccurrence,
-    PacketAssemblyResult, PacketCoverage, PacketOccurrence, RemovalRecord, RequestCoverage,
-    RetrievalPacket, RetrievalPacketError, VectorOccurrence, assemble_retrieval_packet,
+
+from .candidates import (
+    CANDIDATE_WORKSPACE_CONTRACT_VERSION, Candidate, CandidateCompositionError,
+    CandidateRef, CandidateSupport, CandidateWorkspace, CandidateWorkspaceRequest,
+    ExactSupport, GraphDiscoverySupport, LexicalSupport, RelationEvidence,
+    TemporalSupport, VectorSupport, WorkspaceOccurrence, candidate_workspace_json,
+    compose_candidate_workspace, serialize_candidate_workspace,
 )
+from .selection import (
+    CANDIDATE_SELECTION_CONTRACT_VERSION, CandidateAdmission, CandidateSelection,
+    CandidateSelectionError, SelectionCoverage, SelectionRequestCoverage,
+    candidate_selection_json, select_candidates, serialize_candidate_selection,
+)
+from .ownership_topology import (
+    CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION, CandidateOwnership,
+    CandidateOwnershipTopology, CandidateOwnershipTopologyError,
+    candidate_ownership_topology_json, derive_candidate_ownership_topology,
+    serialize_candidate_ownership_topology,
+)
+from .candidate_hydration import (
+    CANDIDATE_HYDRATION_CONTRACT_VERSION, CandidateHydrationError,
+    HydratedCanonicalTarget, HydratedCandidate, HydratedCandidateSelection,
+    HydratedObjectTarget, HydratedRegionTarget, HydratedScopeTarget, HydratedUnitTarget,
+    hydrate_candidate_selection,
+)
+from .evidence_projection import (
+    EVIDENCE_PROJECTION_CONTRACT_VERSION, EvidenceCandidate, EvidenceCoverage,
+    EvidenceObjectContext, EvidenceProjection, EvidenceProjectionError,
+    EvidenceRequest, EvidenceRetrievalRelation, evidence_projection_json,
+    measure_evidence_projection, project_evidence, serialize_evidence_projection,
+)
+from .evidence_preparation import prepare_evidence
 
 __all__ = [
     "ConformanceRequestResult",
@@ -70,23 +78,6 @@ __all__ = [
     "RetrievalExecutionResult",
     "execute_retrieval",
     "load_retrieval_execution",
-    "HydratedCanonicalTarget",
-    "HydratedExactHit",
-    "HydratedExactResult",
-    "HydratedGraphDiscoveryHit",
-    "HydratedGraphDiscoveryResult",
-    "HydratedGraphOccurrence",
-    "HydratedGraphRelationResult",
-    "HydratedLexicalHit",
-    "HydratedLexicalResult",
-    "HydratedTemporalHit",
-    "HydratedTemporalResult",
-    "HydratedRequestResult",
-    "HydratedRetrievalResult",
-    "HydratedVectorHit",
-    "HydratedVectorResult",
-    "RetrievalHydrationError",
-    "hydrate_retrieval_execution",
     "RetrievalInferenceResult",
     "RuntimeRetrievalError",
     "infer_retrieval",
@@ -103,9 +94,24 @@ __all__ = [
     "VerifiedRetrievalPackage",
     "normalize_verified_retrieval_package",
     "verify_retrieval_package",
-    "PACKET_CONTRACT_VERSION", "SELECTION_RULE_VERSION", "RetrievalPacketError",
-    "CanonicalTargetRef", "CanonicalTargetPayload", "PacketOccurrence", "ExactOccurrence",
-    "LexicalOccurrence", "TemporalOccurrence", "VectorOccurrence", "GraphDiscoveryOccurrence", "GraphRelationOccurrence",
-    "RequestCoverage", "PacketCoverage", "RemovalRecord", "RetrievalPacket", "PacketAssemblyResult",
-    "assemble_retrieval_packet",
+    "CANDIDATE_WORKSPACE_CONTRACT_VERSION", "CandidateCompositionError", "CandidateRef", "CandidateSupport",
+    "ExactSupport", "LexicalSupport", "TemporalSupport", "VectorSupport", "GraphDiscoverySupport", "Candidate",
+    "RelationEvidence", "WorkspaceOccurrence", "CandidateWorkspaceRequest", "CandidateWorkspace",
+    "compose_candidate_workspace", "candidate_workspace_json", "serialize_candidate_workspace",
+    "CANDIDATE_SELECTION_CONTRACT_VERSION", "CandidateSelectionError", "CandidateAdmission",
+    "SelectionRequestCoverage", "SelectionCoverage", "CandidateSelection",
+    "select_candidates", "candidate_selection_json", "serialize_candidate_selection",
+    "CANDIDATE_OWNERSHIP_TOPOLOGY_CONTRACT_VERSION", "CandidateOwnership",
+    "CandidateOwnershipTopology", "CandidateOwnershipTopologyError",
+    "derive_candidate_ownership_topology", "candidate_ownership_topology_json",
+    "serialize_candidate_ownership_topology",
+    "CANDIDATE_HYDRATION_CONTRACT_VERSION", "CandidateHydrationError",
+    "HydratedCanonicalTarget", "HydratedUnitTarget", "HydratedObjectTarget",
+    "HydratedRegionTarget", "HydratedScopeTarget", "HydratedCandidate",
+    "HydratedCandidateSelection", "hydrate_candidate_selection",
+    "EVIDENCE_PROJECTION_CONTRACT_VERSION", "EvidenceProjectionError", "EvidenceRequest",
+    "EvidenceCoverage", "EvidenceObjectContext", "EvidenceCandidate",
+    "EvidenceRetrievalRelation", "EvidenceProjection", "project_evidence",
+    "evidence_projection_json", "serialize_evidence_projection", "measure_evidence_projection",
+    "CandidateSelectionConfig", "prepare_evidence",
 ]

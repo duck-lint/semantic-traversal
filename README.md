@@ -241,11 +241,20 @@ semantic-traversal runtime message append \
   --conversation-id CONVERSATION_ID \
   --role user \
   --content "What did I write about this?"
-semantic-traversal runtime router infer \
+semantic-traversal runtime turn run \
   --database runtime.sqlite3 \
   --config docs/runtime_config.yaml \
-  --conversation-id CONVERSATION_ID
+  --conversation-id CONVERSATION_ID \
+  --build completed-build
 ```
+
+`runtime turn run` consumes the already-persisted current user message; it does
+not append a message. `--build` is required only for a fresh semantic-retrieval
+execution, so direct turns and successful replays may omit it. `--ollama-url`
+is used only when a new vector execution actually needs an embedding provider.
+OpenAI credentials come from the current working directory's `.env` file, with
+existing environment variables taking precedence. Normal output is answer
+prose; `--json` emits the durable `TurnResult` lineage fields.
 
 The runtime does not dynamically size context, detect truncation after the
 fact, or invent a missing configuration. Context behavior is controlled by the
