@@ -8,7 +8,7 @@ from .conversation import (
     Conversation, Message, RuntimeConversationError, append_message, create_conversation,
     get_conversation, initialize_runtime, migrate_runtime,
 )
-from .config import ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
+from .config import CandidateSelectionConfig, ModelConfig, RuntimeConfig, RuntimeConfigError, load_runtime_config
 from .retrieval.inference import RetrievalInferenceResult, RuntimeRetrievalError, infer_retrieval
 from .retrieval.package import (
     IDENTITY_VERSION, RetrievalPackage, RetrievalPackageError, RetrievalPackageIdentity,
@@ -26,10 +26,28 @@ from .retrieval.execution import (
 )
 from .retrieval.candidates import CandidateWorkspace, compose_candidate_workspace
 from .retrieval.selection import CandidateSelection, select_candidates
+from .retrieval.candidate_hydration import (
+    CandidateHydrationError, HydratedCandidate, HydratedCandidateSelection,
+    hydrate_candidate_selection,
+)
+from .retrieval.evidence_projection import (
+    EVIDENCE_PROJECTION_CONTRACT_VERSION, EvidenceProjection, EvidenceProjectionError,
+    measure_evidence_projection, project_evidence, serialize_evidence_projection,
+)
+from .synthesis_input import (
+    SYNTHESIS_INPUT_CONTRACT_VERSION, SynthesisInput, SynthesisInputError, SynthesisMessage,
+    build_synthesis_input, serialize_synthesis_input, snapshot_synthesis_conversation,
+    synthesis_input_json, synthesis_input_sha256,
+)
+from .synthesis import (
+    SynthesisError, SynthesisProvider, SynthesisProviderError, SynthesisProviderResult,
+    SynthesisResult, SynthesisUsage, load_synthesis_success, synthesize_conversation,
+)
+from .orchestration import OrchestrationError, TurnResult, run_current_turn
 
 __all__ = [
     "Conversation", "Message", "RuntimeConversationError", "append_message", "create_conversation",
-    "get_conversation", "initialize_runtime", "migrate_runtime", "ModelConfig",
+    "get_conversation", "initialize_runtime", "migrate_runtime", "CandidateSelectionConfig", "ModelConfig",
     "RuntimeConfig", "RuntimeConfigError", "load_runtime_config", "RetrievalInferenceResult",
     "RuntimeRetrievalError", "infer_retrieval", "RouterResult", "RuntimeRouterError", "route_conversation",
     "IDENTITY_VERSION", "RetrievalPackage", "RetrievalPackageError", "RetrievalPackageIdentity",
@@ -40,4 +58,14 @@ __all__ = [
     "RetrievalExecutionResult", "execute_retrieval", "load_retrieval_execution",
     "ConformanceRequestResult", "RetrievalConformanceError", "RetrievalConformanceResult", "conform_retrieval",
     "CandidateWorkspace", "compose_candidate_workspace", "CandidateSelection", "select_candidates",
+    "CandidateHydrationError", "HydratedCandidate", "HydratedCandidateSelection",
+    "hydrate_candidate_selection",
+    "EVIDENCE_PROJECTION_CONTRACT_VERSION", "EvidenceProjection", "EvidenceProjectionError",
+    "project_evidence", "serialize_evidence_projection", "measure_evidence_projection",
+    "SYNTHESIS_INPUT_CONTRACT_VERSION", "SynthesisInputError", "SynthesisMessage", "SynthesisInput",
+    "snapshot_synthesis_conversation", "build_synthesis_input", "synthesis_input_json",
+    "serialize_synthesis_input", "synthesis_input_sha256",
+    "SynthesisError", "SynthesisProviderError", "SynthesisUsage", "SynthesisProviderResult",
+    "SynthesisProvider", "SynthesisResult", "load_synthesis_success", "synthesize_conversation",
+    "OrchestrationError", "TurnResult", "run_current_turn",
 ]

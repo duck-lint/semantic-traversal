@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,109 @@ def _provider_failure(error: Exception) -> tuple[str, str]:
     return "provider_status", str(error)
 
 
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _usage_value(name: str, value: object) -> None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        raise RuntimeRetrievalError(f"persisted retrieval usage {name} is malformed")
+
+
+def _router_authority(connection: sqlite3.Connection, router_run_id: str) -> sqlite3.Row:
+    parent = connection.execute("SELECT * FROM model_runs WHERE run_id = ?", (router_run_id,)).fetchone()
+    if parent is None:
+        raise RuntimeRetrievalError(f"router run does not exist: {router_run_id}")
+    if parent["run_kind"] != "router" or parent["status"] != "succeeded":
+        raise RuntimeRetrievalError("retrieval inference requires a succeeded router run")
+    if parent["output_json"] != '{"route":"semantic_retrieval"}':
+        raise RuntimeRetrievalError("retrieval inference requires a semantic_retrieval router result")
+    trigger = connection.execute(
+        "SELECT conversation_id, role FROM messages WHERE message_id = ?", (parent["trigger_message_id"],)
+    ).fetchone()
+    if trigger is None or trigger["conversation_id"] != parent["conversation_id"] or trigger["role"] != "user":
+        raise RuntimeRetrievalError("router trigger message is malformed")
+    router_rows = tuple(connection.execute(
+        "SELECT * FROM model_runs WHERE conversation_id = ? AND trigger_message_id = ? AND run_kind = 'router'",
+        (parent["conversation_id"], parent["trigger_message_id"]),
+    ))
+    if any(row["status"] not in {"running", "succeeded", "failed"} for row in router_rows):
+        raise RuntimeRetrievalError("persisted router status is unsupported")
+    successes = tuple(row for row in router_rows if row["status"] == "succeeded")
+    running = tuple(row for row in router_rows if row["status"] == "running")
+    if len(successes) != 1 or running:
+        raise RuntimeRetrievalError("router lineage is not one authoritative succeeded attempt")
+    if successes[0]["run_id"] != router_run_id:
+        raise RuntimeRetrievalError("router run is not the authoritative succeeded attempt")
+    return parent
+
+
+def _retrieval_result_from_success_row(
+    row: sqlite3.Row,
+    parent: sqlite3.Row,
+) -> RetrievalInferenceResult:
+    if row["run_kind"] != "retrieval_inference" or row["status"] != "succeeded":
+        raise RuntimeRetrievalError("persisted retrieval success row is not succeeded")
+    if (
+        row["parent_run_id"] != parent["run_id"]
+        or row["conversation_id"] != parent["conversation_id"]
+        or row["trigger_message_id"] != parent["trigger_message_id"]
+    ):
+        raise RuntimeRetrievalError("persisted retrieval lineage is malformed")
+    if not isinstance(row["capability_catalog_sha256"], str) or not _SHA256_RE.fullmatch(row["capability_catalog_sha256"]):
+        raise RuntimeRetrievalError("persisted retrieval catalog identity is malformed")
+    for name in ("provider", "model", "prompt_version", "completed_at"):
+        if not isinstance(row[name], str) or not row[name].strip():
+            raise RuntimeRetrievalError(f"persisted retrieval {name} is malformed")
+    if row["provider_response_id"] is not None and (
+        not isinstance(row["provider_response_id"], str) or not row["provider_response_id"].strip()
+    ):
+        raise RuntimeRetrievalError("persisted retrieval provider response identity is malformed")
+    for name in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"):
+        _usage_value(name, row[name])
+    try:
+        payload = json.loads(row["output_json"])
+        if not isinstance(payload, dict) or set(payload) != {"requests"}:
+            raise ValueError
+        requests = canonicalize_retrieval_requests(payload["requests"])
+    except (TypeError, json.JSONDecodeError, ValueError, RetrievalRequestError) as exc:
+        raise RuntimeRetrievalError("persisted retrieval proposal is malformed") from exc
+    expected_json = json.dumps({"requests": list(requests)}, ensure_ascii=False, separators=(",", ":"))
+    if row["output_json"] != expected_json:
+        raise RuntimeRetrievalError("persisted retrieval proposal is not canonical")
+    return RetrievalInferenceResult(
+        run_id=row["run_id"], parent_run_id=row["parent_run_id"], conversation_id=row["conversation_id"],
+        trigger_message_id=row["trigger_message_id"], provider=row["provider"], model=row["model"],
+        prompt_version=row["prompt_version"], capability_catalog_sha256=row["capability_catalog_sha256"],
+        status=row["status"], requests=requests, provider_response_id=row["provider_response_id"],
+        input_tokens=row["input_tokens"], cached_input_tokens=row["cached_input_tokens"],
+        output_tokens=row["output_tokens"], reasoning_tokens=row["reasoning_tokens"], total_tokens=row["total_tokens"],
+    )
+
+
+def _retrieval_state(connection: sqlite3.Connection, parent: sqlite3.Row) -> RetrievalInferenceResult | None:
+    rows = tuple(connection.execute(
+        "SELECT * FROM model_runs WHERE parent_run_id = ? AND run_kind = 'retrieval_inference'",
+        (parent["run_id"],),
+    ))
+    if any(
+        row["conversation_id"] != parent["conversation_id"]
+        or row["trigger_message_id"] != parent["trigger_message_id"]
+        for row in rows
+    ):
+        raise RuntimeRetrievalError("persisted retrieval attempt lineage is malformed")
+    if any(row["status"] not in {"running", "succeeded", "failed"} for row in rows):
+        raise RuntimeRetrievalError("persisted retrieval status is unsupported")
+    successes = tuple(row for row in rows if row["status"] == "succeeded")
+    running = tuple(row for row in rows if row["status"] == "running")
+    if len(successes) > 1 or len(running) > 1 or (successes and running):
+        raise RuntimeRetrievalError("impossible retrieval success/running history")
+    if successes:
+        return _retrieval_result_from_success_row(successes[0], parent)
+    if running:
+        raise RuntimeRetrievalError("retrieval inference is already running for this router")
+    return None
+
+
 def infer_retrieval(
     database_path: str,
     runtime_config: RuntimeConfig,
@@ -89,33 +193,36 @@ def infer_retrieval(
     """Propose retrieval requests for the current user turn without executing them."""
     connection = _connect_runtime(database_path)
     try:
-        parent = connection.execute(
-            "SELECT run_id, conversation_id, trigger_message_id, run_kind, status, output_json FROM model_runs WHERE run_id = ?",
-            (router_run_id,),
-        ).fetchone()
-        if parent is None:
-            raise RuntimeRetrievalError(f"router run does not exist: {router_run_id}")
-        if parent["run_kind"] != "router" or parent["status"] != "succeeded":
-            raise RuntimeRetrievalError("retrieval inference requires a succeeded router run")
-        if parent["output_json"] != '{"route":"semantic_retrieval"}':
-            raise RuntimeRetrievalError("retrieval inference requires a semantic_retrieval router result")
+        connection.execute("BEGIN IMMEDIATE")
+        parent = _router_authority(connection, router_run_id)
         conversation = _conversation(connection, parent["conversation_id"])
-        if not conversation.messages:
-            raise RuntimeRetrievalError("retrieval inference requires a nonempty conversation")
-        latest = conversation.messages[-1]
-        if latest.message_id != parent["trigger_message_id"] or latest.role != "user":
-            raise RuntimeRetrievalError("router run is stale or its trigger is not the current user message")
+        existing = _retrieval_state(connection, parent)
+        if existing is not None:
+            connection.commit()
+            connection.close()
+            return existing
+        connection.commit()
 
-        # Parent authority is established before reading catalog/model inputs.
+        # Catalog admission is deliberately after replay inspection, so a
+        # durable proposal remains replayable even if the current catalog is unavailable.
         catalog_text, catalog_sha256 = _catalog(capability_catalog_path)
-        run_id = str(uuid4())
         prompt_hash = prompt_version(runtime_config.retrieval_inference.prompt)
         connection.execute("BEGIN IMMEDIATE")
+        parent = _router_authority(connection, router_run_id)
+        conversation = _conversation(connection, parent["conversation_id"])
+        existing = _retrieval_state(connection, parent)
+        if existing is not None:
+            connection.commit()
+            connection.close()
+            return existing
+        if not conversation.messages or conversation.messages[-1].message_id != parent["trigger_message_id"] or conversation.messages[-1].role != "user":
+            raise RuntimeRetrievalError("router run is stale or its trigger is not the current user message")
+        run_id = str(uuid4())
         insert_retrieval_run(
             connection,
             run_id=run_id,
             conversation_id=conversation.conversation_id,
-            trigger_message_id=latest.message_id,
+            trigger_message_id=parent["trigger_message_id"],
             provider=runtime_config.retrieval_inference.provider,
             model=runtime_config.retrieval_inference.model,
             prompt_version=prompt_hash,
