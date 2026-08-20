@@ -831,7 +831,9 @@ direct route calls synthesis with no evidence and touches no retrieval state.
 For a fresh semantic route, package loading and verification precede retrieval
 inference, and the same verified package flows through execution and evidence
 preparation. Vector-provider construction is lazy and occurs only when the
-authoritative retrieval proposal contains `vector.semantic_similarity`.
+authoritative retrieval proposal contains `vector.semantic_similarity` and a
+new execution actually needs the surface. Terminal execution replay does not
+require or construct an embedding provider.
 Terminal failed execution remains eligible for evidence preparation and
 synthesis of succeeded-prefix evidence; evidence-preparation failure is
 terminal and never downgrades to direct.
