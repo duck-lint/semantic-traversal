@@ -109,6 +109,10 @@ retrieval_inference:
        Each request must have a distinct, defensible evidentiary purpose.
        Ask of every proposed request:
        "What useful evidence can this retrieve that the user's wording alone, or another request already in the plan, may fail to expose?"
+
+       Every emitted request is presently an independent access lane. There is no semantic composition between sibling requests at this stage: one request does not filter, constrain, intersect with, union with, rerank, or make another request topical.
+       Do not emit a broad or irrelevant request on the assumption that a sibling request will narrow it. Candidate workspace may later preserve multiple supports for one canonical identity, and deterministic selection may later give bounded breadth across request lanes, but neither changes the semantic meaning of a request.
+       For each request, ask: "If this request executed independently, what useful evidence population would it expose for the resolved information need?" If the answer is only records from the same date domain, records about the same broad topic, a repetition of the question wording, or an undifferentiated global ordering, justify it further or omit it.
     
        A request that merely paraphrases the user's question is inadequate unless matching that wording or semantic neighborhood is itself a defensible access hypothesis.
     
@@ -118,7 +122,10 @@ retrieval_inference:
     
     5. Match each request to the authority of its surface.
        Exact retrieval is appropriate for known values when an advertised exact dimension supports them.
-       Lexical retrieval is appropriate when authored wording, discriminating terms, or phrase forms matter.
+       Inspect and obey the supplied catalog's operator meanings, not merely operator names.
+       Lexical retrieval is appropriate when authored wording, discriminating terms, or phrase forms matter. A literal phrase search needs a reason to expect that authored wording or an important phrase form may occur; do not turn a question-shaped formulation into a phrase merely because its words appeared in the user's question.
+       For lexical.terms and graph.discovery.terms, every operand must be intended as one standalone lexical token and terms have OR semantics. Every standalone term must itself be a useful, discriminating retrieval probe. Do not use a multi-word or punctuation-bearing conceptual expression as one term when it may tokenize into multiple tokens. Do not mechanically split such an expression into OR terms unless every resulting term is independently intended and discriminating.
+       For lexical.phrase and graph.discovery.phrase, input may contain multiple tokens and matching is a contiguous token sequence. Use a phrase only when contiguous authored wording is itself a useful evidence hypothesis. If multi-token phrase semantics are intended, use an advertised phrase operator. Otherwise choose different defensible single-token terms, another surface, or omit that lexical or graph hypothesis.
        Vector retrieval is appropriate for semantic neighborhoods, paraphrase, conceptual affinity, indirect expression, or evidence whose wording is not known.
        Graph discovery or relation-occurrence lookup is appropriate when the advertised graph representation can expose needed semantic nodes or represented relations.
     
@@ -134,6 +141,8 @@ retrieval_inference:
        Retrospective journal writing after an event may contain highly relevant autobiographical or causal evidence and must remain eligible unless the user's question itself imposes a temporal scope.
     
        Temporal access establishes chronology only over its licensed date dimension. It does not establish topical relevance, semantic similarity, composition, influence, motivation, or causation.
+       A temporal information need is necessary but not sufficient to justify a temporal request. The selected temporal operator must itself return a record-authorship-date population capable of bearing on the requested relation. Temporal operators do not accept topical or semantic predicates, so do not use earliest, latest, before, after, between, or ordered as surrogate topical filters, and do not expect an independent lexical or vector request to constrain a temporal lane.
+       Directly useful temporal access includes genuinely record-time questions such as the earliest or latest represented journal record, records authored within an explicitly requested date range, or records authored before or after a supplied date when that authored-date population is itself what the user asks about. For subject-specific chronology, prefer access paths that actually identify evidence about the subject; relevant selected candidates will subsequently retain their represented canonical context and source/object identifiers.
     
     6. Use the projection as a resource, not a checklist.
        Do not use a surface merely because it is available.
@@ -142,12 +151,19 @@ retrieval_inference:
     
     7. Audit the proposal before emitting it.
        Ask internally:
-       - If these requests succeed, can their results actually bear on the requested relation?
-       - Have I introduced any constraint the user did not license?
-       - Have I mistaken an anchor for a filter?
+       - What relation is actually being asked, and what evidence forms could resolve it?
+       - What distinct access hypotheses have I chosen?
+       - What does each exact operator invocation return if executed alone?
+       - Am I expecting one sibling request to filter, constrain, intersect with, rerank, or make another topical?
+       - Have I introduced any constraint the user did not license or converted an anchor into one?
+       - If I used temporal access, is the addressed record-authorship-date population itself evidentially useful rather than a surrogate topical filter?
+       - If I used terms, is every operand one intended standalone lexical token with the advertised OR semantics?
+       - If I used a phrase, is contiguous phrase matching actually useful?
+       - Are vector requests semantically distinct rather than paraphrase variants?
        - Am I merely searching the topic rather than evidence about the relation?
        - Are multiple plausible corpus representations underexplored?
-       - Could a deterministic script have produced essentially the same proposal by copying the user's words?
+       - Could a deterministic script have produced essentially the same proposal by copying or lightly rephrasing the user's words?
+       - If all requests succeeded independently, would their results contain evidence capable of resolving the requested relation?
     
        If the proposal fails any of these checks, revise it.
     
