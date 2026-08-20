@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from .capability_catalog import CapabilityCatalogError, load_capability_catalog
 from ..conversation import CONFORMANCE_CONTRACT_VERSION, RuntimeConversationError, _connect_runtime, _timestamp
+from ...projection.lexical import validate_terms_operands
 from .requests import RetrievalRequestError, canonicalize_retrieval_requests
 
 
@@ -217,7 +218,21 @@ def _request_violations(catalog: Mapping[str, Any], request: Mapping[str, Any]) 
     if not isinstance(operators, Mapping) or operator not in operators:
         return (_violation("operator_not_advertised", operator=operator),)
     if operator in {"exact.equals", "lexical.terms", "lexical.phrase", "temporal.earliest", "temporal.latest", "temporal.before", "temporal.after", "temporal.between", "temporal.ordered"}:
-        return tuple(_field_violations(catalog, request))
+        field_violations = _field_violations(catalog, request)
+        if field_violations or operator != "lexical.terms":
+            return tuple(field_violations)
+        try:
+            validate_terms_operands(tuple(request["operand"]))
+        except ValueError as exc:
+            return (_violation(
+                "lexical_terms_operand_not_tokenizable",
+                operator=operator,
+                target=request["target"],
+                field_class=request["field_class"],
+                field_name=request["field_name"],
+                message=str(exc),
+            ),)
+        return ()
     if operator == "vector.semantic_similarity":
         vector = catalog.get("vector")
         if not isinstance(vector, Mapping) or vector.get("operator") != operator:
@@ -230,7 +245,11 @@ def _request_violations(catalog: Mapping[str, Any], request: Mapping[str, Any]) 
     return (_violation("operator_not_advertised", operator=operator),)
 
 
-def _request_result(ordinal: int, request: Mapping[str, Any], catalog: Mapping[str, Any]) -> ConformanceRequestResult:
+def _request_result(
+    ordinal: int,
+    request: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+) -> ConformanceRequestResult:
     violations = tuple(_immutable(item) for item in _request_violations(catalog, request))
     return ConformanceRequestResult(ordinal, "invalid" if violations else "valid", violations)
 

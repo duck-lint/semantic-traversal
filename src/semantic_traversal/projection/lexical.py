@@ -193,6 +193,16 @@ def _validate_terms_operands(connection: sqlite3.Connection, operands: tuple[str
         connection.execute("DROP TABLE IF EXISTS temp.lexical_terms_probe")
 
 
+def validate_terms_operands(operands: tuple[str, ...]) -> None:
+    """Validate terms with the same configured tokenizer used by lookup."""
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        _validate_terms_operands(connection, operands)
+    finally:
+        connection.close()
+
+
 def lexical_lookup(
     connection: sqlite3.Connection,
     field_class: str,

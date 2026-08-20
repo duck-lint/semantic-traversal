@@ -270,7 +270,7 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         self.assertIsNone(empty.execution_failure)
 
     def test_order_duplicates_and_fail_fast_preserve_factual_partial_results(self):
-        requests = [self.exact("first"), {"operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": ["two words"]}, self.exact("later")]
+        requests = [self.exact("first"), {"operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text", "target": "complete_value", "operand": ["two"]}, self.exact("later")]
         database, package, conformance_id = self.prepared("fail-fast", requests)
         with patch("semantic_traversal.runtime.retrieval.execution.lexical_lookup", side_effect=ValueError("tokenizer rejection")), patch("semantic_traversal.runtime.retrieval.execution.exact_lookup", wraps=__import__("semantic_traversal.runtime.retrieval.execution", fromlist=["exact_lookup"]).exact_lookup) as exact:
             result = execute_retrieval(database, package, conformance_id)
@@ -538,6 +538,18 @@ class RuntimeRetrievalExecutionTests(unittest.TestCase):
         connection = sqlite3.connect(database)
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM retrieval_executions").fetchone()[0], 0)
         connection.close()
+
+    def test_non_tokenizable_terms_are_rejected_before_lexical_execution(self):
+        request = {
+            "operator": "lexical.terms", "field_class": "intrinsic", "field_name": "parsed_text",
+            "target": "complete_value", "operand": ["plant-based"],
+        }
+        database, package, conformance_id = self.prepared("non-tokenizable-terms", [request])
+        module = __import__("semantic_traversal.runtime.retrieval.execution", fromlist=["lexical_lookup"])
+        with patch.object(module, "lexical_lookup") as lexical:
+            with self.assertRaisesRegex(RetrievalExecutionError, "valid current approval"):
+                execute_retrieval(database, package, conformance_id)
+        lexical.assert_not_called()
 
     def test_mutated_package_fails_before_execution_row(self):
         database, package, conformance_id = self.prepared("mutated-before", [self.exact()])
